@@ -20,7 +20,7 @@ castle-objs   := castle_main.o castle_sysfs.o
 
 else
 
-KERNEL_DIR ?= /lib/modules/`uname -r`/build
+KERNEL_DIR ?= /lib/modules/$(KVER)/build
 PWD        := $(shell pwd)
 
 castle.ko: clean $(castle-objs)
@@ -29,7 +29,7 @@ endif
 
 install: castle.ko
 	$(MAKE) -C $(KERNEL_DIR) M=$(PWD) modules_install
-	depmod -aq `uname -r` 
+	depmod -aq $(KVER)
 
 clean:
 	rm -rf *.o *~ core .depend .*.cmd *.ko *.mod.c .tmp_versions Module.symvers
