@@ -254,6 +254,9 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);
 
 struct timer_list              castle_cache_stats_timer;
 
+static c_ext_fs_t              mstore_ext_fs;
+static int                     mstore_init_done = 0;
+
 /**********************************************************************************************
  * Prototypes. 
  */
@@ -596,7 +599,6 @@ static void c2b_multi_io_end(struct bio *bio, int err)
     /* In debugging mode force the end_io to complete in atomic */
     local_irq_save(flags);
 #endif
-    
 #if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
     if (bio->bi_size)
     {
@@ -778,12 +780,22 @@ static int submit_c2b_rda(int rw, c2_block_t *c2b)
         /* Update chunk map as soon as we move to a new chunk. */ 
         if(cur_chk != last_chk)
         {
+            int ret;
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            BUG_ON(castle_extent_map_get(cur_cep.ext_id,
-                                         CHUNK(cur_cep.offset),
-                                         1,
-                                         chunks) != k_factor);
+            ret = castle_extent_map_get(cur_cep.ext_id,
+                                        CHUNK(cur_cep.offset),
+                                        chunks);
+            /* Return value is supposed to be k_factor, unless the
+               extent has been deleted. */
+            BUG_ON((ret != 0) && (ret != k_factor));
+            if(ret == 0)
+            {
+                /* Complete the IO by dropping our reference, return early. */
+                c2b_remaining_io_sub(rw, 1, c2b);
+                return 0;
+            }
+            
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
         }
         submit_c2b_io_array(rw, c2b, cep, chunks, k_factor, io_pages, io_pages_idx);
@@ -1328,7 +1340,7 @@ static int castle_cache_block_hash_clean(void)
     list_for_each_safe(lh, th, &castle_cache_cleanlist)
     {
         c2b = list_entry(lh, c2_block_t, clean);
-        /* FIXME: Pinning all logical extent pages in cache. Make sure cache is
+        /* Note: Pinning all logical extent pages in cache. Make sure cache is 
          * big enough. 
          * TODO: gm281: this is temporary solution. Introduce pools to deal with the
          * issue properly.
@@ -2111,6 +2123,9 @@ next_batch:
             c2b = list_entry(l, c2_block_t, dirty);
             if(!read_trylock_c2b(c2b))
                 continue;
+            /* In current design, it is possible to try to flush same c2b twice.
+             * We need a bit(C2B_flushing) to know whether a page is already in
+             * flush process. */
             if (test_set_c2b_flushing(c2b))
             {
                 read_unlock_c2b(c2b);
@@ -2651,10 +2666,14 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     /* Check if mutex is locked */
     BUG_ON(down_trylock(&store->mutex) == 0);
 
-    // FIXME: bhaskar
     /* Prepare the node first */
-    cep.ext_id  = castle_extent_alloc(DEFAULT, 0, 1);
-    cep.offset = 0;
+    BUG_ON(castle_ext_fs_pre_alloc(&mstore_ext_fs, 
+                                   C_BLK_SIZE,
+                                   1) < 0);
+    BUG_ON(castle_ext_fs_get(&mstore_ext_fs, 
+                             C_BLK_SIZE,
+                             1,
+                             &cep) < 0);
     c2b = castle_cache_page_block_get(cep);
     debug_mstore("Allocated "cep_fmt_str_nl, cep2str(cep));
     write_lock_c2b(c2b);
@@ -2800,6 +2819,7 @@ static struct castle_mstore *castle_mstore_alloc(c_mstore_id_t store_id, size_t 
 {
     struct castle_mstore *store;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Allocating mstore id=%d.\n", store_id);
     store = castle_zalloc(sizeof(struct castle_mstore), GFP_KERNEL);
     if(!store)
@@ -2821,6 +2841,7 @@ struct castle_mstore* castle_mstore_open(c_mstore_id_t store_id, size_t entry_si
     struct castle_mstore *store;
     struct castle_mstore_iter *iterator;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore.\n");
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ))
@@ -2855,6 +2876,7 @@ struct castle_mstore* castle_mstore_init(c_mstore_id_t store_id, size_t entry_si
     struct castle_fs_superblock *fs_sb;
     struct castle_mstore *store;
 
+    BUG_ON(!mstore_init_done);
     debug_mstore("Opening mstore id=%d.\n", store_id);
     /* Sanity check, to see if store_id isn't too large. */
     if(store_id >= sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t))
@@ -2878,6 +2900,43 @@ void castle_mstore_fini(struct castle_mstore *store)
 {
     debug_mstore("Closing mstore id=%d.\n", store->store_id);
     castle_free(store);
+}
+
+int castle_mstores_create(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    BUG_ON(mstore_init_done);
+    if (castle_ext_fs_init(&mstore_ext_fs, 0, (1024 * C_CHK_SIZE)) < 0)
+        return -EINVAL;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_sb->mstore_ext_fs.ext_id         = mstore_ext_fs.ext_id;
+    fs_sb->mstore_ext_fs.ext_size       = mstore_ext_fs.ext_size;
+    fs_sb->mstore_ext_fs.next_free_byte = atomic64_read(&mstore_ext_fs.next_free_byte);
+    fs_sb->mstore_ext_fs.byte_count     = atomic64_read(&mstore_ext_fs.byte_count);
+    castle_fs_superblocks_put(fs_sb, 1);
+
+    mstore_init_done = 1;
+
+    return 0;
+}
+
+int castle_mstores_read(void)
+{
+    struct castle_fs_superblock *fs_sb;
+
+    BUG_ON(mstore_init_done);
+    fs_sb = castle_fs_superblocks_get();
+    mstore_ext_fs.ext_id        = fs_sb->mstore_ext_fs.ext_id;
+    mstore_ext_fs.ext_size      = fs_sb->mstore_ext_fs.ext_size;
+    atomic64_set(&mstore_ext_fs.next_free_byte, fs_sb->mstore_ext_fs.next_free_byte);
+    atomic64_set(&mstore_ext_fs.byte_count, fs_sb->mstore_ext_fs.byte_count);
+    castle_fs_superblocks_put(fs_sb, 0);
+
+    mstore_init_done = 1;
+
+    return 0;
 }
 
 int castle_cache_init(void)

@@ -123,7 +123,6 @@ typedef uint32_t c_uuid_t;
 #define EXT_ID_INVAL(_id)               ((_id) == INVAL_EXT_ID)
 #define INVAL_SLAVE_ID                  (0)
 
-/* FIXME: remove from castle.h */
 struct castle_chunk_sequence {
     c_chk_t         first_chk;
     c_chk_cnt_t     count;
@@ -187,6 +186,13 @@ typedef struct castle_extent_freespace {
     atomic64_t      byte_count;
 } c_ext_fs_t;
 
+typedef struct castle_extent_freespace_ondisk {
+    c_ext_id_t      ext_id;
+    c_byte_off_t    ext_size;
+    uint64_t        next_free_byte;
+    uint64_t        byte_count;
+} c_ext_fs_od_t;
+
 #define CASTLE_SLAVE_TARGET     (0x00000001)
 #define CASTLE_SLAVE_SPINNING   (0x00000002)
 
@@ -226,6 +232,7 @@ struct castle_fs_superblock {
     uint32_t     magic3;
     uint32_t     salt;
     uint32_t     peper;
+    c_ext_fs_od_t mstore_ext_fs;
     c_ext_pos_t  mstore[16];
 } PACKED;
 
@@ -769,6 +776,12 @@ typedef struct castle_rq_enumerator {
     int                           in_range;
 } c_rq_enum_t;
 
+struct castle_merged_iterator;
+struct component_iterator;
+
+typedef void (*castle_merged_iterator_each_skip) (struct castle_merged_iterator *,
+                                                  struct component_iterator *);
+
 typedef struct castle_merged_iterator {
     int nr_iters;
     struct castle_btree_type *btree;
@@ -785,6 +798,7 @@ typedef struct castle_merged_iterator {
             c_val_tup_t              cvt;
         } cached_entry;
     } *iterators;
+    castle_merged_iterator_each_skip each_skip;
 } c_merged_iter_t;
 
 typedef struct castle_da_rq_iterator {
@@ -934,7 +948,7 @@ int                   castle_ext_fs_get            (c_ext_fs_t       *ext_fs,
                                                     c_ext_pos_t      *cep);
 
 int                   castle_ext_fs_free           (c_ext_fs_t       *ext_fs,
-                                                    c_byte_off_t      size,
+                                                    int64_t           size,
                                                     int               aligned);
 
 c_byte_off_t          castle_ext_fs_summary_get    (c_ext_fs_t *ext_fs);
