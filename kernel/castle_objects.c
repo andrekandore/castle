@@ -902,12 +902,14 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
     struct castle_object_replace *replace = c_bvec->c_bio->replace;
     c_bio_t *c_bio = c_bvec->c_bio;
     c2_block_t *c2b = NULL;
-    int complete_write;
+    int complete_write = 0;
 
     /* Sanity checks on the bio */
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE); 
     BUG_ON(atomic_read(&c_bio->count) != 1);
     BUG_ON(c_bio->err != 0);
+
+    debug("castle_object_replace_complete\n");
 
     /* Free the key */
     castle_object_bkey_free(c_bvec->key);
@@ -931,7 +933,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         replace->data_c2b_offset = 0;
         replace->data_length = cvt.length;
         
-        complete_write = castle_object_data_write(replace);
+        if (replace->data_length_get(replace) > 0)
+            complete_write = castle_object_data_write(replace);
     
         c2b = replace->data_c2b;
     }
@@ -941,6 +944,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
+    else /* tombstone */
+        complete_write = 1;
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
