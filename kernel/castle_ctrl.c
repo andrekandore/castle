@@ -14,6 +14,8 @@
 #include "castle_versions.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
+#include "castle_back.h"
+#include "castle_ctrl.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -24,8 +26,17 @@
 
 static DECLARE_MUTEX(castle_control_lock);
 
+void castle_control_lock_up()
+{
+    down(&castle_control_lock);
+}
 
-static void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
+void castle_control_lock_down()
+{
+    up(&castle_control_lock);
+}
+
+void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
 {
     struct castle_slave *cs;
 
@@ -41,13 +52,13 @@ static void castle_control_claim(uint32_t dev, int *ret, slave_uuid_t *id)
     }
 }
 
-static void castle_control_release(slave_uuid_t id, int *ret)
+void castle_control_release(slave_uuid_t id, int *ret)
 {
     printk("==> Release NOT IMPLEMENTED YET, slave UUID=%d\n", id);
     *ret = -ENOSYS;
 }
 
-static void castle_control_attach(version_t version, int *ret, uint32_t *dev)
+void castle_control_attach(version_t version, int *ret, uint32_t *dev)
 {
     struct castle_attachment *cd;
   
@@ -62,7 +73,7 @@ static void castle_control_attach(version_t version, int *ret, uint32_t *dev)
     *ret = 0;
 }
 
-static void castle_control_detach(uint32_t dev, int *ret)
+void castle_control_detach(uint32_t dev, int *ret)
 {
     dev_t dev_id = new_decode_dev(dev);
     struct castle_attachment *cd = castle_device_find(dev_id);
@@ -72,7 +83,7 @@ static void castle_control_detach(uint32_t dev, int *ret)
 }
 
 /* Size == 0 means that a collection tree is supposed to be created */ 
-static void castle_control_create(uint64_t size, int *ret, version_t *id)
+void castle_control_create(uint64_t size, int *ret, version_t *id)
 {
     int collection_tree = (size == 0);
     da_id_t da_id = INVAL_DA; 
@@ -109,7 +120,7 @@ static void castle_control_create(uint64_t size, int *ret, version_t *id)
     }
 }
 
-static void castle_control_clone(version_t version, int *ret, version_t *clone)
+void castle_control_clone(version_t version, int *ret, version_t *clone)
 {
     if(version == 0)
     {
@@ -135,7 +146,7 @@ static void castle_control_clone(version_t version, int *ret, version_t *clone)
     }
 }
 
-static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
+void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
 {
     dev_t devid = new_decode_dev(dev);
     struct castle_attachment *cd = castle_device_find(devid);
@@ -174,12 +185,12 @@ static void castle_control_snapshot(uint32_t dev, int *ret, version_t *version)
     castle_events_device_snapshot(ver, cd->dev.gd->major, cd->dev.gd->first_minor);
 }
  
-static void castle_control_fs_init(int *ret)
+void castle_control_fs_init(int *ret)
 {
     *ret = castle_fs_init();
 }
 
-static void castle_control_collection_attach(version_t version,
+void castle_control_collection_attach(version_t version,
                                              char *name,
                                              int *ret,
                                              collection_id_t *collection)
@@ -196,7 +207,7 @@ static void castle_control_collection_attach(version_t version,
     *ret = 0;
 }
             
-static void castle_control_collection_detach(collection_id_t collection,
+void castle_control_collection_detach(collection_id_t collection,
                                              int *ret)
 {
     struct castle_attachment *ca = castle_collection_find(collection);
@@ -205,7 +216,7 @@ static void castle_control_collection_detach(collection_id_t collection,
     *ret = (ca ? 0 : -ENODEV);
 }
 
-static void castle_control_collection_snapshot(collection_id_t collection,
+void castle_control_collection_snapshot(collection_id_t collection,
                                                int *ret,
                                                version_t *version)
 {
@@ -245,7 +256,7 @@ static void castle_control_collection_snapshot(collection_id_t collection,
     castle_events_collection_snapshot(ver, ca->col.id);
 }
             
-static void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
+void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *ret)
 {
     struct castle_slave *slave = castle_slave_find_by_uuid(slave_uuid);
     struct castle_slave_superblock *sb;
@@ -270,9 +281,10 @@ static void castle_control_set_target(slave_uuid_t slave_uuid, int value, int *r
     *ret = 0;
 }
 
-int castle_control_ioctl(struct inode *inode, struct file *filp,
+int castle_control_ioctl(struct file *filp,
                          unsigned int cmd, unsigned long arg)
 {
+    int err;
     void __user *udata = (void __user *) arg;
     cctrl_ioctl_t ioctl;
 
@@ -299,6 +311,9 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             castle_control_release( ioctl.release.id,
                                    &ioctl.release.ret);
             break;
+        case CASTLE_CTRL_REQ_INIT:
+            castle_control_fs_init(&ioctl.init.ret);
+            break;            
         case CASTLE_CTRL_REQ_ATTACH:
             castle_control_attach( ioctl.attach.version,
                                   &ioctl.attach.ret,
@@ -308,6 +323,46 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
             castle_control_detach( ioctl.detach.dev,
                                   &ioctl.detach.ret);
             break;
+        case CASTLE_CTRL_REQ_SNAPSHOT:
+            castle_control_snapshot( ioctl.snapshot.dev,
+                                    &ioctl.snapshot.ret,
+                                    &ioctl.snapshot.version);
+            break;
+
+        case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
+        {
+            char *collection_name = castle_malloc(ioctl.collection_attach.name_length, GFP_KERNEL);
+            if (!collection_name)
+            {
+                err = -ENOMEM;
+                goto err;
+            }
+            
+            if (copy_from_user(collection_name, ioctl.collection_attach.name, 
+                ioctl.collection_attach.name_length))
+            {
+                err = -EFAULT;
+                goto err;
+            }
+            
+            castle_control_collection_attach(ioctl.collection_attach.version,
+                                            collection_name,
+                                            &ioctl.collection_attach.ret,
+                                            &ioctl.collection_attach.collection);
+                                            
+            
+            break;
+        }
+        case CASTLE_CTRL_REQ_COLLECTION_DETACH:
+            castle_control_collection_detach(ioctl.collection_detach.collection,
+                                  &ioctl.collection_detach.ret);
+            break;
+        case CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT:
+            castle_control_collection_snapshot(ioctl.collection_snapshot.collection,
+                                    &ioctl.collection_snapshot.ret,
+                                    &ioctl.collection_snapshot.version);
+            break;
+
         case CASTLE_CTRL_REQ_CREATE:
             castle_control_create( ioctl.create.size,
                                   &ioctl.create.ret,
@@ -318,21 +373,15 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
                                  &ioctl.clone.ret,
                                  &ioctl.clone.clone);
             break;
-        case CASTLE_CTRL_REQ_SNAPSHOT:
-            castle_control_snapshot( ioctl.snapshot.dev,
-                                    &ioctl.snapshot.ret,
-                                    &ioctl.snapshot.version);
-            break;
-        case CASTLE_CTRL_REQ_INIT:
-            castle_control_fs_init(&ioctl.init.ret);
-            break;
+
         case CASTLE_CTRL_REQ_TRANSFER_CREATE:
         case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
-            up(&castle_control_lock);
-            return -ENOSYS;
+            err = -ENOSYS;
+            goto err;
+
         default:
-            up(&castle_control_lock);
-            return -EINVAL;
+            err = -EINVAL;
+            goto err;
     }
     up(&castle_control_lock);
 
@@ -341,331 +390,37 @@ int castle_control_ioctl(struct inode *inode, struct file *filp,
         return -EFAULT;
 
     return 0;
+    
+err:
+    up(&castle_control_lock);
+    return err;
+}
+
+long castle_ctrl_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    long ret = castle_back_unlocked_ioctl(file, cmd, arg);
+    if (ret != -ENOIOCTLCMD)
+        return ret;
+        
+    ret = castle_control_ioctl(file, cmd, arg);
+    
+    return ret;
 }
 
 static struct file_operations castle_control_fops = {
-    .owner   = THIS_MODULE,
-    .ioctl   = castle_control_ioctl,
+    .owner          = THIS_MODULE,
+    .mmap           = castle_back_mmap,
+    .unlocked_ioctl = castle_ctrl_unlocked_ioctl,
+    .poll           = castle_back_poll,
+    .open           = castle_back_open,
+    .release        = castle_back_release,
 };
-
 
 static struct miscdevice castle_control = {
     .minor   = MISC_DYNAMIC_MINOR,
     .name    = "castle-fs-control",
     .fops    = &castle_control_fops,
 };
-
-
-static void castle_control_reply_error(uint32_t *reply, 
-                                       int ret_code,
-                                       size_t *len)
-{
-    reply[0] = CASTLE_CTRL_REPLY;
-    reply[1] = CASTLE_CTRL_REPLY_FAIL;
-    reply[2] = ret_code;
-    *len = 3;
-}
-
-static void castle_control_reply_process(uint32_t *reply, size_t len, size_t *length)
-{
-    size_t i;
-    
-    /* Convert to network byte order */
-    for(i=0; i<len; i++)
-        reply[i] = htonl(reply[i]);
-
-    #ifdef DEBUG        
-    debug("Reply message:\n");
-    for(i=0; i<4*len; i++)
-        debug(" [%ld]=%d\n", i, *(((uint8_t *)reply) + i));
-    debug("\n");
-    #endif
-
-    /* length is in bytes */
-    *length = 4*len;
-}
-
-static void castle_control_reply(uint32_t *reply, 
-                                 size_t *length, 
-                                 int op_code, 
-                                 int ret_code, 
-                                 uint32_t token)
-{
-    size_t len;
-
-    /* Deal with error condition first */
-    if(ret_code)
-    {
-        castle_control_reply_error(reply, ret_code, &len);
-    } else
-    /* Next, void replies */
-    if(op_code == CASTLE_CTRL_REPLY_VOID)
-    {
-        reply[0] = CASTLE_CTRL_REPLY;
-        reply[1] = CASTLE_CTRL_REPLY_VOID;
-        len = 2;
-    } else
-    /* All the rest */
-    {
-        reply[0] = CASTLE_CTRL_REPLY;
-        reply[1] = op_code;
-        reply[2] = token;
-        len = 3;
-    } 
-
-    castle_control_reply_process(reply, len, length);
-}
-
-int castle_control_packet_process(struct sk_buff *skb, void **reply, size_t *len_p)
-{
-    uint32_t *reply32; /* For now, all reply values are 32 bit wide */
-    uint32_t ctrl_op;
-    size_t reply32_size = 0;
-
-    debug("Processing control packet (in_atomic=%d).\n", in_atomic());
-#ifdef DEBUG
-    skb_print(skb);
-#endif
-    if(skb->len < 4)
-        return -EBADMSG;
-
-    down(&castle_control_lock);
-    ctrl_op = SKB_L_GET(skb);
-    debug("Ctrl op=%d\n", ctrl_op);
-    
-    switch(ctrl_op)
-    {
-        case CASTLE_CTRL_REQ_VALID_STATS:
-        case CASTLE_CTRL_REQ_INVALID_STATS:
-        {
-            // must not forget version zero!
-            int versions = castle_version_max_get() + 1;
-            reply32_size = (versions * 2) + 3;
-            break;
-        }
-        default:
-            reply32_size = 64;
-            break;
-    }
-
-    *reply = reply32 = castle_malloc(reply32_size * sizeof(uint32_t), GFP_KERNEL);
-    if (!reply32)
-        return -ENOMEM;
-    
-    switch(ctrl_op)
-    {
-        case CASTLE_CTRL_REQ_CLAIM:
-        {
-            int ret;
-            slave_uuid_t id;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_claim(SKB_L_GET(skb), &ret, &id);
-            castle_control_reply(reply32, 
-                                 len_p, 
-                                 CASTLE_CTRL_REPLY_NEW_SLAVE,
-                                 ret, 
-                                 id);
-            break;
-        }
-        case CASTLE_CTRL_REQ_RELEASE:
-        {
-            int ret/*, i*/;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_release(SKB_L_GET(skb), &ret); 
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
-                                 0);
-
-            break;
-        }
-        case CASTLE_CTRL_REQ_ATTACH:
-        {
-            int ret;
-            uint32_t dev;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_attach(SKB_L_GET(skb), 
-                                  &ret, 
-                                  &dev);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_DEVICE,
-                                 ret,
-                                 dev);
-            break;
-        }
-        case CASTLE_CTRL_REQ_DETACH:
-        {
-            int ret;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_detach(SKB_L_GET(skb), &ret); 
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
-                                 0);
-            break;
-        }
-        case CASTLE_CTRL_REQ_CREATE:
-        {
-            int ret;
-            version_t version;
-
-            if(skb->len != 8) goto bad_msg;
-            castle_control_create(SKB_LL_GET(skb), 
-                                  &ret, 
-                                  &version);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_VERSION,
-                                 ret,
-                                 version);
-            break;
-        }
-        case CASTLE_CTRL_REQ_CLONE:
-        {
-            int ret;
-            version_t version;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_clone(SKB_L_GET(skb),
-                                 &ret,
-                                 &version); 
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_VERSION,
-                                 ret,
-                                 version);
-            break;
-        }
-        case CASTLE_CTRL_REQ_SNAPSHOT:
-        {
-            int ret;
-            version_t version;
-            
-            if(skb->len != 4) goto bad_msg;
-            castle_control_snapshot(SKB_L_GET(skb), 
-                                    &ret, 
-                                    &version);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_VERSION,
-                                 ret,
-                                 version);
-            break;
-        }
-        case CASTLE_CTRL_REQ_INIT:
-        {
-            int ret;
-            
-            if(skb->len != 0) goto bad_msg;
-            castle_control_fs_init(&ret);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
-                                 0);
-            break;
-        }
-        case CASTLE_CTRL_REQ_RESERVE_FOR_TRANSFER:
-        case CASTLE_CTRL_REQ_TRANSFER_CREATE:
-        case CASTLE_CTRL_REQ_TRANSFER_DESTROY:
-            goto bad_msg;
-        case CASTLE_CTRL_REQ_COLLECTION_ATTACH:
-        {
-            int ret;
-            collection_id_t collection;
-
-            version_t version;
-            char *name;
-
-            if(skb->len < 8) goto bad_msg;
-            version = SKB_L_GET(skb);
-            name = SKB_STR_GET(skb, 128);
-            if(!name) goto bad_msg;
-
-            castle_control_collection_attach(version, name,
-                                             &ret,
-                                             &collection);
-            if(ret)
-                castle_free(name);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_COLLECTION,
-                                 ret,
-                                 collection);
-            break;
-        }
-        case CASTLE_CTRL_REQ_COLLECTION_DETACH:
-        {
-            int ret;
-            
-            if(skb->len != 4) goto bad_msg;
-            castle_control_collection_detach(SKB_L_GET(skb),
-                                             &ret);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
-                                 0);
-            break;
-        }
-        case CASTLE_CTRL_REQ_COLLECTION_SNAPSHOT:
-        {
-            int ret;
-            version_t version;
-
-            if(skb->len != 4) goto bad_msg;
-            castle_control_collection_snapshot(SKB_L_GET(skb),
-                                               &ret,
-                                               &version);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_NEW_VERSION,
-                                 ret,
-                                 version);
-            break;
-        }
-        case CASTLE_CTRL_REQ_VALID_STATS:
-        case CASTLE_CTRL_REQ_INVALID_STATS:
-            goto bad_msg;
-        case CASTLE_CTRL_REQ_SET_TARGET:
-        {
-            int ret, value;
-            slave_uuid_t slave_uuid;
-            
-            if(skb->len != 8) goto bad_msg;
-
-            slave_uuid = SKB_L_GET(skb);
-            value = SKB_L_GET(skb);
-            
-            castle_control_set_target(slave_uuid,
-                                      value,
-                                      &ret);
-            castle_control_reply(reply32,
-                                 len_p,
-                                 CASTLE_CTRL_REPLY_VOID,
-                                 ret,
-                                 0);
-            break;
-        }
-    }
-    up(&castle_control_lock);
-
-    return 0;
-
-bad_msg:
-    up(&castle_control_lock);
-
-    return -EBADMSG;
-}
-
-
 
 int castle_control_init(void)
 {

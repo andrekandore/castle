@@ -23,7 +23,7 @@
 #include "castle_debug.h"
 #include "castle_events.h"
 #include "castle_rxrpc.h"
-
+#include "castle_back.h"
 #include "castle_extent.h"
 #include "castle_freespace.h"
 
@@ -1314,6 +1314,7 @@ struct castle_attachment* castle_collection_init(version_t version, char *name)
     return collection;
 
 error_out:
+    castle_free(name);
     if(collection) castle_free(collection);
     printk("Failed to init collection.\n");
     return NULL;    
@@ -1534,12 +1535,15 @@ static int __init castle_init(void)
     if((ret = castle_control_init()))      goto err_out8;
     if((ret = castle_rxrpc_init()))        goto err_out9;
     if((ret = castle_sysfs_init()))        goto err_out10;
+    if((ret = castle_back_init()))         goto err_out11;
 
     printk("OK.\n");
 
     return 0;
 
-    castle_sysfs_fini(); /* Unreachable */
+    castle_back_fini(); /* Unreachable */
+err_out11:
+    castle_sysfs_fini();
 err_out10:
     castle_rxrpc_fini();
 err_out9:
@@ -1577,6 +1581,7 @@ static void __exit castle_exit(void)
     printk("Castle FS exit ... ");
 
     /* Remove externaly visible interfaces */
+    castle_back_fini();
     castle_rxrpc_fini();
     castle_control_fini();
     castle_sysfs_fini();
