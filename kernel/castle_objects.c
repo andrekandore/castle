@@ -731,8 +731,6 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 {
     c2_block_t *data_c2b;
     uint32_t data_c2b_offset, data_c2b_length, data_length, packet_length;
-    c2_block_t *new_data_c2b;
-    c_ext_pos_t  new_data_cep;
 
     /* Work out how much data we've got, and how far we've got so far */
     data_c2b = replace->data_c2b;
@@ -783,6 +781,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
            packet, or in future packets). */
         if((data_c2b_offset == data_c2b_length) && (data_length > 0))
         {
+            c2_block_t *new_data_c2b;
+            c_ext_pos_t new_data_cep;
             debug("Run out of buffer space, allocating a new one.\n");
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length); 
             new_data_c2b = castle_object_write_buffer_alloc(new_data_cep, data_length); 
@@ -853,7 +853,8 @@ void castle_object_replace_complete(struct castle_bio_vec *c_bvec,
         complete_write = 1;
         castle_free(cvt.val);
     }
-        
+    
+    c2b = replace->data_c2b;
         
     /* Unlock buffers, and complete the call if we are done already */
     if(complete_write)
