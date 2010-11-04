@@ -48,10 +48,12 @@ clean:
 	rm -f *.o $(MAIN_OBJS) mkcastlefs
 
 .PHONY: install
-install: $(MAIN_OBJS)
+install: all
 	install $(MAIN_OBJS) /usr/sbin
 	install -D castle /etc/rc.d/init.d/
 	install -D init-utils /usr/share/castle-fs/init-utils
 	install -D castle-fs-init.sh /usr/share/castle-fs/castle-fs-init
 	install -D castle-fs-fini.sh /usr/share/castle-fs/castle-fs-fini
 	install -D castle-create /usr/sbin/castle-create
+	install -D mkcastlefs /sbin/mkcastlefs
+	install -D castle_probe_device /usr/sbin/castle-probe-device
