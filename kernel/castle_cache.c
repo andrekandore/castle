@@ -2552,8 +2552,8 @@ skip_page:
 
     wait_event(castle_cache_flush_wq, (atomic_read(&outst_pgs) == 0));
 
-    printk("Extent flush completed: (%llu) -> %llu/%llu\n", 
-            ext_id, dirty_pgs, nr_pages);
+    debug("Extent flush completed: (%llu) -> %llu/%llu\n", 
+           ext_id, dirty_pgs, nr_pages);
 
     return 0;
 }
@@ -3349,6 +3349,9 @@ int castle_mstores_writeback(uint32_t version)
     /* Call writebacks of components. */
     castle_attachments_writeback();
     castle_double_arrays_writeback();
+    
+    FAULT(CHECKPOINT_FAULT);
+
     castle_versions_writeback();
     castle_extents_writeback();
 
@@ -3435,7 +3438,9 @@ static int castle_periodic_checkpoint(void *unused)
 
         /* Flush all marked extents from cache. */
         castle_cache_extents_flush(&flush_list);
- 
+
+        FAULT(CHECKPOINT_FAULT);
+
         /* Writeback superblocks. */
         if (castle_superblocks_writeback(version))
         {

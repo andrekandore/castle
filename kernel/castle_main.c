@@ -53,6 +53,7 @@ static DEFINE_MUTEX(castle_sblk_lock);
 struct castle_fs_superblock global_fs_superblock;
 struct workqueue_struct     *castle_wqs[2*MAX_BTREE_DEPTH+1];
 int                          castle_fs_inited = 0;
+c_fault_t                    castle_fault = NO_FAULT;
 
 //#define DEBUG
 #ifndef DEBUG
@@ -529,6 +530,8 @@ int castle_fs_init(void)
         cs_fs_sb = castle_fs_superblocks_get();
         memcpy(&fs_sb, cs_fs_sb, sizeof(struct castle_fs_superblock));
         castle_fs_superblocks_put(cs_fs_sb, 0);
+
+        FAULT(FS_INIT_FAULT);
     }
     cs_fs_sb = castle_fs_superblocks_get();
     BUG_ON(!cs_fs_sb);
@@ -548,6 +551,8 @@ int castle_fs_init(void)
     if (!first && castle_attachments_read())
         return -EINVAL;
  
+    FAULT(FS_INIT_FAULT);
+
     if (!first && castle_chk_disk())
     {
         printk("Failed to bring-up sane FS from disks\n");
@@ -555,6 +560,14 @@ int castle_fs_init(void)
     }
 
     castle_checkpoint_version_inc();
+
+    FAULT(FS_RESTORE_FAULT);
+
+    if (castle_double_array_start() < 0)
+    {
+        printk("Failed to start Doubling Arrays\n");
+        return -EINVAL;
+    }
     
     castle_events_init();
 
@@ -883,9 +896,9 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     write_unlock_c2b(c2b);
     put_c2b(c2b);
 
-    printk("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
-            cs_sb->freespace.prod,
-            cs_sb->freespace.cons);
+    debug("Free chunks: %u|%u|%u\n", cs_sb->freespace.free_chk_cnt,
+           cs_sb->freespace.prod,
+           cs_sb->freespace.cons);
 
     if (castle_cache_extent_flush(cs->sup_ext, 0, length * 2))
     {
@@ -1026,6 +1039,8 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         printk("Could not initialize super extent for slave 0x%x\n", cs->uuid);
         goto err_out;
     }
+
+    FAULT(CLAIM_FAULT);
 
     err = castle_slave_add(cs);
     if(err)
