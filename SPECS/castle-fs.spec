@@ -30,6 +30,9 @@ Requires(preun): chkconfig
 Requires(preun): initscripts
 Requires: castle-cli
 
+BuildRequires: doxygen
+BuildRequires: graphviz-gd
+
 %description
 
 # magic hidden here:
@@ -58,6 +61,10 @@ do
     popd
 done
 
+mkdir -p tools/docs
+(cd tools && doxygen Doxyfile.kernel)
+(cd tools && doxygen Doxyfile.user)
+
 %install
 rm -rf %{buildroot}
 
@@ -71,12 +78,14 @@ mkdir -p %{buildroot}/var/lib/castle-fs
 cp user/udev/castle-fs.rules %{buildroot}/etc/udev/rules.d/
 cp user/udev/udev-watch %{buildroot}/etc/castle-fs/
 cp user/utils/castle %{buildroot}/etc/rc.d/init.d/
+cp user/utils/castle_claim_empty %{buildroot}/etc/rc.d/init.d/
 cp user/utils/init-utils %{buildroot}/usr/share/castle-fs/
 cp user/utils/castle-fs-init.sh %{buildroot}/usr/share/castle-fs/castle-fs-init
 cp user/utils/castle-fs-fini.sh %{buildroot}/usr/share/castle-fs/castle-fs-fini
 cp user/utils/castle-scan %{buildroot}/usr/sbin/
 cp user/utils/castle_probe_device %{buildroot}/usr/sbin/castle-probe-device
 cp user/utils/castle-create %{buildroot}/usr/sbin/
+cp user/utils/castle-claim-empty %{buildroot}/usr/sbin/
 cp user/utils/mkcastlefs %{buildroot}/sbin
 
 export INSTALL_MOD_PATH=%{buildroot}
@@ -95,11 +104,13 @@ rm -rf %{buildroot}
 %post
 # This adds the proper /etc/rc*.d links for the script
 /sbin/chkconfig --add castle
+/sbin/chkconfig --add castle_claim_empty
 
 %preun
 if [ $1 = 0 ] ; then
     /sbin/service castle stop >/dev/null 2>&1
     /sbin/chkconfig --del castle
+    /sbin/chkconfig --del castle_claim_empty
 fi
 
 %pre
@@ -110,12 +121,21 @@ getent group %{groupname} >/dev/null || groupadd -r %{groupname}
 /etc/rc.d/init.d/*
 /etc/udev/rules.d
 /etc/castle-fs/udev-watch
-/usr/sbin/castle-scan
-/usr/sbin/castle-probe-device
 /usr/share/castle-fs
-/usr/sbin/castle-create
+/usr/sbin/*
 /sbin/mkcastlefs
 /var/lib/castle-fs
+
+%package doc
+
+Summary: castle-fs documentation
+Group: Documentation
+
+%description doc
+
+%files doc
+%doc tools/docs/kernel
+%doc tools/docs/user
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - %{buildver}-%{buildrev}

@@ -12,6 +12,8 @@
 #include "castle_extent.h"
 #include "castle_ctrl.h"
 #include "castle_da.h"
+#include "castle_sysfs.h"
+#include "castle_objects.h"
 
 //#define DEBUG
 #ifndef DEBUG
@@ -31,7 +33,6 @@
                                         _f, __FILE__, __LINE__ , da->id, level, ##_a))
 #endif
 
-#define MAX_DA_LEVEL                    (20)
 #define MAX_DYNAMIC_TREE_SIZE           (100) /* In C_CHK_SIZE. */ 
 #define MAX_DYNAMIC_DATA_SIZE           (100) /* In C_CHK_SIZE. */ 
 
@@ -66,59 +67,6 @@ static int                      castle_da_exiting    = 0;
 
    For DAs, only an attached DA is guaranteed to be in the hash.
  */
-struct castle_merge_token {
-    int driver_level;
-    int ref_cnt;
-    struct list_head list;
-};
-
-#define DOUBLE_ARRAY_GROWING_RW_TREE_BIT    (0)
-#define DOUBLE_ARRAY_GROWING_RW_TREE_FLAG   (1 << DOUBLE_ARRAY_GROWING_RW_TREE_BIT)
-#define DOUBLE_ARRAY_DELETED_BIT            (1)
-#define DOUBLE_ARRAY_DELETED_FLAG           (1 << DOUBLE_ARRAY_DELETED_BIT)
-#define DOUBLE_ARRAY_FROZEN_BIT             (2)
-#define DOUBLE_ARRAY_FROZEN_FLAG            (1 << DOUBLE_ARRAY_FROZEN_BIT)
-#define DOUBLE_ARRAY_UNFROZEN_BIT           (3)
-#define DOUBLE_ARRAY_UNFROZEN_FLAG          (1 << DOUBLE_ARRAY_UNFROZEN_BIT)
-struct castle_double_array {
-    da_id_t                     id;
-    version_t                   root_version;
-    /* Lock protects the trees list */
-    spinlock_t                  lock;
-    unsigned long               flags;
-    int                         nr_trees;
-    struct {                    
-        int                     nr_trees;
-        struct list_head        trees;
-        /* Merge related variables. */
-        struct {
-            struct list_head    merge_tokens;
-            struct castle_merge_token
-                               *active_token;
-            struct castle_merge_token
-                               *driver_token;
-            uint32_t            units_commited; 
-            struct task_struct *thread;
-        } merge;
-    } levels[MAX_DA_LEVEL];
-    struct castle_merge_token   merge_tokens_array[MAX_DA_LEVEL];
-    struct list_head            merge_tokens; 
-    struct list_head            hash_list;
-    atomic_t                    ref_cnt;
-    uint32_t                    attachment_cnt;
-    /* Queue of write IOs queued up on this DA. */
-    struct list_head            ios_waiting;
-    int                         ios_waiting_cnt;
-    uint32_t                    ios_budget;
-    uint32_t                    ios_rate;
-    struct work_struct          queue_restart;
-    /* Merge deamortisation */
-    wait_queue_head_t           merge_waitq;
-    /* Merge throttling. DISABLED ATM. */
-    atomic_t                    epoch_ios;
-    atomic_t                    merge_budget;
-    wait_queue_head_t           merge_budget_waitq;
-};
 
 DEFINE_HASH_TBL(castle_da, castle_da_hash, CASTLE_DA_HASH_SIZE, struct castle_double_array, hash_list, da_id_t, id);
 DEFINE_HASH_TBL(castle_ct, castle_ct_hash, CASTLE_CT_HASH_SIZE, struct castle_component_tree, hash_list, tree_seq_t, seq);
@@ -424,6 +372,7 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
         iter->completed = 1;
         BUG_ON(!iter->curr_c2b);
         put_c2b(iter->curr_c2b);
+        iter->curr_c2b = NULL;
 
         return 0;
     }
@@ -445,12 +394,22 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter)
     castle_ct_immut_iter_next_node(iter);
 }
 
+static void castle_ct_immut_iter_cancel(c_immut_iter_t *iter)
+{
+    debug("Cancelling immut enumerator for ct id=%d\n", iter->tree->seq);
+    if (iter->curr_c2b)
+        put_c2b(iter->curr_c2b);
+    if (iter->next_c2b)
+        put_c2b(iter->next_c2b);
+}
+
 struct castle_iterator_type castle_ct_immut_iter = {
     .register_cb = NULL,
     .prep_next   = NULL,
     .has_next    = (castle_iterator_has_next_t)castle_ct_immut_iter_has_next,
     .next        = (castle_iterator_next_t)    castle_ct_immut_iter_next,
     .skip        = NULL,
+    .cancel      = (castle_iterator_cancel_t)castle_ct_immut_iter_cancel,
 };
 
 typedef struct castle_modlist_iterator {
@@ -677,7 +636,10 @@ static void castle_ct_modlist_iter_heapsort(c_modlist_iter_t *iter)
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
     if(iter->enumerator)
+    {
+        castle_ct_immut_iter.cancel(iter->enumerator);
         castle_free(iter->enumerator);
+    }
     if(iter->node_buffer)
         castle_vfree(iter->node_buffer);
     if(iter->sort_idx)
@@ -1371,8 +1333,9 @@ static void castle_da_iterator_destroy(struct castle_component_tree *tree,
         castle_free(iter);
     } else
     {
-        /* For static trees, we are using immut iterator. It's enough to free it */
+        /* For static trees, we are using immut iterator. */
         /* TODO: do we need to do better resource release here? */
+        castle_ct_immut_iter_cancel(iter);
         castle_free(iter);
     }
 }
@@ -1870,6 +1833,19 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
                  atomic64_read(&merge->tree_ext_fs.blocked));
     atomic64_set(&out_tree->data_ext_fs.blocked, 
                  atomic64_read(&merge->data_ext_fs.blocked));
+
+    /* Calculate latest key in both trees. */
+    BUG_ON(merge->in_tree1->seq <=  merge->in_tree2->seq);
+    if (merge->in_tree1->last_key)
+    {
+        out_tree->last_key = merge->in_tree1->last_key;
+        merge->in_tree1->last_key = NULL;
+    }
+    else
+    {
+        out_tree->last_key = merge->in_tree2->last_key;
+        merge->in_tree2->last_key = NULL;
+    }
 
     /* Add list of large objects to CT. */
     list_replace(&merge->large_objs, &out_tree->large_objs);
@@ -2479,7 +2455,7 @@ static int castle_da_merge_run(void *da_p)
         BUG_ON(!in_tree1 || !in_tree2);
             
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_tree1->seq, in_tree2->seq);
-        perf_start("m-%d", level);
+        perf_start("m-%02d", level);
         merge = castle_da_merge_init(da, level, in_tree1, in_tree2);
         if(!merge)
         {
@@ -2494,9 +2470,9 @@ static int castle_da_merge_run(void *da_p)
             /* Wait until we are allowed to do next unit of merge. */
             units_cnt = castle_da_merge_units_inc_return(da, level);
             /* Do the unit. */
-            perf_start("m-%d-unit", level);
+            perf_start("m-%02d-unit", level);
             ret = castle_da_merge_unit_do(merge, units_cnt);
-            perf_end("m-%d-unit", level);
+            perf_end("m-%02d-unit", level);
             /* Exit on errors. */
             if(ret < 0)
                 goto merge_failed;
@@ -2511,7 +2487,7 @@ static int castle_da_merge_run(void *da_p)
         ret = castle_da_merge_last_unit_complete(da, level, merge);
 merge_failed:
         castle_da_merge_dealloc(merge, ret);
-        perf_end("m-%d", level);
+        perf_end("m-%02d", level);
         debug_merges("Done merge.\n");
         if(ret)
         {
@@ -2654,6 +2630,7 @@ static struct castle_double_array* castle_da_alloc(da_id_t da_id)
     da->ios_waiting_cnt = 0;
     da->ios_budget      = 0;
     da->ios_rate        = 0;
+    da->last_key        = NULL;
     CASTLE_INIT_WORK(&da->queue_restart, castle_da_queue_restart);
     atomic_set(&da->epoch_ios, 0);
     atomic_set(&da->merge_budget, 0);
@@ -2718,6 +2695,7 @@ static void castle_da_unmarshall(struct castle_double_array *da,
 {
     da->id           = dam->id;
     da->root_version = dam->root_version;
+    castle_sysfs_da_add(da);
 }
 
 struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
@@ -2855,6 +2833,9 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
     if (!EXT_ID_INVAL(ct->data_ext_fs.ext_id))
         castle_extent_free(ct->data_ext_fs.ext_id);
 
+    if (ct->last_key)
+        castle_object_okey_free(ct->last_key);
+
     /* Poison ct (note this will be repoisoned by kfree on kernel debug build. */
     memset(ct, 0xde, sizeof(struct castle_component_tree));
     castle_free(ct);
@@ -2919,6 +2900,8 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     INIT_LIST_HEAD(&ct->large_objs);
+    mutex_init(&ct->last_key_mutex);
+    ct->last_key = NULL;
 
     return ctm->da_id;
 }
@@ -3011,6 +2994,8 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
     castle_ct_hash_destroy_check(ct, (void*)0UL);
     list_del(&ct->da_list);
     list_del(&ct->hash_list);
+    if (ct->last_key)
+        castle_object_okey_free(ct->last_key);
     castle_free(ct);
 
     return 0;
@@ -3018,6 +3003,7 @@ static int castle_da_ct_dealloc(struct castle_double_array *da,
 
 static int castle_da_hash_dealloc(struct castle_double_array *da, void *unused) 
 {
+    castle_sysfs_da_del(da);
     castle_da_foreach_tree(da, castle_da_ct_dealloc, NULL);
     list_del(&da->hash_list);
     castle_free(da);
@@ -3074,6 +3060,8 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     }
 
 mstore_writeback:
+    if (da && !da->last_key)
+        da->last_key = ct->last_key;
 
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
@@ -3098,6 +3086,23 @@ mstore_writeback:
     return 0;
 }
 
+static int castle_da_hash_count(struct castle_double_array *da, void *_count)
+{
+    uint32_t *count = _count;
+
+    (*count)++;
+    return 0;
+}
+
+uint32_t castle_da_count(void)
+{
+    uint32_t count = 0;
+
+    castle_da_hash_iterate(castle_da_hash_count, (void *)&count); 
+
+    return count;
+}
+
 static int castle_da_writeback(struct castle_double_array *da, void *unused) 
 {
     struct castle_dlist_entry mstore_dentry;
@@ -3108,6 +3113,9 @@ static int castle_da_writeback(struct castle_double_array *da, void *unused)
        we need to drop it. Hash consitancy is guaranteed, because by this point 
        noone should be modifying it anymore */
     spin_unlock_irq(&castle_da_hash_lock);
+
+    if (da->last_key)
+        da->last_key = NULL;
 
     castle_da_foreach_tree(da, castle_da_tree_writeback, NULL);
 
@@ -3340,6 +3348,8 @@ static struct castle_component_tree* castle_ct_alloc(struct castle_double_array 
     castle_ct_hash_add(ct);
     ct->tree_ext_fs.ext_id = INVAL_EXT_ID;
     ct->data_ext_fs.ext_id = INVAL_EXT_ID;
+    ct->last_key           = NULL;
+    mutex_init(&ct->last_key_mutex);
 
     return ct;
 }
@@ -3452,6 +3462,7 @@ int castle_double_array_make(da_id_t da_id, version_t root_version)
     debug("Successfully made a new doubling array, id=%d, for version=%d\n",
         da_id, root_version);
     castle_da_hash_add(da);
+    castle_sysfs_da_add(da);
 
     return 0;
 }
@@ -3936,6 +3947,8 @@ int castle_double_array_destroy(da_id_t da_id)
     __castle_da_hash_remove(da); 
     da->hash_list.next = da->hash_list.prev = NULL;
     spin_unlock_irqrestore(&castle_da_hash_lock, flags);
+
+    castle_sysfs_da_del(da);
 
     printk("Marking DA %u for deletion\n", da_id);
     /* Set the destruction bit, which will stop further merges. */
