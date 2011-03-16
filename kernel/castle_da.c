@@ -1353,9 +1353,6 @@ static void castle_ct_merged_iter_init(c_merged_iter_t *iter,
     int i;
 
     debug("Initing merged iterator for %d component iterators.\n", iter->nr_iters);
-    /* nr_iters should be given in the iterator, and we expecting it to be in [1,10] range */
-    if(iter->nr_iters > 10)
-        printk("Merged iterator for %d > 10 trees.\n", iter->nr_iters);
     BUG_ON(iter->nr_iters <= 0);
     BUG_ON(!iter->btree);
     iter->err = 0;
@@ -3300,7 +3297,10 @@ static int castle_da_total_merge_output_level_get(struct castle_double_array *da
 
     /* Calculate the level it should go. Logarithm of nr_units. */
     out_tree_level = order_base_2(nr_units);
-
+    /* Total merge output _must_ be put in level 2+, because we don't want to mix different tree
+       types in level 1, and of course we don't want to put it in level 0 either. */
+    if(out_tree_level <= 1)
+        out_tree_level = 2;
     printk("Total merge: #units: %d, size appropriate for level: %d\n", nr_units, out_tree_level);
     /* Make sure no other trees exist above this level. */
     for (i=MAX_DA_LEVEL-1; i>=out_tree_level; i--)
@@ -3410,7 +3410,8 @@ static struct castle_da_merge* castle_da_merge_init(struct castle_double_array *
     btree = castle_btree_type_get(in_trees[0]->btree_type);
     for (i=0; i<nr_trees; i++)
     {
-        BUG_ON(btree != castle_btree_type_get(in_trees[i]->btree_type));
+        /* Btree types may, and often will be different during big merges. */
+        BUG_ON((level != BIG_MERGE) && (btree != castle_btree_type_get(in_trees[i]->btree_type)));
         BUG_ON((level != BIG_MERGE) && (in_trees[i]->level != level));
     }
 
