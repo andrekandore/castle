@@ -789,15 +789,15 @@ typedef struct castle_bio_vec {
 
     /* Btree walk variables. */
     unsigned long                 flags;        /**< Flags                                      */
-    int                        btree_depth;     /**< How far down the btree we've gone so far   */
-    int                        btree_levels;    /**< Levels in the tree (private copy in case
+    int                           btree_depth;  /**< How far down the btree we've gone so far   */
+    int                           btree_levels; /**< Levels in the tree (private copy in case
                                                      someone splits root node while we are
                                                      lower down in the tree                     */
-    void                      *parent_key;      /**< Key in parent node btree_node is from      */
+    void                         *parent_key;   /**< Key in parent node btree_node is from      */
     /* When writing, B-Tree node and its parent have to be locked concurrently. */
-    struct castle_cache_block *btree_node;
-    struct castle_cache_block *btree_parent_node;
-
+    struct castle_cache_block    *btree_node;
+    struct castle_cache_block    *btree_parent_node;
+ 
     /* Bloom filters. */
     struct castle_cache_block *bloom_c2b;
 #ifdef CASTLE_BLOOM_FP_STATS
@@ -805,10 +805,15 @@ typedef struct castle_bio_vec {
 #endif
 
     struct work_struct               work;      /**< Used to thread this bvec onto a workqueue  */
-    /* Value tuple allocation callback */
-    int                            (*cvt_get)    (struct castle_bio_vec *, 
+    union {
+        /* Value tuple allocation callback for writes */
+        int                        (*cvt_get)    (struct castle_bio_vec *, 
                                                   c_val_tup_t,
                                                   c_val_tup_t *);
+        /* Get reference on objects for reads */
+        int                        (*ref_get)    (struct castle_bio_vec *, 
+                                                  c_val_tup_t);
+    };
     /* Completion callback */
     void                           (*endfind)    (struct castle_bio_vec *, int, c_val_tup_t);
     void                           (*da_endfind) (struct castle_bio_vec *, int, c_val_tup_t);
@@ -1261,6 +1266,7 @@ struct castle_object_get {
     uint64_t    data_c2b_length;
     uint64_t    data_length;
     int         first;
+    c_val_tup_t cvt;
     
     void      (*reply_start)     (struct castle_object_get *get, 
                                   int err, 
@@ -1283,6 +1289,7 @@ struct castle_object_pull {
         c_ext_pos_t             cep;
         char                   *inline_val;
     };
+    c_val_tup_t                 cvt;
     struct castle_component_tree *ct;
     struct castle_cache_block  *curr_c2b;
     

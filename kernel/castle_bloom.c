@@ -361,6 +361,40 @@ void castle_bloom_complete(castle_bloom_t *bf)
 }
 
 /**
+ * Abort the bloom filter.
+ *
+ * Free an incomplete bloom filter - needed for merge fail cases.
+ */
+void castle_bloom_abort(castle_bloom_t *bf)
+{
+    struct castle_bloom_build_params *bf_bp = bf->private;
+
+    debug("bloom_abort::aborting bloom filter %p\n", bf);
+
+    if(bf_bp->cur_node != NULL)
+    {
+        debug("bloom_abort::completing NODE for bloom_filter %p\n", bf);
+        dirty_c2b(bf_bp->node_c2b);
+        write_unlock_c2b(bf_bp->node_c2b);
+        put_c2b(bf_bp->node_c2b);
+    }
+
+    if(bf_bp->chunk_c2b != NULL)
+    {
+        debug("bloom_abort::completing CHUNK for bloom_filter %p\n", bf);
+        dirty_c2b(bf_bp->chunk_c2b);
+        write_unlock_c2b(bf_bp->chunk_c2b);
+        put_c2b(bf_bp->chunk_c2b);
+    }
+
+#ifdef DEBUG
+    castle_free(bf_bp->elements_inserted_per_block);
+#endif
+    castle_free(bf->private);
+    bf->private = NULL;
+}
+
+/**
  * Remove a bloom filter from disk.
  */
 void castle_bloom_destroy(castle_bloom_t *bf)
@@ -864,6 +898,12 @@ void castle_bloom_marshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     ctm->bloom_ext_id = bf->ext_id;
 }
 
+/**
+ * Read an existing bloom filter from disk.
+ *
+ * - Prefetch bloom filter extent where the total number of chunks satisfies our
+ *   cache requirements
+ */
 void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
 {
     bf->num_hashes = ctm->bloom_num_hashes;
@@ -881,6 +921,17 @@ void castle_bloom_unmarshall(castle_bloom_t *bf, struct castle_clist_entry *ctm)
     castle_extent_mark_live(bf->ext_id);
 
     bf->private = NULL;
+
+    /* Pre-warm cache for bloom filters. */
+    if (bf->num_chunks <= BLOOM_MAX_SOFTPIN_CHUNKS)
+    {
+        /* A bf chunk is not the same as a c2b chunk.
+         * CHUNK() will give us an offset starting from 0, bump it by 1 to get
+         * the number of chunks we need to prefetch & pin. */
+        int chunks = CHUNK(bf->chunks_offset + bf->num_chunks * BLOOM_CHUNK_SIZE) + 1;
+        castle_cache_advise((c_ext_pos_t){bf->ext_id, 0},
+                C2_ADV_EXTENT|C2_ADV_PREFETCH|C2_ADV_SOFTPIN, chunks, -1, 0);
+    }
 
 #ifdef CASTLE_BLOOM_FP_STATS
     atomic64_set(&bf->queries, 0);

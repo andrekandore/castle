@@ -65,6 +65,11 @@ static int                      castle_da_exiting    = 0;
 
 static int                      castle_dynamic_driver_merge = 1; 
 
+static int                      castle_merges_abortable = 0; /* 0 or 1, default=disabled */
+module_param(castle_merges_abortable, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_merges_abortable, "Allow on-going merges to abort upon exit condition");
+
+
 static struct
 {
     int                     cnt;    /**< Size of cpus array.                        */
@@ -2657,7 +2662,7 @@ static struct castle_component_tree* castle_da_merge_package(struct castle_da_me
 
     /* Add list of large objects to CT. */
     list_replace(&merge->large_objs, &out_tree->large_objs);
-    merge->large_objs.prev = merge->large_objs.next = NULL;
+    INIT_LIST_HEAD(&merge->large_objs);
 
     debug("Number of entries=%ld, number of nodes=%ld\n",
             atomic64_read(&out_tree->item_count),
@@ -2802,6 +2807,8 @@ static struct castle_component_tree* castle_da_merge_complete(struct castle_da_m
     return castle_da_merge_package(merge);
 }
 
+static void castle_ct_large_objs_remove(struct list_head *);
+
 static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
 {
     int i;
@@ -2857,7 +2864,15 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err)
         castle_ext_freespace_fini(&merge->data_ext_free);
 
         if (merge->bloom_exists)
+        {
+            /* Abort (i.e. free) incomplete bloom filters */
+            castle_bloom_abort(&merge->bloom);
             castle_bloom_destroy(&merge->bloom);
+        }
+
+        /* Free the list of large objects referenced by merge. Old CT also has a reference, 
+         * so the large object should be alive after this. */
+        castle_ct_large_objs_remove(&merge->large_objs);
 
         out_tree = merge->out_tree;
         /* Free the component tree, if one was allocated. */
@@ -3573,7 +3588,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
 {
     struct castle_da_merge *merge;
     uint32_t units_cnt;
-    tree_seq_t out_tree_id;
+    tree_seq_t out_tree_id=0;
     int ret;
 
     castle_trace_da_merge(TRACE_START,
@@ -3615,6 +3630,14 @@ static int castle_da_merge_do(struct castle_double_array *da,
                                    level,
                                    units_cnt,
                                    0);
+        /* Check for castle stop and merge abort */
+        if((castle_merges_abortable)&&(exit_cond))
+        {
+            printk("Merge for DA=%d, level=%d, aborted.\n", da->id, level);
+            ret = -ESHUTDOWN; 
+            goto merge_aborted;
+        }
+
         /* Perform the merge work. */
         ret = castle_da_merge_unit_do(merge, units_cnt);
         /* Trace event. */
@@ -3646,6 +3669,7 @@ static int castle_da_merge_do(struct castle_double_array *da,
     /* Finish the last unit, packaging the output tree. */
     out_tree_id = castle_da_merge_last_unit_complete(da, level, merge);
     ret = TREE_INVAL(out_tree_id) ? -ENOMEM : 0;
+merge_aborted:
 merge_failed:
     /* Unhard-pin T1s in the cache. Do this before we deallocate the merge and extents. */
     if (level == 1)
@@ -3659,6 +3683,7 @@ merge_failed:
     debug_merges("MERGE END - L%d -> [%u]\n", level, out_tree_id);
     castle_da_merge_dealloc(merge, ret);
     castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, out_tree_id, 0);
+    if(ret==-ESHUTDOWN) return -ESHUTDOWN; /* merge abort */
     if(ret)
     {
         printk("Merge for DA=%d, level=%d, failed to merge err=%d.\n", da->id, level, ret);
@@ -3934,7 +3959,7 @@ static int castle_da_merge_run(void *da_p)
     struct castle_double_array *da = (struct castle_double_array *)da_p;
     struct castle_component_tree *in_trees[2];
     struct list_head *l;
-    int level, ignore;
+    int level, ignore, ret;
 
     /* Work out the level at which we are supposed to be doing merges.
        Do that by working out where is this thread in threads array. */
@@ -3984,14 +4009,16 @@ static int castle_da_merge_run(void *da_p)
 
         debug_merges("Doing merge, trees=[%u]+[%u]\n", in_trees[0]->seq, in_trees[1]->seq);
 
-        /* Do the merge. If fails, retry after 10s. */
-        if (castle_da_merge_do(da, 2, in_trees, level))
+        /* Do the merge. If fails, retry after 10s (unless it's a merge abort). */
+        ret=castle_da_merge_do(da, 2, in_trees, level);
+        if(ret==-ESHUTDOWN) goto exit_thread; /* -ESHUTDOWN can only mean merge abort */
+        if (ret)
         {
             msleep(10000);
             continue;
         }
     } while(1);
-
+exit_thread:
     debug_merges("Merge thread exiting.\n");
 
     write_lock(&da->lock);
@@ -4445,20 +4472,60 @@ static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
     castle_mstore_entry_insert(castle_lo_store, &mstore_entry);
 }
 
-static void castle_ct_large_objs_remove(struct castle_component_tree *ct)
+static void __castle_ct_large_obj_remove(struct list_head *lh)
+{
+    struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
+
+    /* Remove LO from list. */
+    list_del(&lo->list);
+
+    /* Free-up LO extent. */
+    castle_extent_free(lo->ext_id);
+
+    /* Free memory. */
+    castle_free(lo);
+}
+
+/* Remove a large object from list attached to the CT. This gets called only from T0 replaces. 
+ * This call could be inefficient due to linear search for LO through the complete list. But, 
+ * this gets called for only LO replaces. 
+ * Also this remove blocks new LO insertions as it is holding the mutex. Instead it might be a 
+ * good idea to not maintain LO list for T0. (that would make T0 persistence hard) */
+int castle_ct_large_obj_remove(c_ext_id_t           ext_id, 
+                               struct list_head    *lo_list_head, 
+                               struct mutex        *mutex)
+{
+    struct list_head *lh, *tmp;
+    int ret = -1;
+
+    /* Get mutex on LO list. */
+    if (mutex) mutex_lock(mutex);
+
+    /* Search for LO we are trying to remove in the list. */
+    list_for_each_safe(lh, tmp, lo_list_head)
+    {
+        struct castle_large_obj_entry *lo = list_entry(lh, struct castle_large_obj_entry, list);
+
+        if (lo->ext_id == ext_id)
+        {
+            /* Remove LO from list. */
+            __castle_ct_large_obj_remove(lh);
+            ret = 0;
+            break;
+        }
+    }
+    if (mutex) mutex_unlock(mutex);
+
+    return ret;
+}
+
+static void castle_ct_large_objs_remove(struct list_head *lo_list_head)
 {
     struct list_head *lh, *tmp;
 
-    list_for_each_safe(lh, tmp, &ct->large_objs)
-    {
-        struct castle_large_obj_entry *lo = 
-                            list_entry(lh, struct castle_large_obj_entry, list);
-
-        /* No need of locks as it is done in the removal context of CT. */
-        list_del(&lo->list);
-        castle_extent_put(lo->ext_id);
-        castle_free(lo);
-    }
+    /* no need of lock. Called from castle_ct_put. There shouldnt be any parallel operations. */
+    list_for_each_safe(lh, tmp, lo_list_head)
+        __castle_ct_large_obj_remove(lh);
 }
 
 int castle_ct_large_obj_add(c_ext_id_t              ext_id, 
@@ -4525,7 +4592,7 @@ void castle_ct_put(struct castle_component_tree *ct, int write)
 
     debug("Releasing freespace occupied by ct=%d\n", ct->seq);
     /* Freeing all large objects. */
-    castle_ct_large_objs_remove(ct);
+    castle_ct_large_objs_remove(&ct->large_objs);
 
     /* Free the extents. */
     castle_ext_freespace_fini(&ct->internal_ext_free);
@@ -4586,6 +4653,11 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
         castle_bloom_marshall(&ct->bloom, ctm);
 }
 
+/**
+ * Read an existing component tree from disk.
+ *
+ * - Prefetches btree extent for T0s.
+ */
 static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
                                        struct castle_clist_entry *ctm)
 {
@@ -4627,6 +4699,15 @@ static da_id_t castle_da_ct_unmarshall(struct castle_component_tree *ct,
     ct->bloom_exists = ctm->bloom_exists;
     if (ctm->bloom_exists)
         castle_bloom_unmarshall(&ct->bloom, ctm);
+    /* Pre-warm cache for T0 btree extents. */
+    if (ct->level == 0)
+    {
+        /* CHUNK() will give us the offset of the last btree node (from chunk 0)
+         * so bump it by 1 to get the number of chunks to prefetch. */
+        int chunks = CHUNK(ct->last_node.offset) + 1;
+        castle_cache_advise((c_ext_pos_t){ct->tree_ext_free.ext_id, 0},
+                C2_ADV_EXTENT|C2_ADV_PREFETCH, chunks, -1, 0);
+    }
 
     return ctm->da_id;
 }
@@ -4990,6 +5071,7 @@ static int __castle_da_driver_merge_reset(struct castle_double_array *da, void *
  * - Called during module initialisation only
  *
  * @also castle_fs_init()
+ * @also castle_double_array_read()
  */
 int castle_double_array_start(void)
 {
@@ -5005,6 +5087,13 @@ int castle_double_array_start(void)
     return 0;
 }
 
+/**
+ * Read doubling arrays and serialised component trees in from disk.
+ *
+ * - Called during module initialisation only
+ *
+ * @also castle_fs_init()
+ */
 int castle_double_array_read(void)
 {
     struct castle_dlist_entry mstore_dentry;
