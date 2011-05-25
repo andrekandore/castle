@@ -83,6 +83,8 @@ typedef enum {
     TRACE_CACHE_SOFTPIN_VICTIMS_ID,     /**< Number of softpinned c2bs evicted from the cache.  */
     TRACE_CACHE_READS_ID,               /**< Number of reads this tick.                         */
     TRACE_CACHE_WRITES_ID,              /**< Number of writes this tick.                        */
+    TRACE_CACHE_RESERVE_PGS_USED_ID,    /**< Number of c2ps from reserve freelist in use.       */
+    TRACE_CACHE_RESERVE_BLKS_USED_ID,   /**< Number of c2bs from reserve freelist in use.       */
 } c_trc_cache_var_t;
 
 /**
@@ -159,6 +161,7 @@ typedef uint32_t da_id_t;
 #define CASTLE_CTRL_THREAD_PRIORITY          29
 #define CASTLE_CTRL_SLAVE_SCAN               30
 #define CASTLE_CTRL_DELETE_VERSION           31
+#define CASTLE_CTRL_VERTREE_COMPACT          32
 
 typedef struct castle_control_cmd_claim {
     uint32_t     dev;          /* IN  */
@@ -217,6 +220,11 @@ typedef struct castle_control_cmd_destroy_vertree {
     da_id_t     vertree_id;      /* IN */
     int         ret;             /* OUT */
 } cctrl_cmd_destroy_vertree_t;
+
+typedef struct castle_control_cmd_vertree_compact {
+    da_id_t     vertree_id;      /* IN */
+    int         ret;             /* OUT */
+} cctrl_cmd_vertree_compact_t;
 
 typedef struct castle_control_cmd_delete_version {
     version_t   version;         /* IN */
@@ -315,6 +323,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_create_t              create;
         cctrl_cmd_destroy_vertree_t     destroy_vertree;
         cctrl_cmd_delete_version_t      delete_version;
+        cctrl_cmd_vertree_compact_t     vertree_compact;
         cctrl_cmd_clone_t               clone;
 
         cctrl_cmd_transfer_create_t     transfer_create;
@@ -377,6 +386,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DESTROY_VERTREE, cctrl_ioctl_t),
     CASTLE_CTRL_DELETE_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_DELETE_VERSION, cctrl_ioctl_t),
+    CASTLE_CTRL_VERTREE_COMPACT_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_COMPACT, cctrl_ioctl_t),
     CASTLE_CTRL_PROTOCOL_VERSION_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_PROTOCOL_VERSION, cctrl_ioctl_t),
     CASTLE_CTRL_ENVIRONMENT_SET_IOCTL =
