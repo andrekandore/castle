@@ -273,7 +273,8 @@ static c2_block_t             *castle_cache_blks = NULL;
 static c2_page_t              *castle_cache_pgs  = NULL;
 
 static int                     castle_cache_block_hash_buckets;
-static         DEFINE_SPINLOCK(castle_cache_block_hash_lock);
+static DEFINE_RWLOCK(castle_cache_block_hash_lock);
+static DEFINE_SPINLOCK(castle_cache_block_lru_lock);
 static struct hlist_head      *castle_cache_block_hash = NULL;
 
 #define PAGE_HASH_LOCK_PERIOD  1024
@@ -283,7 +284,7 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 
 static struct kmem_cache      *castle_io_array_cache = NULL;
 
-/* Following LIST_HEADs are protected by castle_cache_block_hash_lock. */
+/* Following LIST_HEADs are protected by castle_cache_block_lru_lock. */
 static               LIST_HEAD(castle_cache_extent_dirtylist);      /**< Extents with dirty c2bs  */
 static               LIST_HEAD(castle_cache_cleanlist);             /**< Clean c2bs               */
 static atomic_t                castle_cache_extent_dirtylist_size;  /**< Number of dirty extents  */
@@ -324,8 +325,6 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reserve
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
 #define CASTLE_CACHE_VMAP_PGS   256
-static struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS];
-static           DECLARE_MUTEX(castle_cache_vmap_lock);
 
 struct task_struct     *castle_cache_flush_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
@@ -782,7 +781,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Remove c2b from the tree. */
-    spin_lock(&castle_cache_block_hash_lock); /* protects clean/dirty union. */
+    spin_lock(&castle_cache_block_lru_lock); /* protects clean/dirty union */
     rb_erase(&c2b->rb_dirtytree, &dirtytree->rb_root);
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
@@ -791,7 +790,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
         list_del_init(&dirtytree->list);
         BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_size) < 0);
     }
-    spin_unlock(&castle_cache_block_hash_lock);
+    spin_unlock(&castle_cache_block_lru_lock);
 
     /* Release lock and put reference, potentially freeing the dirtytree if
      * the extent has already been freed. */
@@ -862,7 +861,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     }
 
     /* Insert dirty c2b into the tree. */
-    spin_lock(&castle_cache_block_hash_lock); /* protects clean/dirty union. */
+    spin_lock(&castle_cache_block_lru_lock); /* protects clean/dirty union. */
     if (RB_EMPTY_ROOT(&dirtytree->rb_root))
     {
         /* First dirty c2b for this extent, place it onto the global
@@ -872,7 +871,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
-    spin_unlock(&castle_cache_block_hash_lock);
+    spin_unlock(&castle_cache_block_lru_lock);
 
     /* Keep the reference until the c2b is clean but drop the lock. */
     c2b->dirtytree = dirtytree;
@@ -911,12 +910,12 @@ void dirty_c2b(c2_block_t *c2b)
     /* Place c2b on per-extent dirtytree if it is not already dirty. */
     if (!c2b_dirty(c2b))
     {
-        spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
+        spin_lock_irqsave(&castle_cache_block_lru_lock, flags);
 
         /* Don't continue if we've raced another thread. */
         if (c2b_dirty(c2b))
         {
-            spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+            spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
             return;
         }
 
@@ -926,7 +925,7 @@ void dirty_c2b(c2_block_t *c2b)
         if (c2b_softpin(c2b))
             BUG_ON(atomic_dec_return(&castle_cache_cleanlist_softpin_size) < 0);
         set_c2b_dirty(c2b);
-        spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+        spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
 
         /* Place dirty c2b onto per-extent dirtytree. */
         c2_dirtytree_insert(c2b);
@@ -968,13 +967,14 @@ void clean_c2b(c2_block_t *c2b)
     c2_dirtytree_remove(c2b);
 
     /* Insert onto cleanlist and do cache list accounting. */
-    spin_lock_irqsave(&castle_cache_block_hash_lock, flags);
+    spin_lock_irqsave(&castle_cache_block_lru_lock, flags);
+    BUG_ON(atomic_read(&c2b->count) == 0);
     list_add_tail(&c2b->clean, &castle_cache_cleanlist);
     atomic_inc(&castle_cache_cleanlist_size);
     if (c2b_softpin(c2b))
         atomic_inc(&castle_cache_cleanlist_softpin_size);
     clear_c2b_dirty(c2b);
-    spin_unlock_irqrestore(&castle_cache_block_hash_lock, flags);
+    spin_unlock_irqrestore(&castle_cache_block_lru_lock, flags);
 }
 
 void update_c2b(c2_block_t *c2b)
@@ -1338,31 +1338,37 @@ typedef struct castle_io_array {
 static int c_io_next_slave_get(c2_block_t *c2b, c_disk_chk_t *chunks, int k_factor, int *idx)
 {
     struct castle_slave *slave;
-    int i, try_second, disk_idx;
+    int i, try_second, disk_idx, min_outstanding_ios, tmp;
 
     /*
-     * At some point we'll have a proper read slave scheduler to optimise read I/O as mentioned
-     * above, but for the moment just return the first working slave.
+     * Read scheduler: select the one with minimum in-flight IOs
      *
      * At the moment, when prefetching, avoid using the first copy, which may be stored on SSDs.
      */
     try_second = c2b_prefetch(c2b);
     /* Loop around, searching for disks in service. */
     disk_idx = -1;
+    min_outstanding_ios = 0; /* keep the compiler happy */
     for(i=0; i<k_factor; i++)
     {
         slave = castle_slave_find_by_uuid(chunks[i].slave_id);
         BUG_ON(!slave);
         if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         {
-            disk_idx = i;
-            /* If we are not looking for second copy, or we are already looking past the first
-               copy, terminate. */
-            if(!try_second || i != 0)
-                goto out;
+	    if(disk_idx == -1) {
+		disk_idx = i;
+		min_outstanding_ios = atomic_read(&slave->io_in_flight);
+	    }
+	    else {
+		tmp = atomic_read(&slave->io_in_flight);
+		if((tmp < min_outstanding_ios) || (disk_idx == 0 && try_second)) {
+		    disk_idx = i;
+		    min_outstanding_ios = tmp;
+		}
+	    }
         }
     }
-out:
+
     if(disk_idx >= 0)
     {
         *idx = disk_idx;
@@ -2064,41 +2070,45 @@ static inline c2_block_t* _castle_cache_block_hash_get(c_ext_pos_t cep,
     c2_block_t *c2b = NULL;
 
     /* Hold the hash lock. */
-    spin_lock_irq(&castle_cache_block_hash_lock);
+    read_lock(&castle_cache_block_hash_lock);
 
     /* Try and get the matching block from the hash. */
     c2b = castle_cache_block_hash_find(cep, nr_pages);
-
     if (c2b)
     {
-        /* We found a matching block. */
-
-        if (promote)
-        {
-            /* We are obtaining this block to be used.  We should push it to
+	/* We found a matching block. */
+	get_c2b(c2b);
+	/* we have a reference so drop the lock on the hash */
+	read_unlock(&castle_cache_block_hash_lock);
+	if(promote) {
+	    /* We are obtaining this block to be used.  We should push it to
              * the end of the LRU list indicating that it is recently used
              * and should not be freed any time soon.
              *
              * We're going to return this block to the caller so hold a
              * reference for them so it doesn't get removed. */
-            get_c2b(c2b);
-
-            if (!c2b_dirty(c2b))
+	    spin_lock_irq(&castle_cache_block_lru_lock);
+	    if (!c2b_dirty(c2b))
                 list_move_tail(&c2b->clean, &castle_cache_cleanlist);
-        }
-        else if (atomic_read(&c2b->count) == 0)
-        {
-            /* No references on this block means it's not in use.
-             * If clean: demote so it gets reused next
-             * If dirty: don't touch it - let LRU mechanism handle it */
-            if (!c2b_dirty(c2b))
-                list_move(&c2b->clean, &castle_cache_cleanlist);
-        }
+	    spin_unlock_irq(&castle_cache_block_lru_lock);
+	}
+	else {
+	    spin_lock_irq(&castle_cache_block_lru_lock);
+	    if (atomic_read(&c2b->count) == 0) {
+		/* No references on this block means it's not in use.
+		 * If clean: demote so it gets reused next
+		 * If dirty: don't touch it - let LRU mechanism handle it */
+		if (!c2b_dirty(c2b))
+		    list_move(&c2b->clean, &castle_cache_cleanlist);
+	    }
+	    spin_unlock_irq(&castle_cache_block_lru_lock);
+	    /* demote callers do not need a reference to the block */
+	    put_c2b(c2b);
+	}
+    } /* if(c2b) */
+    else {
+	read_unlock(&castle_cache_block_hash_lock);
     }
-
-    /* Release the hash lock. */
-    spin_unlock_irq(&castle_cache_block_hash_lock);
-
     return c2b;
 }
 
@@ -2150,26 +2160,33 @@ static int castle_cache_block_hash_insert(c2_block_t *c2b, int transient)
 {
     int idx, success;
 
-    spin_lock_irq(&castle_cache_block_hash_lock);
+    write_lock(&castle_cache_block_hash_lock);
 
     /* Check if already in the hash */
     success = 0;
-    if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages)) goto out;
+    if(castle_cache_block_hash_find(c2b->cep, c2b->nr_pages)) { 
+	write_unlock(&castle_cache_block_hash_lock);
+	goto out;
+    }
 
     /* Insert */
     success = 1;
     idx = castle_cache_block_hash_idx(c2b->cep);
     hlist_add_head(&c2b->hlist, &castle_cache_block_hash[idx]);
+    /* in the hash and hold a reference so drop lock */
+    BUG_ON(atomic_read(&c2b->count) == 0);
+    write_unlock(&castle_cache_block_hash_lock);
     BUG_ON(c2b_dirty(c2b));
     BUG_ON(c2b_softpin(c2b));
+    spin_lock_irq(&castle_cache_block_lru_lock);
     if (transient)
         list_add(&c2b->clean, &castle_cache_cleanlist);
     else
         list_add_tail(&c2b->clean, &castle_cache_cleanlist);
     /* Cleanlist accounting. */
     atomic_inc(&castle_cache_cleanlist_size);
+    spin_unlock_irq(&castle_cache_block_lru_lock);
 out:
-    spin_unlock_irq(&castle_cache_block_hash_lock);
     return success;
 }
 
@@ -2480,6 +2497,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     c_ext_pos_t dcep;
     c2_page_t *c2p;
     int i, uptodate;
+    struct page            *castle_cache_vmap_pgs[CASTLE_CACHE_VMAP_PGS]; 
 
     debug("Initing c2b for cep="cep_fmt_str", nr_pages=%d\n",
             cep2str(cep), nr_pages);
@@ -2509,7 +2527,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
 
     i = 0;
     debug("c2b->nr_pages=%d\n", nr_pages);
-    down(&castle_cache_vmap_lock);
     c2b_for_each_page_start(page, c2p, dcep, c2b)
     {
 #ifdef CASTLE_DEBUG
@@ -2529,7 +2546,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
         else
             c2b->buffer = vmap(castle_cache_vmap_pgs, i, VM_READ|VM_WRITE, PAGE_KERNEL);
 
-    up(&castle_cache_vmap_lock);
     BUG_ON(!c2b->buffer);
 }
 
@@ -2617,7 +2633,8 @@ static void castle_cache_block_free(c2_block_t *c2b)
 
 static inline int c2b_busy(c2_block_t *c2b, int expected_count)
 {
-    BUG_ON(!spin_is_locked(&castle_cache_block_hash_lock));
+    /* cannot readlock means writelock is held */
+    BUG_ON(read_can_lock(&castle_cache_block_hash_lock));
     /* c2b_locked() implies (c2b->count > 0) */
     return (atomic_read(&c2b->count) != expected_count) ||
           (c2b->state.bits & (1 << C2B_dirty)) ||
@@ -2676,8 +2693,13 @@ static int castle_cache_block_hash_clean(void)
         victimise_softpin = 1;
 
     /* Hunt for victim c2bs. Hold hash lock for duration. */
-    spin_lock_irq(&castle_cache_block_hash_lock);
+    /* this means we can delete victim blocks from the hash */
+    /* this also means no-one can acquire new references */
+    write_lock(&castle_cache_block_hash_lock);
 
+    /* acquire the lock on the LRU list, since we are moving things around */
+    spin_lock_irq(&castle_cache_block_lru_lock);
+    
     do
     {
         list_for_each_safe(lh, th, &castle_cache_cleanlist)
@@ -2738,8 +2760,9 @@ static int castle_cache_block_hash_clean(void)
      * victimising softpin c2bs if we have not already done so. */
     while (!victimise_softpin && (victimise_softpin = (nr_victims < BATCH_FREE)));
 
-    /* Hunt complete.  Release hash lock. */
-    spin_unlock_irq(&castle_cache_block_hash_lock);
+    /* Hunt complete. Release locks. */
+    spin_unlock_irq(&castle_cache_block_lru_lock);
+    write_unlock(&castle_cache_block_hash_lock);
 
     /* We couldn't find any victims */
     if (hlist_empty(&victims))
@@ -2785,10 +2808,11 @@ int castle_cache_block_destroy(c2_block_t *c2b)
 
     /* Check whether the c2b is busy, under the hash lock so that no other references
        can be taken. */
-    spin_lock_irq(&castle_cache_block_hash_lock);
+    write_lock(&castle_cache_block_hash_lock);
     ret = c2b_busy(c2b, 1) ? -EINVAL : 0;
     if(!ret)
     {
+	spin_lock_irq(&castle_cache_block_lru_lock);
         hlist_del(&c2b->hlist);
         list_del(&c2b->clean);
         /* Update bookkeeping info. */
@@ -2800,8 +2824,9 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         }
         else
             atomic_inc(&castle_cache_block_victims);
+	spin_unlock_irq(&castle_cache_block_lru_lock);
     }
-    spin_unlock_irq(&castle_cache_block_hash_lock);
+    write_unlock(&castle_cache_block_hash_lock);
     /* If the c2b was busy, exit early. */
     if(ret)
     {
@@ -4733,20 +4758,20 @@ static int castle_cache_flush(void *unused)
             i--;
 
             /* Get next per-extent dirtytree to flush. */
-            spin_lock_irq(&castle_cache_block_hash_lock);
+            spin_lock_irq(&castle_cache_block_lru_lock);
             if (list_empty(&castle_cache_extent_dirtylist))
             {
-                spin_unlock_irq(&castle_cache_block_hash_lock);
+                spin_unlock_irq(&castle_cache_block_lru_lock);
                 break;
             }
             dirtytree = list_entry(castle_cache_extent_dirtylist.next,
                     c_ext_dirtytree_t, list);
-            /* Get dirtytree ref under castle_cache_block_hash_lock.  Prevents
+            /* Get dirtytree ref under castle_cache_block_lru_lock.  Prevents
              * a potential race where all c2bs in tree are flushing and final
              * c2b IO completion callback handler might free the dirtytree. */
             castle_extent_dirtytree_get(dirtytree);
             list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylist);
-            spin_unlock_irq(&castle_cache_block_hash_lock);
+            spin_unlock_irq(&castle_cache_block_lru_lock);
 
             /* Check extent type. If its T0, only flush if flushing_rwcts flag is set.
              * Note that if ext_id belongs to a deleted extent, we are going to get
