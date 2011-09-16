@@ -805,8 +805,7 @@ enum {
 #define MTREE_TYPE                 0x33
 #define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
 #define BATREE_TYPE                0x44
-#define RW_VLBA_TREE_TYPE          0x55
-#define RO_VLBA_TREE_TYPE          0x66
+#define VLBA_TREE_TYPE             0x66
 
 #define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
                                                           This is used in on-disk datastructures.
@@ -995,7 +994,8 @@ struct castle_dlist_entry {
     /* align:   4 */
     /* offset:  0 */ c_da_t      id;
     /*          4 */ c_ver_t     root_version;
-    /*          8 */ uint8_t     _unused[248];
+    /*          8 */ btree_t     btree_type;
+    /*          9 */ uint8_t     _unused[247];
     /*        256 */
 } PACKED;
 
@@ -1999,6 +1999,7 @@ struct castle_da_cts_proxy {
         c_ct_redir_state_enum_t         state;      /**< Redirection state.             */
     } *cts;
     uint8_t                     nr_cts;     /**< Number of CTs in cts[].                */
+    btree_t                     btree_type; /**< Tree type used for the CTs.            */
     atomic_t                    ref_cnt;    /**< References held on proxy structure.    */
     struct castle_double_array *da;         /**< Backpointer to DA (for DEBUG).         */
 };
@@ -2053,6 +2054,7 @@ struct castle_double_array {
     struct kobject              arrays_kobj;        /**< Sysfs entry for list of arrays         */
     struct kobject              merges_kobj;        /**< Sysfs entry for list of merges         */
     unsigned long               flags;
+    btree_t                     btree_type;         /**< Tree type used for the CTs             */
     int                         nr_trees;           /**< Total number of complete CTs in the da */
     /**< Total number of partially complete in-progress trees in the da; these are trees that are
          complete enough to be queried. This count is helpful for query init.                   */

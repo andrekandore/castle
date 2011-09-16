@@ -166,8 +166,8 @@ static void castle_vlba_tree_node_compact(struct castle_btree_node *node)
 
     /* Buffers to keep the minimum heap of entries offsets and corresponsding
      * entry index */
-    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
-    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
+    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
     BUG_ON(!a || !idx);
 
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -598,11 +598,10 @@ static void castle_vlba_tree_node_validate(struct castle_btree_node *node)
     uint32_t count;
     struct castle_vlba_tree_entry *prev_entry;
 
-    /* @TODO: node_validate called in interrupt context, cannot kmalloc GFP_NOIO here */
     if(0 == 0)
         return;
-    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
-    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_NOIO);
+    a = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
+    idx = castle_malloc(sizeof(uint32_t) * node->used, GFP_KERNEL);
     BUG_ON(!a || !idx);
 
     memcpy(a, &vlba_node->key_idx[0], (sizeof(uint32_t) * node->used));
@@ -755,30 +754,8 @@ static void castle_vlba_tree_node_print(struct castle_btree_node *node)
 }
 
 
-struct castle_btree_type castle_rw_tree = {
-    .magic          = RW_VLBA_TREE_TYPE,
-    .min_key        = (void *)&VLBA_TREE_MIN_KEY,
-    .max_key        = (void *)&VLBA_TREE_MAX_KEY,
-    .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
-    .need_split     = castle_vlba_tree_need_split,
-    .key_compare    = castle_vlba_tree_key_compare,
-    .key_duplicate  = castle_vlba_tree_key_duplicate,
-    .key_next       = castle_vlba_tree_key_next,
-    .key_dealloc    = castle_vlba_tree_key_dealloc,
-    .key_hash       = castle_vlba_tree_key_hash,
-    .entry_get      = castle_vlba_tree_entry_get,
-    .entry_add      = castle_vlba_tree_entry_add,
-    .entry_replace  = castle_vlba_tree_entry_replace,
-    .entry_disable  = castle_vlba_tree_entry_disable,
-    .entries_drop   = castle_vlba_tree_entries_drop,
-    .node_print     = castle_vlba_tree_node_print,
-#ifdef CASTLE_DEBUG
-    .node_validate  = castle_vlba_tree_node_validate,
-#endif
-};
-
-struct castle_btree_type castle_ro_tree = {
-    .magic          = RO_VLBA_TREE_TYPE,
+struct castle_btree_type castle_vlba_tree = {
+    .magic          = VLBA_TREE_TYPE,
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,

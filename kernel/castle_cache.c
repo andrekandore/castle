@@ -4939,12 +4939,12 @@ static void __castle_cache_extent_flush(c_ext_dirtytree_t  *dirtytree,
         int dirtytree_locked;
 
         batch_idx = 0;
-        last_end_off = 0;
 
 restart_traverse:
         /* Hold dirtytree lock. */
         spin_lock_irq(&dirtytree->lock);
         dirtytree_locked = 1;
+        last_end_off = 0;
 
         /* Walk dirty c2bs until we hit end_off or flush max_pgs. */
         parent = rb_first(&dirtytree->rb_root);
@@ -5015,9 +5015,6 @@ restart_traverse:
 dont_flush: read_unlock_c2b(c2b);
 cant_lock:  clear_c2b_flushing(c2b);
 next_c2b:
-            /* Calculate extent offset where current c2b ends. */
-            last_end_off = c2b->cep.offset
-                            + castle_cache_c2b_to_pages(c2b) * PAGE_SIZE;
             if (likely(dirtytree_locked))
                 parent = rb_next(parent);
             else
@@ -5025,6 +5022,10 @@ next_c2b:
                 put_c2b(c2b); /* extra ref */
                 goto restart_traverse;
             }
+
+            /* Calculate extent offset where current c2b ends. */
+            last_end_off = c2b->cep.offset
+                            + castle_cache_c2b_to_pages(c2b) * PAGE_SIZE;
         }
 
         /* Release holds. */
