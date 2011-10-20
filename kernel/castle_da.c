@@ -7483,7 +7483,7 @@ int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
     {
         castle_printk(LOG_USERINFO, "Couldn't set insert rate for unknown version tree: %u\n",
                                     da_id);
-        return -EINVAL;
+        return C_ERR_INVAL_DA;
     }
 
     /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
@@ -7500,7 +7500,7 @@ int castle_da_read_rate_set(c_da_t da_id, uint32_t read_rate)
     {
         castle_printk(LOG_USERINFO, "Couldn't set read rate for unknown version tree: %u\n",
                                     da_id);
-        return -EINVAL;
+        return C_ERR_INVAL_DA;
     }
 
     /* User passes it in MB/s, but kernel stores it in Bytes/secs. */
@@ -11200,7 +11200,14 @@ static void castle_da_read_bvec_start(struct castle_double_array *da, c_bvec_t *
     c_bvec->tree            = castle_da_cts_proxy_ct_next(c_bvec->cts_proxy,
                                                          &c_bvec->cts_index,
                                                           c_bvec->key);
-    BUG_ON(!c_bvec->tree); /* must always be at least one candidate */
+    if (!c_bvec->tree)
+    {
+        /* No candidate trees available, so the requested key cannot exist.
+         * Let submit_complete() handle this case for us. */
+        c_bvec->submit_complete(c_bvec, 0, INVAL_VAL_TUP);
+
+        return;
+    }
     c_bvec->orig_complete   = c_bvec->submit_complete;
     c_bvec->submit_complete = castle_da_ct_read_complete;
 
