@@ -3526,28 +3526,20 @@ static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id
      * available resources between partitions. */
     part_id = c2_partition_most_overbudget_find();
 
-    /* Return immediately if the partition to evict from is > 95% dirty.
+    /* Return immediately if the partition to evict from is > 75% dirty.
      *
      * By doing this we expect the caller to wake the flush thread to write back
-     * dirty c2ps to disk.  If we're more than 75% dirty then proceed to grow
-     * the freelists but manually wake the flush thread now.
+     * dirty c2ps to disk.
      *
      * If we are the flush thread, skip this check and instead attempt to return
      * as much as we can to the freelist so the active flush can progress. */
-    if (likely(current != castle_cache_flush_thread))
+    if (likely(current != castle_cache_flush_thread)
+            && castle_cache_partition[part_id].dirty_pct > 75)
     {
-        if (castle_cache_partition[part_id].dirty_pct > 95)
-        {
-            /* Inform the flush thread which partition is too dirty. */
-            castle_cache_flush_part_id = part_id;
-            return 2;
-        }
-        else if (castle_cache_partition[part_id].dirty_pct > 75)
-        {
-            /* Inform the flush thread which partition is too dirty. */
-            castle_cache_flush_part_id = part_id;
-            castle_cache_flush_wakeup();
-        }
+        /* Inform the flush thread which partition is too dirty. */
+        castle_cache_flush_part_id = part_id;
+
+        return 2;
     }
 
 #ifdef DEBUG
