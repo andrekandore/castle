@@ -3399,10 +3399,14 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
     /* We couldn't find any victims */
     if (nr_pages == 0)
     {
-        if (unevictable_pages > castle_cache_size / 2)
-            castle_printk(LOG_WARN, "Couldn't find a victim page in %d pages, cache size %d\n",
-                    unevictable_pages, castle_cache_size);
-        debug("No victims found!!\n");
+        int user_pgs = atomic_read(&castle_cache_partition[USER].cur_pgs);
+        if (unevictable_pages > user_pgs / 2)
+            castle_printk(LOG_WARN, "CLOCK: No victims in %d pages. USER %d pages (%d%% dirty), total cache %d.\n",
+                    unevictable_pages,
+                    user_pgs,
+                    castle_cache_partition[USER].dirty_pct,
+                    castle_cache_size);
+
         return 1;
     }
 
