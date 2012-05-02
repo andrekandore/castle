@@ -8735,21 +8735,11 @@ static int castle_da_level0_force_promote(struct castle_double_array *da, void *
     return 0;
 }
 
-/**
- * Promote modified level 0 RWCTs so the checkpoint thread writes them out.
- *
- * @param   work    Work structure (embedded in DA structure)
- *
- * @also castle_da_level0_modified_promote()
- */
-static void __castle_da_level0_modified_promote(struct work_struct *work)
+static void castle_da_level0_promote(struct castle_double_array *da)
 {
-    struct castle_double_array *da;
     struct castle_component_tree *ct;
     int cpu_index;
     int create_failed;
-
-    da = container_of(work, struct castle_double_array, work);
 
     /* Wait until *we* set the growing bit. */
     while (castle_da_growing_rw_test_and_set(da) != EXIT_SUCCESS)
@@ -8786,6 +8776,20 @@ static void __castle_da_level0_modified_promote(struct work_struct *work)
 
 out:
     castle_da_growing_rw_clear(da);
+}
+
+/**
+ * Promote modified level 0 RWCTs so the checkpoint thread writes them out.
+ *
+ * @param   work    Work structure (embedded in DA structure)
+ *
+ * @also castle_da_level0_modified_promote()
+ */
+static void __castle_da_level0_modified_promote(struct work_struct *work)
+{
+    struct castle_double_array *da = container_of(work, struct castle_double_array, work);
+
+    castle_da_level0_promote(da);
 
     /* Drop DA reference, adjust promoting DAs counter and signal caller. */
     atomic_dec((atomic_t *)da->private);
@@ -12933,6 +12937,8 @@ static int castle_da_incremental_backup_start(struct castle_double_array *da)
 
         BUG_ON(ct && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags));
     }
+
+    castle_da_level0_promote(da);
 
     castle_printk(LOG_USERINFO, "Starting back-up on DA: 0x%x\n", da->id);
 
