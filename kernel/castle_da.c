@@ -2825,90 +2825,83 @@ static void castle_da_each_skip(c_merged_iter_t *iter,
                                            &merge->version_states);
 }
 
+static struct castle_component_tree *castle_da_l1_oldest_tree_get(struct castle_double_array *da)
+{
+    struct castle_component_tree *ct;
+
+    /* NOTE: Caller should hold castle_da_lock. */
+    BUG_ON(write_can_lock(&da->lock));
+
+    if (list_empty(&da->levels[1].trees))
+        return NULL;
+
+    ct = list_entry(da->levels[1].trees.prev, struct castle_component_tree, da_list);
+
+    BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
+
+    return ct;
+}
+
 /**
- * Extracts two oldest component trees from the DA, and waits for all the write references
- * to disappear. If either of the trees turns out to be empty is deallocated and an error
- * is returned.
+ * Extract the oldest component tree from the DA, and waits for all the write references
+ * to disappear. If we find any Barrier CT just promote it to next level, without any merge.
  *
  * @return  -EAGAIN     A tree was deallocated, restart the merge.
  * @return   0          Trees were found, and stored in cts array.
  */
-static int castle_da_l1_merge_cts_get(struct castle_double_array *da,
-                                      struct castle_component_tree **cts,
-                                      int nr_trees)
+static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_double_array *da)
 {
     struct castle_component_tree *ct;
-    struct list_head *l;
-    int i;
-
-    /* Zero out the CTs array. */
-    for (i=0; i<nr_trees; i++)
-        cts[i] = NULL;
+    int has_write_lock = 0;
 
     /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
      * list. */
     read_lock(&da->lock);
 
-    i=nr_trees;
-    /* Find two oldest trees walking the list backwards. */
-    list_for_each_prev(l, &da->levels[1].trees)
+    while ((ct = castle_da_l1_oldest_tree_get(da)))
     {
-        struct castle_component_tree *ct =
-                            list_entry(l, struct castle_component_tree, da_list);
-
-        BUG_ON(test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags));
-
-        cts[--i] = ct;
-        if (i == 0)
+        if (!test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
             break;
-    }
-    read_unlock(&da->lock);
 
-    if (i)
-        return -EAGAIN;
-
-    /* Wait for RW refs to disappear. Free the CT if it is empty after that. */
-    for(i = 0; i < nr_trees; i++)
-    {
-        ct = cts[i];
-
-        /* Wait until write ref count reaches zero. */
-        BUG_ON(!CT_DYNAMIC(ct) && (atomic_read(&ct->write_ref_count) != 0));
-        while(atomic_read(&ct->write_ref_count))
+        if (has_write_lock)
         {
-            debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
-                ct->seq, atomic_read(&ct->write_ref_count));
-            msleep_interruptible(10);
-        }
-
-        /* Just promote barrier_ct to next level (L2). This tree is empty, just a barrier. */
-        if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
-        {
-            DA_TRANSACTION_BEGIN(da);
             castle_component_tree_promote(da, ct);
-            DA_TRANSACTION_END(da);
-
-            return -EAGAIN;
         }
-
-        /* Check that the tree has non-zero elements. */
-        if(atomic64_read(&ct->item_count) == 0)
+        else
         {
-            castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
-            /* No items in this CT, deallocate it by removing it from the DA,
-               and dropping the ref. */
-            castle_sysfs_ct_del(ct);
+            read_unlock(&da->lock);
 
+            /* We need transaction lock and write lock to promote barrier CT. */
+            /* We have to get CT from list again, while we are getting transaction lock,
+             * it is possible that barrier CT is deleted. */
             DA_TRANSACTION_BEGIN(da);
-            castle_component_tree_del(da, ct);
-            DA_TRANSACTION_END(da);
-            castle_ct_put(ct, READ /*rw*/);
 
-            return -EAGAIN;
+            has_write_lock = 1;
         }
     }
 
-    return 0;
+    if (has_write_lock)
+        DA_TRANSACTION_END(da);
+    else
+        read_unlock(&da->lock);
+
+    /* Got no CT to merge. */
+    if (ct == NULL)
+        return NULL;
+
+    /* Wait until write ref count reaches zero. */
+    BUG_ON(!CT_DYNAMIC(ct) && (atomic_read(&ct->write_ref_count) != 0));
+    while(atomic_read(&ct->write_ref_count))
+    {
+        debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
+            ct->seq, atomic_read(&ct->write_ref_count));
+        msleep_interruptible(10);
+    }
+
+    /* We wouldn't promote any empty T0s. */
+    BUG_ON(atomic64_read(&ct->item_count) == 0);
+
+    return ct;
 }
 
 /**
@@ -7358,10 +7351,13 @@ static int castle_da_l1_merge_run(void *da_p)
         if(ret)
             break;
 
+        /* We don't want L1 merges to span across barrier CT. If we want to increase number
+         * of trees for L1 merges, should take care of this condition first. */
+        BUG_ON(nr_trees != 1);
+
         /* Extract the two oldest component trees. */
-        ret = castle_da_l1_merge_cts_get(da, in_trees, nr_trees);
-        BUG_ON(ret && (ret != -EAGAIN));
-        if(ret == -EAGAIN)
+        in_trees[0] = castle_da_l1_merge_ct_get(da);
+        if (in_trees[0] == NULL)
             continue;
 
         nr_data_exts = 0;
