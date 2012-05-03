@@ -5692,10 +5692,9 @@ aggressive:
             if(to_flush <= 0)
                 break;
 
-            /* Record the size of this list at this point in time,
-               stop processing extents once we checked that many
-               (more extents could be added, or some removed while
-                we are doing this. What matter is that we stop eventually). */
+            /* The list of dirtytrees at this level may change while we are
+             * flushing.  Record the number of dirtytrees present before we
+             * start so we don't end up in an infinite loop. */
             i = atomic_read(&castle_cache_extent_dirtylist_sizes[prio]);
 
             while((--i >= 0) && (to_flush > 0))
@@ -5705,7 +5704,6 @@ aggressive:
 
                 might_resched();
 
-                /* Get next per-extent dirtytree to flush. */
                 spin_lock_irq(&castle_cache_extent_dirtylist_lock);
 
                 /* The dirtylist might have became empty once between us reading
@@ -5718,30 +5716,41 @@ aggressive:
                     continue;
                 }
 
+                /* Get the dirtytree and move it to the end of the list so that
+                 * next time around a different extent will be considered. */
                 dirtytree = list_entry(castle_cache_extent_dirtylists[prio].next,
                         c_ext_dirtytree_t, list);
-                /* Get dirtytree ref under castle_cache_extent_dirtylist_lock. Prevents a
-                 * potential race where all c2bs in tree are flushing and final c2b IO
-                 * completion callback handler might free the dirtytree. */
-                castle_extent_dirtytree_get(dirtytree);
-                /* Move it to the end of the list. So that next time a different
-                   extent will be considered next time around. */
                 list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
 
+                 /* On non-aggressive scans try and keep IO more efficient by
+                  * flushing just extents with many dirty pages. */
+                if (!aggressive
+                        && prio != DEAD_EXT_FLUSH_PRIO
+                        && dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
+                {
+                    spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
+                    continue;
+                }
+
+                /* Get dirtytree ref under castle_cache_extent_dirtylist_lock,
+                 * preventing a race where the final dirty c2b end_io() handler
+                 * fires and frees the dirtytree. */
+                castle_extent_dirtytree_get(dirtytree);
+
                 spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
+
+                /*
+                 * We have selected a dirtytree to flush.
+                 *
+                 * A reference has been taken to prevent it going away while we
+                 * dispatch IOs on any c2bs that are not already flushing.
+                 */
 
                 mask_id = castle_extent_all_masks_get(dirtytree->ext_id);
                 /* Check if extent is already dead. This shouldn't happen as before we delete
                  * the extent, we get rid off all dirty pages. It could happen only if after last
                  * link is gone. */
                 if (MASK_ID_INVAL(mask_id))
-                    goto err_out;
-
-                /* On non-aggressive scan, only flush extents with plenty of dirty
-                   blocks. This makes IO more efficient. */
-                if(!aggressive &&
-                   prio != DEAD_EXT_FLUSH_PRIO &&
-                   dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
                     goto err_out;
 
                 /* We need to pass two reference counts to __castle_cache_extent_flush() one
@@ -5772,7 +5781,6 @@ aggressive:
                                             (atomic_t *)data,               /* Callback data*/
                                             &flushed,                       /* flushed_p    */
                                             0);                             /* waitlock     */
-
                 to_flush -= flushed;
 
                 /* If per extent inflight count reached 0, time to release the reference. All
