@@ -2854,6 +2854,7 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
     struct castle_component_tree *ct;
     int has_write_lock = 0;
 
+again:
     /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
      * list. */
     read_lock(&da->lock);
@@ -2899,7 +2900,17 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
     }
 
     /* We wouldn't promote any empty T0s. */
-    BUG_ON(atomic64_read(&ct->item_count) == 0);
+    if (atomic64_read(&ct->item_count) == 0)
+    {
+        castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
+
+        DA_TRANSACTION_BEGIN(da);
+        castle_component_tree_del(da, ct);
+        DA_TRANSACTION_END(da);
+        castle_ct_put(ct, READ /*rw*/);
+
+        goto again;
+    }
 
     return ct;
 }
@@ -9600,7 +9611,7 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
 
     /* Don't add T0s to sysfs. This is definitely not possible when DA is being created. As, the
      * parent doesn't exist yet. */
-    if (ct->level < 2)
+    if (ct->level < 2 && !test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
         return 0;
 
     if (castle_sysfs_ct_add(ct))
