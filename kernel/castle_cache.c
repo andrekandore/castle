@@ -3354,7 +3354,10 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
 
         /* Skip c2bs not in the specified partition. */
         if (unlikely(!c2b_partition(c2b, part_id)))
+        {
+            BUG_ON(1); /* currently have just two partitions */
             continue;
+        }
 
         /* Skip recently accessed blocks and decrease their "accessed" field. */
         if (c2b_accessed(c2b))
