@@ -5610,15 +5610,15 @@ static int castle_cache_flush(void *unused)
                 (exiting ? (atomic_read(&in_flight) == 0)
                          : (atomic_read(&in_flight) <= last_flush / 20)));
 
-        /* Wait until we have a worthwhile number of pages to flush.
-         * This limits us to a min of 10 MIN_BATCHES/s. */
+        /* Wake up MIN_FLUSH_FREQ times per second, or when somebody wakes us
+         * and there are a worthwhile number of pages to flush.  This limits
+         * us to a minimum of 10 MIN_BATCHES/s. */
         wait_event_interruptible_timeout(castle_cache_flush_wq,
                 exiting
                     || (atomic_read(&castle_cache_dirty_pgs)
                         - target_dirty_pgs >= MIN_FLUSH_SIZE)
                     || (castle_cache_flush_part_id < NR_CACHE_PARTITIONS),
                 HZ/MIN_FLUSH_FREQ);
-
         dirty_pgs = atomic_read(&castle_cache_dirty_pgs);
 
         /* Exit if we've finished waiting for all outstanding IOs. */
