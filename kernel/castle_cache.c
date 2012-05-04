@@ -368,7 +368,8 @@ static atomic_t                castle_cache_clean_pgs;              /**< Clean p
 
 static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
                                                                     /**< TODO, should be made per
-                                                                     *   cache partition          */
+                                                                         cache partition          */
+static c_ext_id_t              castle_cache_flush_hint_ext_id = 0;  /**< Extent ID to flush next  */
 static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS; /**< Cache
                                                                          partition to flush       */
 
@@ -3366,9 +3367,22 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
             continue;
         }
 
-        /* Skip busy blocks or those fron non-evictable extents. */
-        if (c2b_busy(c2b, 0) || !EVICTABLE_EXTENT(c2b->cep.ext_id))
+        /* Skip blocks that are in use, locked or from non-evictable extents. */
+        if (atomic_read(&c2b->count)
+                || c2b_locked(c2b)
+                || !EVICTABLE_EXTENT(c2b->cep.ext_id))
         {
+            unevictable_pages += c2b->nr_pages;
+            continue;
+        }
+
+        /* Skip dirty blocks but record the extent ID for the flush thread. */
+        if (c2b_dirty(c2b))
+        {
+            if (!c2b_flushing(c2b)
+//                    && castle_cache_partition[part_id].dirty_pct > 75
+                    && !castle_cache_flush_hint_ext_id)
+                castle_cache_flush_hint_ext_id = c2b->cep.ext_id;
             unevictable_pages += c2b->nr_pages;
             continue;
         }
@@ -5803,6 +5817,16 @@ static int castle_cache_flush(void *unused)
             continue; /* wait until we have something to flush */
 
         /* Here we will flush the extent hinted by CLOCK. */
+        if (castle_cache_flush_hint_ext_id)
+        {
+            dirtytree = castle_extent_dirtytree_by_id_get(castle_cache_flush_hint_ext_id);
+            if (dirtytree)
+            {
+                _castle_cache_flush_dirtytree_flush(dirtytree, &to_flush, &in_flight);
+                castle_extent_dirtytree_put(dirtytree);
+            }
+            castle_cache_flush_hint_ext_id = 0;
+        }
 
         aggressive = 0;
 aggressive:
