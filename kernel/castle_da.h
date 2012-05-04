@@ -286,8 +286,7 @@ struct castle_immut_tree_construct *
                                             uint64_t                       item_count,
                                             c_chk_cnt_t                    internal_ext_size,
                                             c_chk_cnt_t                    tree_ext_size,
-                                            c_chk_cnt_t                    data_ext_size,
-                                            int                            nr_rwcts);
+                                            c_chk_cnt_t                    data_ext_size);
 
 void   castle_da_in_stream_complete        (struct castle_immut_tree_construct *constr,
                                             int                                 err);

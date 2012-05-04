@@ -3180,8 +3180,7 @@ static void castle_back_stream_in_start(void *data)
                                        stateful_op->stream_in.expected_entries,
                                        internal_ext_size,
                                        tree_ext_size,
-                                       stateful_op->stream_in.expected_dataext_chunks,
-                                       0);
+                                       stateful_op->stream_in.expected_dataext_chunks);
     CASTLE_TRANSACTION_END;
 
     if (!constr)

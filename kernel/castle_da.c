@@ -3712,7 +3712,7 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
     ret = castle_new_ext_freespace_init(&ct->data_ext_free,
                                          da->id,
                                          EXT_T_T0_MEDIUM_OBJECTS,
-                                         MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
+                                         MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
                                          1 /* in tran */,
                                          data, lfs_callback);
     if (ret)
@@ -12761,16 +12761,16 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                           uint64_t                       item_count,
                           c_chk_cnt_t                    internal_ext_size,
                           c_chk_cnt_t                    tree_ext_size,
-                          c_chk_cnt_t                    data_ext_size,
-                          int                            nr_rwcts)
+                          c_chk_cnt_t                    data_ext_size)
 {
     struct castle_immut_tree_construct *constr;
     struct castle_da_lfs_ct_t lfs;
     int ret = 0;
+    int nr_rwcts;
 
     castle_printk(LOG_USERINFO, "%s::preparing for stream_in of %llu items "
-            "(int ext size: %u, tree ext size: %u, data ext size: %u, nr_rwcts: %u)\n",
-            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size, nr_rwcts);
+            "(int ext size: %u, tree ext size: %u, data ext size: %u)\n",
+            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size);
 
     constr = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
                                             da,
@@ -12780,6 +12780,11 @@ castle_da_in_stream_start(struct castle_double_array    *da,
 
     if (!constr)
         goto err_out;
+
+    /* Calculate nr_rwcts from tree_ext_size and data_ext_size. Its best-effort, anyway. */
+    nr_rwcts = tree_ext_size / MAX_DYNAMIC_TREE_SIZE;
+    if ((data_ext_size / MAX_DYNAMIC_DATA_SIZE) > nr_rwcts)
+        nr_rwcts = data_ext_size / MAX_DYNAMIC_DATA_SIZE;
 
     constr->tree = castle_ct_alloc(da,
                                    1,           /* Level - 1.               */
