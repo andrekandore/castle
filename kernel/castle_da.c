@@ -12945,7 +12945,9 @@ static int castle_da_inc_backup_needed(struct castle_component_tree *ct)
     prev_barrier_age = TREE_INVAL(da->inc_backup.active_barrier_ct) ? 0 :
                        (castle_ct_hash_get(da->inc_backup.active_barrier_ct))->data_age;
 
-    if ((ct->data_age < barrier_age) && (ct->data_age > prev_barrier_age))
+    /* Note: T0s at backup start are promoted. Current T0s are not supposed to be backed up.
+     * And also, data_age for T0 is not valid. */
+    if ((ct->level != 0) && (ct->data_age < barrier_age) && (ct->data_age > prev_barrier_age))
         return 1;
 
     return 0;
