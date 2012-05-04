@@ -2792,9 +2792,7 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
     BUG_ON(!list_empty(&stateful_op->op_queue));
     stateful_op->curr_op = NULL;
 
-    CASTLE_TRANSACTION_BEGIN;
     castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 1);
-    CASTLE_TRANSACTION_END;
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
@@ -3176,6 +3174,7 @@ static void castle_back_stream_in_start(void *data)
                 stateful_op->stream_in.expected_dataext_chunks,
                 stateful_op);
 
+    /* FIXME: Do we need transaction lock here? */
     CASTLE_TRANSACTION_BEGIN;
     constr = castle_da_in_stream_start(stateful_op->attachment->col.da,
                                        stateful_op->stream_in.expected_entries,
@@ -3569,10 +3568,11 @@ static void castle_back_stream_in_continue(void *data)
                     stateful_op->curr_op->req.stream_in_finish.abort);
 
             spin_unlock(&stateful_op->lock);
-            CASTLE_TRANSACTION_BEGIN;
+
+            /* Takes transaction lock. */
             castle_da_in_stream_complete(stateful_op->stream_in.da_stream,
                     stateful_op->curr_op->req.stream_in_finish.abort);
-            CASTLE_TRANSACTION_END;
+
             spin_lock(&stateful_op->lock);
 
             castle_back_stateful_op_finish_all(stateful_op, 0);

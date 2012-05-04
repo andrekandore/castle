@@ -290,10 +290,6 @@ static int castle_da_ct_compare(struct castle_component_tree *ct1,
      * merge. */
     BUG_ON(ct1->merge != ct2->merge);
 
-    /* A tree that is streamed in is considered latest */
-    if (test_bit(CASTLE_CT_STREAM_IN_BIT, &ct1->flags))
-        return -1;
-
     /* Treat output tree as the latest. We want it to be added before all input trees. */
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct1->flags))
     {
@@ -2852,67 +2848,80 @@ static struct castle_component_tree *castle_da_l1_oldest_tree_get(struct castle_
 static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_double_array *da)
 {
     struct castle_component_tree *ct;
-    int has_write_lock = 0;
 
-again:
-    /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking at the
-     * list. */
-    read_lock(&da->lock);
-
-    while ((ct = castle_da_l1_oldest_tree_get(da)))
+    while (1)
     {
-        if (!test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
-            break;
+        /* Take read lock on DA, to make sure neither CTs nor DA would go away while looking
+         * at the list. */
+        read_lock(&da->lock);
 
-        if (has_write_lock)
-        {
-            castle_component_tree_promote(da, ct);
-        }
-        else
-        {
-            read_unlock(&da->lock);
+        ct = castle_da_l1_oldest_tree_get(da);
 
-            /* We need transaction lock and write lock to promote barrier CT. */
-            /* We have to get CT from list again, while we are getting transaction lock,
-             * it is possible that barrier CT is deleted. */
-            DA_TRANSACTION_BEGIN(da);
+        /* CT can disappear, if it is a BARRIER CT. */
+        if (ct && test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+            castle_ct_get(ct, READ);
 
-            has_write_lock = 1;
-        }
-    }
-
-    if (has_write_lock)
-        DA_TRANSACTION_END(da);
-    else
         read_unlock(&da->lock);
 
-    /* Got no CT to merge. */
-    if (ct == NULL)
-        return NULL;
+        /* No CT: Nothing to do, just return. */
+        if (!ct)
+            return NULL;
 
-    /* Wait until write ref count reaches zero. */
-    BUG_ON(!CT_DYNAMIC(ct) && (atomic_read(&ct->write_ref_count) != 0));
-    while(atomic_read(&ct->write_ref_count))
-    {
-        debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
-            ct->seq, atomic_read(&ct->write_ref_count));
-        msleep_interruptible(10);
+        /* Barrier CT: Promote it to level-2. */
+        /* Note: Probably racing with deletion in castle_da_barrier_ct_destroy(), which could
+         * delete CT from DA list. CT reference doesn't help here. Get it from list again. */
+        if (test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+        {
+            castle_ct_put(ct, READ);
+
+            DA_TRANSACTION_BEGIN(da);
+
+            ct = castle_da_l1_oldest_tree_get(da);
+
+            if (ct && test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+                castle_component_tree_promote(da, ct);
+
+            DA_TRANSACTION_END(da);
+
+            continue;
+        }
+
+        /* Immutable CT: Promote it to level-2 and add to sysfs. */
+        if (!test_bit(CASTLE_CT_DYNAMIC_BIT, &ct->flags))
+        {
+            DA_TRANSACTION_BEGIN(da);
+            castle_component_tree_promote(da, ct);
+            DA_TRANSACTION_END(da);
+
+            castle_sysfs_ct_add(ct);
+
+            continue;
+        }
+
+        /* Dynamic CT: */
+        /* Wait until write ref count reaches zero. */
+        while (atomic_read(&ct->write_ref_count))
+        {
+            debug("Found non-zero write ref count on ct=%d scheduled for merge cnt=%d\n",
+                ct->seq, atomic_read(&ct->write_ref_count));
+            msleep_interruptible(10);
+        }
+
+        if (atomic64_read(&ct->item_count))
+            return ct;
+        /* We wouldn't promote any empty T0s. */
+        else
+        {
+            castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
+
+            DA_TRANSACTION_BEGIN(da);
+            castle_component_tree_del(da, ct);
+            DA_TRANSACTION_END(da);
+            castle_ct_put(ct, READ /*rw*/);
+        }
     }
 
-    /* We wouldn't promote any empty T0s. */
-    if (atomic64_read(&ct->item_count) == 0)
-    {
-        castle_printk(LOG_DEBUG, "Found empty CT=0x%llx, freeing it up.\n", ct->seq);
-
-        DA_TRANSACTION_BEGIN(da);
-        castle_component_tree_del(da, ct);
-        DA_TRANSACTION_END(da);
-        castle_ct_put(ct, READ /*rw*/);
-
-        goto again;
-    }
-
-    return ct;
+    return NULL;
 }
 
 /**
@@ -8024,6 +8033,18 @@ struct castle_component_tree* castle_component_tree_get(tree_seq_t seq)
 }
 
 /**
+ * Set data_age and add to level-1.
+ */
+static void castle_component_tree_L1_add(struct castle_double_array *da,
+                                         struct castle_component_tree *ct)
+{
+    BUG_ON(ct->level != 1);
+
+    ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
+    castle_component_tree_add(da, ct, NULL);
+}
+
+/**
  * Insert ct into da->levels[ct->level].trees list at index.
  *
  * @param   da      To insert onto
@@ -8122,11 +8143,11 @@ static void castle_component_tree_promote(struct castle_double_array *da,
 
     /* If promoting to level-1 assign it a data age. */
     if (ct->level == 1)
-        ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
+        castle_component_tree_L1_add(da, ct);
+    else
+        castle_component_tree_add(da, ct, NULL /* append */);
 
     castle_ct_stats_commit(ct);
-
-    castle_component_tree_add(da, ct, NULL /* append */);
 }
 
 static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
@@ -12758,20 +12779,17 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                             NULL);      /* private info.            */
 
     if (!constr)
-        return NULL;
+        goto err_out;
 
     constr->tree = castle_ct_alloc(da,
-                                   2,           /* Level - 2.               */
+                                   1,           /* Level - 1.               */
                                    INVAL_TREE,  /* Assign seq ID.           */
                                    1,           /* # of data extents.       */
                                    nr_rwcts);   /* # of RWCTs.              */
                                    /* FIXME: Understand the usage of nr of rwcts. */
 
     if (constr->tree == NULL)
-    {
-        ret = -ENOMEM;
         goto err_out;
-    }
 
     lfs.da = da;
     castle_da_lfs_ct_reset(&lfs);
@@ -12803,6 +12821,8 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     struct castle_double_array *da = constr->da;
     struct castle_component_tree *ct = constr->tree;
 
+    CASTLE_TRANSACTION_BEGIN;
+
     BUG_ON(atomic_read(&ct->ref_count)!=1);
     castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %p (with %lld entries)\n",
         __FUNCTION__, ct, atomic64_read(&ct->item_count));
@@ -12819,23 +12839,22 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 
         castle_immut_tree_constr_dealloc(constr);
 
+        CASTLE_TRANSACTION_END;
         return;
     }
 
     /* Link CT to DA. */
-    set_bit(CASTLE_CT_STREAM_IN_BIT, &constr->tree->flags);
     write_lock(&da->lock);
-    castle_component_tree_add(da, constr->tree, NULL);
+    castle_component_tree_L1_add(da, constr->tree);
     write_unlock(&da->lock);
-    clear_bit(CASTLE_CT_STREAM_IN_BIT, &constr->tree->flags);
-
-    castle_sysfs_ct_add(constr->tree);
 
     /* We don't need constructor any more. */
     castle_immut_tree_constr_dealloc(constr);
 
     /* Invalidate any existing DA CTs proxy structure. */
     castle_da_cts_proxy_invalidate(da);
+
+    CASTLE_TRANSACTION_END;
 }
 
 int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
@@ -12875,8 +12894,7 @@ static struct castle_component_tree * castle_da_barrier_ct_create(struct castle_
     /* Add it at the end of level-1. */
     DA_TRANSACTION_BEGIN(da);
 
-    ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
-    castle_component_tree_add(da, ct, NULL);
+    castle_component_tree_L1_add(da, ct);
 
     DA_TRANSACTION_END(da);
 
