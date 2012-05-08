@@ -4418,7 +4418,7 @@ int castle_extent_up2date_get_reset(c_ext_id_t ext_id)
  * Try and get dirtytree for extent ext_id (takes a reference, if found).
  *
  * @return  *       Dirtytree for ext_id
- * @return  NULL    Extent ext_id not found in hash
+ * @return  NULL    Extent ext_id not found in hash or had no dirtytree
  */
 c_ext_dirtytree_t* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
 {
@@ -4429,11 +4429,9 @@ c_ext_dirtytree_t* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
     read_lock_irqsave(&castle_extents_hash_lock, flags);
     ext = __castle_extents_hash_get(ext_id);
     if (likely(ext))
-    {
         dirtytree = ext->dirtytree;
-        BUG_ON(!dirtytree);
+    if (likely(dirtytree))
         BUG_ON(atomic_inc_return(&dirtytree->ref_cnt) < 2);
-    }
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return dirtytree;
