@@ -1276,7 +1276,6 @@ c_ext_flush_prio_t castle_ext_flush_prio_get(c_ext_type_t type, c_chk_cnt_t size
     }
 }
 
-
 /**
  * Allocate and initialise extent and per-extent dirtytree structures.
  */
@@ -4416,35 +4415,25 @@ int castle_extent_up2date_get_reset(c_ext_id_t ext_id)
 #endif
 
 /**
- * Get and hold a reference to RB-tree dirtytree for extent ext_id.
+ * Try and get dirtytree for extent ext_id (takes a reference, if found).
  *
- * All dirtytree gets by extent ID must occur while the extent exists
- * within the hash (e.g. checkpoint extent flush and dirty_c2b()).
- *
- * @also castle_cache_extent_flush()
- * @also dirty_c2b()
- *
- * @also castle_extent_dirtytree_get()
- * @also castle_extent_dirtytree_put()
+ * @return  *       Dirtytree for ext_id
+ * @return  NULL    Extent ext_id not found in hash
  */
-c_ext_dirtytree_t* castle_extent_dirtytree_by_id_get(c_ext_id_t ext_id)
+c_ext_dirtytree_t* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
 {
-    c_ext_t *ext;
-    c_ext_dirtytree_t *dirtytree;
+    c_ext_dirtytree_t *dirtytree = NULL;
     unsigned long flags;
+    c_ext_t *ext;
 
     read_lock_irqsave(&castle_extents_hash_lock, flags);
     ext = __castle_extents_hash_get(ext_id);
-    if (!ext)
+    if (likely(ext))
     {
-        castle_printk(LOG_ERROR, "%s::no extent %lld\n",
-                __FUNCTION__, ext_id);\
-        read_unlock_irqrestore(&castle_extents_hash_lock, flags);
-        BUG();
+        dirtytree = ext->dirtytree;
+        BUG_ON(!dirtytree);
+        BUG_ON(atomic_inc_return(&dirtytree->ref_cnt) < 2);
     }
-    BUG_ON(!ext);
-    BUG_ON(atomic_inc_return(&ext->dirtytree->ref_cnt) < 2);
-    dirtytree = ext->dirtytree;
     read_unlock_irqrestore(&castle_extents_hash_lock, flags);
 
     return dirtytree;

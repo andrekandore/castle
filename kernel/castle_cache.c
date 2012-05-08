@@ -1278,7 +1278,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     BUG_ON(c2b->cep.offset >= ((end + 1) * C_CHK_SIZE));
 
     /* Get dirtytree and hold its lock while we manipulate the tree. */
-    dirtytree = castle_extent_dirtytree_by_id_get(c2b->cep.ext_id);
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(c2b->cep.ext_id);
     BUG_ON(!dirtytree);
     spin_lock_irqsave(&dirtytree->lock, flags);
 
@@ -5407,7 +5407,7 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
     unsigned long io_start;
 
     /* Get the dirtytree. */
-    dirtytree = castle_extent_dirtytree_by_id_get(ext_id);
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
     BUG_ON(!dirtytree);
 
     /* Flush 8 MB at the time if there is a ratelimit. */
@@ -5819,7 +5819,7 @@ static int castle_cache_flush(void *unused)
         /* Here we will flush the extent hinted by CLOCK. */
         if (castle_cache_flush_hint_ext_id)
         {
-            dirtytree = castle_extent_dirtytree_by_id_get(castle_cache_flush_hint_ext_id);
+            dirtytree = castle_extent_dirtytree_by_ext_id_get(castle_cache_flush_hint_ext_id);
             if (dirtytree)
             {
                 _castle_cache_flush_dirtytree_flush(dirtytree, &to_flush, &in_flight);
