@@ -14,27 +14,7 @@ typedef enum {
 } c_ext_flush_prio_t;
 #define NR_EXTENT_FLUSH_PRIOS   16
 
-/**
- * Extent dirtytree structure.
- *
- * ref_cnt: 1 reference held by the extent
- *          1 reference per dirty c2b
- */
-typedef struct castle_extent_dirtytree {
-    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.          */
-    spinlock_t          lock;       /**< Protects count, rb_root.                     */
-    atomic_t            ref_cnt;    /**< References to this dirtylist.                */
-    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                       */
-    struct list_head    list;       /**< Position in a castle_cache_extent_dirtylist. */
-    uint8_t             flush_prio; /**< Decides which dirtylist to use (low #, is
-                                         higher priority.                             */
-    int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
-                                         Protected by lock.                           */
-#ifdef CASTLE_PERF_DEBUG
-    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).     */
-    c_ext_type_t        ext_type;   /**< Extent type when created.                    */
-#endif
-} c_ext_dirtytree_t;
+struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
@@ -62,7 +42,7 @@ typedef struct castle_extent {
     struct list_head    schks_list;     /* List of partially used superchunks.          */
     c_res_pool_t       *pool;           /* Reservation pool that this extent tied to.*/
     uint8_t             alive;
-    c_ext_dirtytree_t  *dirtytree;      /**< RB-tree of dirty c2bs.                     */
+    struct castle_cache_extent_dirtytree *dirtytree; /**< Dirty c2bs in this extent.    */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
 #ifdef CASTLE_PERF_DEBUG
@@ -148,9 +128,9 @@ void                castle_extent_up2date_inc               (c_ext_id_t         
 int                 castle_extent_not_up2date_get_reset     (c_ext_id_t         ext_id);
 int                 castle_extent_up2date_get_reset         (c_ext_id_t         ext_id);
 #endif
-c_ext_dirtytree_t  *castle_extent_dirtytree_by_ext_id_get   (c_ext_id_t         ext_id);
-void                castle_extent_dirtytree_get             (c_ext_dirtytree_t *dirtytree);
-void                castle_extent_dirtytree_put             (c_ext_dirtytree_t *dirtytree);
+struct castle_cache_extent_dirtytree *castle_extent_dirtytree_by_ext_id_get (c_ext_id_t  ext_id);
+void                castle_extent_dirtytree_get   (struct castle_cache_extent_dirtytree *dirtytree);
+void                castle_extent_dirtytree_put   (struct castle_cache_extent_dirtytree *dirtytree);
 
 
 struct castle_extents_superblock* castle_extents_super_block_get (void);

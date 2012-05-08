@@ -13,6 +13,28 @@ typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b, int did_io);
 #define C2B_STATE_ACCESS_MAX        ((1 << C2B_STATE_ACCESS_BITS) - 1)
 STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS + C2B_STATE_ACCESS_BITS != 64);
 
+/**
+ * Extent dirtytree structure.
+ *
+ * ref_cnt: 1 reference held by the extent
+ *          1 reference per dirty c2b
+ */
+typedef struct castle_cache_extent_dirtytree {
+    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.          */
+    spinlock_t          lock;       /**< Protects count, rb_root.                     */
+    atomic_t            ref_cnt;    /**< References to this dirtylist.                */
+    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                       */
+    struct list_head    list;       /**< Position in a castle_cache_extent_dirtylist. */
+    uint8_t             flush_prio; /**< Decides which dirtylist to use (low #, is
+                                         higher priority.                             */
+    int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
+                                         Protected by lock.                           */
+#ifdef CASTLE_PERF_DEBUG
+    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).     */
+    c_ext_type_t        ext_type;   /**< Extent type when created.                    */
+#endif
+} c2_ext_dirtytree_t;
+
 struct castle_cache_page;
 typedef struct castle_cache_block {
     c_ext_pos_t                cep;
@@ -30,7 +52,7 @@ typedef struct castle_cache_block {
         struct list_head       evict;           /**< Position on castle_cache_block_evictlist.    */
     };
     struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
-    c_ext_dirtytree_t         *dirtytree;       /**< Dirtytree c2b is a member of.                */
+    c2_ext_dirtytree_t        *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
     struct c2b_state {
         unsigned long          bits:C2B_STATE_BITS_BITS;           /**< State bitfield            */
@@ -167,7 +189,6 @@ void set_c2b_in_flight      (c2_block_t *c2b);
 void set_c2b_eio            (c2_block_t *c2b);
 void clear_c2b_eio          (c2_block_t *c2b);
 int  c2b_eio                (c2_block_t *c2b);
-void castle_cache_extent_dirtytree_remove(c_ext_dirtytree_t *dirtytree);
 
 /**********************************************************************************************
  * Refcounts.
@@ -221,7 +242,7 @@ int  castle_cache_advise      (c_ext_pos_t cep, c2_advise_t advise, c2_partition
 int  castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks);
 void castle_cache_prefetch_pin(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t partition, int chunks);
 void castle_cache_extent_flush(c_ext_id_t ext_id, uint64_t start, uint64_t size, unsigned int ratelimit);
-void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count);
+void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count);
 void castle_cache_prefetches_wait(void);
 
 /**********************************************************************************************
@@ -268,7 +289,7 @@ int                        castle_chk_disk                 (void);
 void                       castle_cache_stats_print        (int verbose);
 int                        castle_cache_size_get           (void);
 int                        castle_cache_block_destroy      (c2_block_t *c2b);
-void                       castle_cache_dirtytree_demote   (c_ext_dirtytree_t *dirtytree);
+void                       castle_cache_dirtytree_demote   (c2_ext_dirtytree_t *dirtytree);
 /**********************************************************************************************
  * Cache init/fini.
  */

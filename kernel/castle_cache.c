@@ -1208,7 +1208,7 @@ void castle_cache_block_unhardpin(c2_block_t *c2b)
  */
 static int c2_dirtytree_remove(c2_block_t *c2b)
 {
-    c_ext_dirtytree_t *dirtytree;
+    c2_ext_dirtytree_t *dirtytree;
     unsigned long flags;
 
     BUG_ON(atomic_read(&c2b->count) == 0);
@@ -1261,7 +1261,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
 static int c2_dirtytree_insert(c2_block_t *c2b)
 {
     struct rb_node **p, *parent = NULL;
-    c_ext_dirtytree_t *dirtytree;
+    c2_ext_dirtytree_t *dirtytree;
     c2_block_t *tree_c2b;
     unsigned long flags;
     c_chk_cnt_t start, end;
@@ -1345,7 +1345,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
  *
  * @also c2_dirtytree_remove()
  */
-void castle_cache_dirtytree_demote(c_ext_dirtytree_t *dirtytree)
+void castle_cache_dirtytree_demote(c2_ext_dirtytree_t *dirtytree)
 {
     if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
     {
@@ -5252,7 +5252,7 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_bat
  *
  * @also castle_cache_extent_flush()
  */
-static void __castle_cache_extent_flush(c_ext_dirtytree_t  *dirtytree,
+static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
                                         c_byte_off_t        start_off,
                                         c_byte_off_t        end_off,
                                         int                 max_pgs,
@@ -5402,7 +5402,7 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
                                unsigned int ratelimit)
 {
     atomic_t in_flight = ATOMIC(0);
-    c_ext_dirtytree_t *dirtytree;
+    c2_ext_dirtytree_t *dirtytree;
     int batch, batch_period, io_time, flushed;
     unsigned long io_start;
 
@@ -5465,7 +5465,7 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
  *
  * @also _castle_extent_free()
  */
-void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count)
+void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count)
 {
     atomic_t in_flight = ATOMIC(0);
     int flushed = 0;
@@ -5497,12 +5497,12 @@ void castle_cache_extent_evict(c_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, 
  */
 int castle_cache_dirtytree_compare(struct list_head *l1, struct list_head *l2)
 {
-    c_ext_dirtytree_t *dirtytree;
+    c2_ext_dirtytree_t *dirtytree;
     int s1, s2;
 
-    dirtytree = list_entry(l1, c_ext_dirtytree_t, list);
+    dirtytree = list_entry(l1, c2_ext_dirtytree_t, list);
     s1 = castle_extent_size_get(dirtytree->ext_id);
-    dirtytree = list_entry(l2, c_ext_dirtytree_t, list);
+    dirtytree = list_entry(l2, c2_ext_dirtytree_t, list);
     s2 = castle_extent_size_get(dirtytree->ext_id);
 
     if (s1 > s2)
@@ -5651,12 +5651,12 @@ static int _castle_cache_flush_pages_calculate(int exiting)
  * @return  *           Pointer to next dirtytree to flush, with reference taken
  *          NULL        No more dirtytrees available at this priority level
  */
-static c_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_prio_t prio,
-                                                                  int *max_scan,
-                                                                  int aggressive)
+static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_prio_t prio,
+                                                                   int *max_scan,
+                                                                   int aggressive)
 {
 #define MIN_EFFICIENT_DIRTYTREE     (5*256)   /* In pages, equals 5MB                 */
-    c_ext_dirtytree_t *dirtytree = NULL;
+    c2_ext_dirtytree_t *dirtytree = NULL;
 
     spin_lock_irq(&castle_cache_extent_dirtylist_lock);
 
@@ -5667,7 +5667,7 @@ static c_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_pr
         /* Get the first dirtytree in the list and move it to the end so that
          * next time around a different extent will be considered. */
         dirtytree = list_first_entry(&castle_cache_extent_dirtylists[prio],
-                c_ext_dirtytree_t, list);
+                c2_ext_dirtytree_t, list);
         list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
 
         /* On non-aggressive scans try and keep IO more efficient by flushing
@@ -5700,7 +5700,7 @@ static c_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_pr
  *                              number of flushed pages
  * @param in_flight [in/out]    Passed to __castle_cache_extent_flush()
  */
-static void _castle_cache_flush_dirtytree_flush(c_ext_dirtytree_t *dirtytree,
+static void _castle_cache_flush_dirtytree_flush(c2_ext_dirtytree_t *dirtytree,
                                                 int *to_flush,
                                                 atomic_t *in_flight)
 {
@@ -5789,7 +5789,7 @@ static int castle_cache_flush(void *unused)
 {
     int exiting, to_flush, last_flush, i, prio, aggressive;
     atomic_t in_flight = ATOMIC(0);
-    c_ext_dirtytree_t *dirtytree;
+    c2_ext_dirtytree_t *dirtytree;
 
     last_flush = 0;
 

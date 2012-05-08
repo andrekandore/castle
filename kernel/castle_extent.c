@@ -199,7 +199,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_chk_cnt_t    alloc_size,
                                        c_ext_id_t     ext_id,
                                        c_ext_event_t *hdl);
-void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash);
+void __castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytree,
+                                   int check_hash);
 
 static void castle_extent_mask_reduce(c_ext_t             *ext,
                                       c_ext_mask_range_t   base,
@@ -1284,7 +1285,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     c_ext_t *ext = castle_zalloc(sizeof(c_ext_t));
     if (!ext)
         return NULL;
-    ext->dirtytree = castle_zalloc(sizeof(c_ext_dirtytree_t));
+    ext->dirtytree = castle_zalloc(sizeof(struct castle_cache_extent_dirtytree));
     if (!ext->dirtytree)
     {
         castle_free(ext);
@@ -4415,31 +4416,6 @@ int castle_extent_up2date_get_reset(c_ext_id_t ext_id)
 #endif
 
 /**
- * Try and get dirtytree for extent ext_id (takes a reference, if found).
- *
- * @return  *       Dirtytree for ext_id
- * @return  NULL    Extent ext_id not found in hash
- */
-c_ext_dirtytree_t* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
-{
-    c_ext_dirtytree_t *dirtytree = NULL;
-    unsigned long flags;
-    c_ext_t *ext;
-
-    read_lock_irqsave(&castle_extents_hash_lock, flags);
-    ext = __castle_extents_hash_get(ext_id);
-    if (likely(ext))
-    {
-        dirtytree = ext->dirtytree;
-        BUG_ON(!dirtytree);
-        BUG_ON(atomic_inc_return(&dirtytree->ref_cnt) < 2);
-    }
-    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
-
-    return dirtytree;
-}
-
-/**
  * Take an additional reference to per-extent dirtytree.
  *
  * Extent structure specified by dirtytree->ext_id does not need to exist
@@ -4450,7 +4426,7 @@ c_ext_dirtytree_t* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
  * @also castle_extent_dirtytree_by_id_get()
  * @also castle_extent_dirtytree_put()
  */
-void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
+void castle_extent_dirtytree_get(struct castle_cache_extent_dirtytree *dirtytree)
 {
     /* Per-extent dirtytrees are freed when the ref_cnt reaches 0. */
     BUG_ON(atomic_inc_return(&dirtytree->ref_cnt) <= 1);
@@ -4466,19 +4442,19 @@ void castle_extent_dirtytree_get(c_ext_dirtytree_t *dirtytree)
  * within the extents hash.
  *
  * Frees the per-extent dirtytree if the reference count reaches 0.
- *
- * @also castle_extent_dirtytree_get()
  */
-void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
+void __castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytree, int check_hash)
 {
-    if (unlikely(atomic_dec_return(&dirtytree->ref_cnt) == 0))
-    {
-        if (check_hash)
-            /* cannot be in hash now */
-            BUG_ON(!MASK_ID_INVAL(castle_extent_get(dirtytree->ext_id)));
-        BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));    /* must be empty */
-        castle_free(dirtytree);
-    }
+    if (likely(atomic_dec_return(&dirtytree->ref_cnt) > 0))
+        return;
+
+    /* Final dirtytree reference put.
+     *
+     * Dirtytree must now be empty and not in the hash. */
+    BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));
+    if (likely(check_hash))
+        BUG_ON(!MASK_ID_INVAL(castle_extent_get(dirtytree->ext_id)));
+    castle_free(dirtytree);
 }
 
 /**
@@ -4486,9 +4462,34 @@ void __castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree, int check_hash)
  *
  * @also __castle_extent_dirtytree_put()
  */
-void castle_extent_dirtytree_put(c_ext_dirtytree_t *dirtytree)
+void castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytree)
 {
     __castle_extent_dirtytree_put(dirtytree, 1 /*check_hash*/);
+}
+
+/**
+ * Try and get dirtytree for extent ext_id (takes a reference, if found).
+ *
+ * @return  *       Dirtytree for ext_id
+ * @return  NULL    Extent ext_id not found in hash
+ */
+struct castle_cache_extent_dirtytree* castle_extent_dirtytree_by_ext_id_get(c_ext_id_t ext_id)
+{
+    struct castle_cache_extent_dirtytree *dirtytree = NULL;
+    unsigned long flags;
+    c_ext_t *ext;
+
+    read_lock_irqsave(&castle_extents_hash_lock, flags);
+    ext = __castle_extents_hash_get(ext_id);
+    if (likely(ext))
+    {
+        dirtytree = ext->dirtytree;
+        BUG_ON(!dirtytree);
+        castle_extent_dirtytree_get(dirtytree);
+    }
+    read_unlock_irqrestore(&castle_extents_hash_lock, flags);
+
+    return dirtytree;
 }
 
 int castle_extent_rebuild_ext_get(c_ext_t *ext, int is_locked)
