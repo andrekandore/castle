@@ -3840,12 +3840,12 @@ static void castle_da_merge_output_size(struct castle_da_merge *merge,
     /* Calculate total size of internal nodes, assuming that leafs are stored on HDDs ... */
     internal_tree_size = tree_size;
     /* ... number of leaf nodes ... */
-    internal_tree_size /= (HDD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_tree_size /= (HDD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
     /* ... number of level 1 nodes ... */
-    internal_tree_size /= merge->out_tree_constr->btree->max_entries(SSD_RO_TREE_NODE_SIZE);
+    internal_tree_size /= merge->out_tree_constr->btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
     internal_tree_size ++;
     /* ... size of level 1 ... */
-    internal_tree_size *= (SSD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_tree_size *= (SSD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
     /* ... chunk rounding ... */
     internal_tree_size  = MASK_CHK_OFFSET(internal_tree_size + C_CHK_SIZE);
     /* ... factor of 2 explosion, just as before ... */
@@ -4162,16 +4162,16 @@ uint16_t castle_immut_tree_node_size_get(struct castle_immut_tree_construct *tre
     if (level > 0)
     {
         if (tree_constr->internals_on_ssds)
-            return SSD_RO_TREE_NODE_SIZE;
+            return SSD_RO_TREE_INTERNAL_NODE_SIZE;
         else
-            return HDD_RO_TREE_NODE_SIZE;
+            return HDD_RO_TREE_INTERNAL_NODE_SIZE;
     }
     else
     {
         if (tree_constr->leafs_on_ssds)
-            return SSD_RO_TREE_NODE_SIZE;
+            return SSD_RO_TREE_LEAF_NODE_SIZE;
         else
-            return HDD_RO_TREE_NODE_SIZE;
+            return HDD_RO_TREE_LEAF_NODE_SIZE;
     }
 }
 
@@ -7662,10 +7662,10 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
 
             if (i == 0) /* leaf node */
                 node_size = merge_mstore->leafs_on_ssds ?
-                    SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
+                    SSD_RO_TREE_LEAF_NODE_SIZE : HDD_RO_TREE_LEAF_NODE_SIZE;
             else /* internal node */
                 node_size = merge_mstore->internals_on_ssds ?
-                    SSD_RO_TREE_NODE_SIZE : HDD_RO_TREE_NODE_SIZE;
+                    SSD_RO_TREE_INTERNAL_NODE_SIZE : HDD_RO_TREE_INTERNAL_NODE_SIZE;
 
             node_c2b = castle_cache_block_get(merge_mstore->levels[i].node_c2b_cep,
                                               node_size,

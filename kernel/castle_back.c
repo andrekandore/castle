@@ -3087,12 +3087,13 @@ static c_chk_cnt_t castle_back_stream_in_tree_ext_size_wc_estimate(struct castle
     int wc_entries_per_node;
 
     btree = castle_double_array_btree_type_get(stateful_op->attachment);
-    wc_entries_per_node = btree->max_entries(HDD_RO_TREE_NODE_SIZE);
+    wc_entries_per_node = btree->max_entries(HDD_RO_TREE_LEAF_NODE_SIZE);
     nodes = DIV_ROUND_UP(stateful_op->stream_in.expected_entries, wc_entries_per_node);
-    tree_ext_size = DIV_ROUND_UP(nodes*HDD_RO_TREE_NODE_SIZE*PAGE_SIZE, C_CHK_SIZE);
+    tree_ext_size = DIV_ROUND_UP(nodes*HDD_RO_TREE_LEAF_NODE_SIZE*PAGE_SIZE, C_CHK_SIZE);
 
     return tree_ext_size;
     //TODO@tr: fix this! atm we are basically ignoring it!
+    //TODO@tr: from LT: I changed this to HDD_RO_TREE_LEAF_NODE_SIZE, you may need to adjust
 }
 
 static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op,
@@ -3104,10 +3105,10 @@ static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(struct ca
     btree = castle_double_array_btree_type_get(stateful_op->attachment);
     /* The following "inspired" by castle_da_merge_output_size, a true story */
     internal_ext_size = tree_ext_size;
-    internal_ext_size /= (HDD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
-    internal_ext_size /= btree->max_entries(SSD_RO_TREE_NODE_SIZE);
+    internal_ext_size /= (HDD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
+    internal_ext_size /= btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
     internal_ext_size ++;
-    internal_ext_size *= (SSD_RO_TREE_NODE_SIZE * C_BLK_SIZE);
+    internal_ext_size *= (SSD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
     internal_ext_size  = MASK_CHK_OFFSET(internal_ext_size + C_CHK_SIZE);
     internal_ext_size *= 2;
     return internal_ext_size;

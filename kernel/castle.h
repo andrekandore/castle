@@ -867,14 +867,15 @@ enum {
 #define MAX_BTREE_DEPTH           (10)               /**< Maximum depth of btrees.
                                                           This is used in on-disk datastructures.
                                                           For example castle_clist_entry.
-                                                          If modified, those need to be reviewed.
-                                                      */
+                                                          If modified, those need to be reviewed.*/
 
-#define MTREE_NODE_SIZE         10      /**< Size of the mtree nodes, in blocks.  */
-#define RW_TREE_NODE_SIZE        2      /**< Size of the RW tree nodes, in blocks.
-                                             Constant independent of the level.   */
-#define HDD_RO_TREE_NODE_SIZE   64      /**< Size of the RO tree nodes on HDDs, in blocks. */
-#define SSD_RO_TREE_NODE_SIZE    2      /**< Size of the RO tree nodes on SSDs, in blocks. */
+#define MTREE_NODE_SIZE         10          /**< Size of the mtree nodes, in blocks.            */
+#define RW_TREE_NODE_SIZE        2          /**< Size of the RW tree nodes, in blocks.
+                                                 Constant independent of the level.             */
+#define HDD_RO_TREE_INTERNAL_NODE_SIZE  64  /**< Size of RO internal nodes on HDDs, in blocks.  */
+#define HDD_RO_TREE_LEAF_NODE_SIZE      64  /**< Size of RO leaf nodes on HDDs, in blocks.      */
+#define SSD_RO_TREE_INTERNAL_NODE_SIZE  2   /**< Size of RO internal nodes on SSDs, in blocks.  */
+#define SSD_RO_TREE_LEAF_NODE_SIZE      2   /**< Size of RO leaf nodes on SSDs, in blocks.      */
 
 typedef uint8_t btree_t;
 
