@@ -333,6 +333,12 @@ static unsigned int            castle_checkpoint_ratelimit;
 module_param(castle_checkpoint_ratelimit, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_checkpoint_ratelimit, "Checkpoint ratelimit in KB/s");
 
+//#ifdef CASTLE_DEBUG
+int castle_cache_dirty_user_debug = 0;  /**< Whether to flood USER partition with dirty c2bs.     */
+module_param(castle_cache_dirty_user_debug, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_cache_dirty_user_debug, "(Internal) Flood USER partition with dirty c2bs");
+//#endif
+
 
 static c2_block_t             *castle_cache_blks = NULL;
 static c2_page_t              *castle_cache_pgs  = NULL;
@@ -3529,7 +3535,7 @@ void castle_cache_flush_wakeup(void)
 static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id)
 {
     int target_pages, free_pages;
-#ifdef DEBUG
+#ifdef CASTLE_DEBUG
     c2_partition_id_t grow_for_part_id = part_id;
 #endif
 
@@ -3559,12 +3565,12 @@ static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id
         return 2;
     }
 
-#ifdef DEBUG
+#ifdef CASTLE_DEBUG
     if (grow_for_part_id == USER)
         castle_printk(LOG_DEBUG, "Evicting from %s (%d%%) to satisfy allocation for %s (%d%%)\n",
-                part_id == USER ? "USER" : (part_id == MERGE ? "MERGE" : "UNKNOWN"),
+                part_id == USER ? "USER" : (part_id == MERGE_OUT ? "MERGE" : "UNKNOWN"),
                 castle_cache_partition[part_id].use_pct,
-                grow_for_part_id == USER ? "USER" : (grow_for_part_id == MERGE ? "MERGE" : "UNKNOWN"),
+                grow_for_part_id == USER ? "USER" : (grow_for_part_id == MERGE_OUT ? "MERGE" : "UNKNOWN"),
                 castle_cache_partition[grow_for_part_id].use_pct);
 #endif
 
@@ -6392,6 +6398,58 @@ void castle_checkpoint_ratelimit_set(unsigned long ratelimit)
     castle_checkpoint_ratelimit = ratelimit;
 }
 
+#ifdef CASTLE_DEBUG
+/**
+ * Debug function that floods the USER partition with dirty META extent c2bs.
+ *
+ * Expected to be called from castle_periodic_checkpoint().
+ *
+ * Useful for testing cache partition eviction and reservelist use.
+ *
+ * @also castle_cache_dirty_user_debug
+ */
+static void castle_cache_dirty_user_flood(void)
+{
+#define DIRTY_EXT_CHUNKS    3000
+    static c_ext_id_t dirty_ext_id = INVAL_EXT_ID;
+    static int q = 0;
+    int i;
+
+    if (unlikely(EXT_ID_INVAL(dirty_ext_id)))
+    {
+        dirty_ext_id = castle_extent_alloc(RDA_2,
+                                           INVAL_DA,
+                                           EXT_T_META_DATA,
+                                           DIRTY_EXT_CHUNKS, /* 24GB */
+                                           0 /*in_tran*/,
+                                           NULL,
+                                           NULL);
+        BUG_ON(EXT_ID_INVAL(dirty_ext_id));
+        castle_printk(LOG_USERINFO, "%s: Allocated extent ID %ld\n",
+                __FUNCTION__, dirty_ext_id);
+    }
+
+    i = 0;
+    while (i < 1000)
+    {
+        c2_block_t *c2b;
+        c_ext_pos_t cep = { dirty_ext_id, q * C_CHK_SIZE };
+
+        if (++q == DIRTY_EXT_CHUNKS)
+            q = 0;
+
+        c2b = castle_cache_block_get(cep, 256, USER);
+        write_lock_c2b(c2b);
+        update_c2b(c2b);
+        dirty_c2b(c2b);
+        write_unlock_c2b(c2b);
+        put_c2b(c2b);
+
+        i++;
+    }
+}
+#endif
+
 /**
  * Checkpoints system state with given periodicity.
  *
@@ -6535,6 +6593,13 @@ static int castle_periodic_checkpoint(void *unused)
             ret = -4;
             goto out;
         }
+
+//#ifdef CASTLE_DEBUG
+        /* Flood the USER partition with dirty c2bs if requested.  Note
+         * that nothing gets freed up when the parameter is turned back off. */
+        if (unlikely(castle_cache_dirty_user_debug))
+            castle_cache_dirty_user_flood();
+//#endif
 
         castle_checkpoint_version_inc();
 
