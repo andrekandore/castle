@@ -1,8 +1,10 @@
 #include "castle_instream.h"
+#include "castle_da.h"
 
 void castle_instream_batch_proc_construct(c_instream_batch_proc *batch_proc,
-                                         char* buf,
-                                         size_t buf_len_bytes)
+                                          char   *buf,
+                                          size_t  buf_len_bytes,
+                                          struct  castle_immut_tree_construct *da_stream)
 {
     BUG_ON(!batch_proc); /* caller must alloc! */
     BUG_ON(!buf);
@@ -11,6 +13,7 @@ void castle_instream_batch_proc_construct(c_instream_batch_proc *batch_proc,
 
     batch_proc->cursor = batch_proc->batch_buf;
     batch_proc->bytes_consumed = 0;
+    batch_proc->da_stream = da_stream;
 }
 
 /* return -ESPIPE when cursor reaches or moves beyond buffer bound */
@@ -80,7 +83,9 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
             __FUNCTION__, entry_hdr.key_length);
         return -E2BIG;
     }
-    if (entry_hdr.val_length > MAX_INLINE_VAL_SIZE) /* This is probably user error. */
+    if (entry_hdr.val_length >
+        (batch_proc->batch_buf_len_bytes -
+         batch_proc->bytes_consumed)   ) /* This is probably user error. */
     {
         castle_printk(LOG_ERROR, "%s::got val_length %llu; user error?\n",
             __FUNCTION__, entry_hdr.val_length);
@@ -110,7 +115,38 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
             BUG();
             break; /* ;-) */
         case CASTLE_STREAMING_ENTRY_HEADER_TYPE_VALUE:
-            CVT_INLINE_INIT(*cvt, entry_hdr.val_length, val);
+            if (entry_hdr.val_length <= MAX_INLINE_VAL_SIZE)
+            {
+                CVT_INLINE_INIT(*cvt, entry_hdr.val_length, val);
+            }
+            else if (entry_hdr.val_length <= MEDIUM_OBJECT_LIMIT)
+            {
+                c_ext_pos_t cep;
+                int total_blocks;
+                c_byte_off_t ext_space_needed;
+
+                /* Allocate space for the new copy. */
+                total_blocks = (entry_hdr.val_length - 1) / C_BLK_SIZE + 1;
+                ext_space_needed = total_blocks * C_BLK_SIZE;
+
+                castle_printk(LOG_UNLIMITED, "%s::medium object support not available yet.\n", __FUNCTION__);
+                return -EINVAL;
+
+                //BUG_ON(castle_ext_freespace_get(&batch_proc->da_stream->tree->data_ext_free,
+                //            ext_space_needed,
+                //            0,
+                //            &cep) < 0);
+
+                /* Copy value into MO extent. */
+                /////TODO
+
+                CVT_MEDIUM_OBJECT_INIT(*cvt, entry_hdr.val_length, cep);
+            }
+            else
+            {
+                castle_printk(LOG_ERROR, "%s::type %u not yet supported\n.", __FUNCTION__, entry_hdr.type);
+                BUG();
+            }
             break;
         default:
             castle_printk(LOG_UNLIMITED, "%s::TODO\n", __FUNCTION__);
@@ -152,7 +188,7 @@ static int castle_instream_batch_proc_2_entries_unit_test(void)
     int err;
     int entries_found = 0;
 
-    castle_instream_batch_proc_construct(&proc, input_batch, 500);
+    castle_instream_batch_proc_construct(&proc, input_batch, 500, NULL);
     while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &cvt)))
     {
         char val_buf[6];

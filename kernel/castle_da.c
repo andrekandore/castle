@@ -10157,7 +10157,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->nr_data_exts             = 0;
     ct->merge                    = NULL;
     ct->merge_id                 = INVAL_MERGE_ID;
-    ct->max_versions_per_key     = 0;
+    ct->max_versions_per_key     = 1;
 
     atomic_set(&ct->tree_depth, -1);
 
@@ -12887,8 +12887,8 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
                                   c_ver_t                             version,
                                   c_val_tup_t                         cvt)
 {
-    /* Only inlines supported for now. */
-    BUG_ON(!CVT_INLINE(cvt));
+    /* Large objects not supported for now. */
+    BUG_ON(CVT_LARGE_OBJECT(cvt));
 
     return castle_immut_tree_entry_add(constr,
                                        0,       /* Depth */

@@ -408,8 +408,8 @@ int castle_ext_freespace_get(c_ext_free_t *ext_free,
         ret = castle_ext_freespace_prealloc(ext_free, size);
         if (ret < 0)
         {
-            debug("1: %s Failed (%llu, %llu, %llu)\n", __FUNCTION__, used,
-                   blocked, size);
+            castle_printk(LOG_ERROR, "%s [1]::Failed (%llu, %llu, %llu)\n",
+                    __FUNCTION__, used, blocked, size);
             return ret;
         }
     }
@@ -427,8 +427,8 @@ int castle_ext_freespace_get(c_ext_free_t *ext_free,
     {
         atomic64_sub(size, &ext_free->used);
         barrier();
-        debug("2: %s Failed (%llu, %llu, %llu)\n", __FUNCTION__, used, blocked,
-               size);
+        castle_printk(LOG_ERROR, "%s [2]:: Failed (%llu, %llu, %llu)\n",
+                __FUNCTION__, used, blocked, size);
         return -2;
     }
 
