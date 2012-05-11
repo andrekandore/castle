@@ -3537,6 +3537,7 @@ static void castle_back_stream_in_continue(void *data)
     int ret = 0;
     castle_interface_token_t token = stateful_op->token;
     struct castle_back_op *op = stateful_op->curr_op;
+    int abort_stream = 0;
 
     spin_lock(&stateful_op->lock);
     stateful_op->in_use = 1;
@@ -3551,10 +3552,15 @@ static void castle_back_stream_in_continue(void *data)
     {
         case CASTLE_RING_STREAM_IN_NEXT:
             spin_unlock(&stateful_op->lock);
-            BUG_ON(castle_object_batch_in_stream(attachment,
-                                          stateful_op->stream_in.da_stream,
-                                          stateful_op->curr_op->buf->buffer,
-                                          stateful_op->curr_op->buf->size));
+            ret = castle_object_batch_in_stream(attachment,
+                    stateful_op->stream_in.da_stream,
+                    stateful_op->curr_op->buf->buffer,
+                    stateful_op->curr_op->buf->size);
+            if (ret)
+            {
+                castle_printk(LOG_ERROR, "%s::stateful op %llu failed with error code %d.\n",
+                        __FUNCTION__, stateful_op->token, ret);
+            }
             spin_lock(&stateful_op->lock);
             castle_back_buffer_put(stateful_op->conn, op->buf);
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
@@ -3562,16 +3568,18 @@ static void castle_back_stream_in_continue(void *data)
             spin_unlock(&stateful_op->lock);
             break;
         case CASTLE_RING_STREAM_IN_FINISH:
-            castle_printk(LOG_DEBUG, "%s::finishing stream in for token %u, abort=%u\n",
+            abort_stream = stateful_op->curr_op->req.stream_in_finish.abort;
+
+            castle_printk(LOG_USERINFO, "%s::finishing stream in for token %u, abort=%u\n",
                     __FUNCTION__,
                     stateful_op->token,
-                    stateful_op->curr_op->req.stream_in_finish.abort);
+                    abort_stream);
 
             spin_unlock(&stateful_op->lock);
 
             /* Takes transaction lock. */
             castle_da_in_stream_complete(stateful_op->stream_in.da_stream,
-                    stateful_op->curr_op->req.stream_in_finish.abort);
+                    abort_stream);
 
             spin_lock(&stateful_op->lock);
 

@@ -1020,7 +1020,7 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
     BUG_ON(!attachment);
     btree = castle_double_array_btree_type_get(attachment);
 
-    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size);
+    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size, da_stream);
     while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &cvt)))
     {
         key = btree->key_pack(raw_key, NULL, NULL);
@@ -1038,7 +1038,12 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
                     cvt));
         castle_free(key);
     }
-    BUG_ON(err != ENOSR);
+    if(err != ENOSR)
+    {
+        castle_printk(LOG_ERROR, "%s::stream-in %p encountered error %u during batch buffer processing.\n",
+                __FUNCTION__, da_stream, err);
+        return err;
+    }
     castle_instream_batch_proc_destroy(&proc);
     return 0;
 }
