@@ -1014,14 +1014,14 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
     void *key, *raw_key;
     int err;
     c_instream_batch_proc proc;
-    c_val_tup_t cvt;
+    c_stream_val_tup_t scvt;
 
     /* Sanity checks. */
     BUG_ON(!attachment);
     btree = castle_double_array_btree_type_get(attachment);
 
-    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size, da_stream);
-    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &cvt)))
+    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size);
+    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &scvt)))
     {
         key = btree->key_pack(raw_key, NULL, NULL);
         if (!key)
@@ -1032,10 +1032,61 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
         btree->key_print(LOG_DEVEL, key);
 #endif
 
+        if (!scvt.cvt_complete)
+        {
+            int total_blocks;
+            c_byte_off_t ext_space_needed;
+            c_ext_pos_t new_cep;
+            char * val_ptr;
+
+            /* Must be a medium object CVT that needs data to be copied into
+               the data extent... */
+            BUG_ON(!CVT_MEDIUM_OBJECT(scvt.cvt));
+
+            /* Should have a valid data extent. */
+            BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
+
+            /* Allocate space for the new copy. */
+            total_blocks = (scvt.cvt.length - 1) / C_BLK_SIZE + 1;
+            ext_space_needed = total_blocks * C_BLK_SIZE;
+
+            castle_printk(LOG_DEBUG, "%s::total_blocks = %u, ext_space_needed = %lu\n",
+                total_blocks, ext_space_needed);
+
+            BUG_ON(castle_ext_freespace_get(&da_stream->tree->data_ext_free,
+                        ext_space_needed,
+                        0,
+                        &new_cep) < 0);
+            val_ptr = scvt.cvt.val_p;
+            CVT_MEDIUM_OBJECT_INIT(scvt.cvt, scvt.cvt.length, new_cep);
+            while (total_blocks > 0)
+            {
+                int blocks;
+                c2_block_t *c_c2b;
+                int step = total_blocks * PAGE_SIZE;
+
+                blocks = total_blocks;
+                total_blocks -= blocks;
+
+                c_c2b = castle_cache_block_get(new_cep, blocks, MERGE_OUT);
+                write_lock_c2b(c_c2b);
+                update_c2b(c_c2b);
+                memcpy(c2b_buffer(c_c2b), val_ptr, step);
+                dirty_c2b(c_c2b);
+                write_unlock_c2b(c_c2b);
+                put_c2b(c_c2b);
+                new_cep.offset += step;
+                val_ptr += step;
+            }
+
+            scvt.cvt_complete = 1;
+        }
+
+        BUG_ON(!scvt.cvt_complete);
         BUG_ON(castle_da_in_stream_entry_add(da_stream,
                     key,
                     attachment->version,
-                    cvt));
+                    scvt.cvt));
         castle_free(key);
     }
     if(err != ENOSR)

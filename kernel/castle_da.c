@@ -3308,6 +3308,9 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     struct castle_double_array *da = lfs->da;
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
 
+    if (growable)
+        castle_printk(LOG_UNLIMITED, "%s::growable\n", __FUNCTION__);
+
     /* If the DA is dead already, no need to handle the event anymore. */
     BUG_ON(da == NULL);
 
@@ -12769,7 +12772,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     int nr_rwcts;
 
     castle_printk(LOG_USERINFO, "%s::preparing for stream_in of %llu items "
-            "(int ext size: %u, tree ext size: %u, data ext size: %u)\n",
+            "(internal ext size: %u, tree ext size: %u, data ext size: %u)\n",
             __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size);
 
     constr = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
@@ -12834,6 +12837,23 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 
     /* Complete Output tree and get it ready to promote to DA. */
     castle_immut_tree_complete(constr);
+
+    castle_printk(LOG_INFO, "%s::completed ct %u [%p] with "
+        "internal extent %lu (size: %llu chunks) "
+        "tree extent %lu (size: %llu chunks) "
+        "data extent %lu (size: %llu chunks) "
+        "bloom extent %lu (size: %llu chunks)\n",
+        __FUNCTION__,
+        ct->seq,
+        ct,
+        ct->internal_ext_free.ext_id,
+        (uint64_t)castle_extent_size_get(ct->internal_ext_free.ext_id),
+        ct->tree_ext_free.ext_id,
+        (uint64_t)castle_extent_size_get(ct->tree_ext_free.ext_id),
+        ct->data_ext_free.ext_id,
+        (uint64_t)castle_extent_size_get(ct->data_ext_free.ext_id),
+        ct->bloom.ext_id,
+        (uint64_t)castle_extent_size_get(ct->bloom.ext_id));
 
     if (err || (atomic64_read(&ct->item_count)==0) )
     {
