@@ -745,6 +745,12 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
     (_cvt).length= _length;                                                   \
     (_cvt).cep   = _cep;                                                      \
 }
+#define CVT_STREAM_INCOMPLETE_MEDIUM_OBJECT_INIT(_cvt, _length, _ptr)         \
+{                                                                             \
+    (_cvt).type  = CVT_TYPE_MEDIUM_OBJECT;                                    \
+    (_cvt).length= _length;                                                   \
+    (_cvt).val_p = _ptr;                                                      \
+}
 #define CVT_LARGE_OBJECT_INIT(_cvt, _length, _cep)                            \
 {                                                                             \
     (_cvt).type  = CVT_TYPE_LARGE_OBJECT;                                     \

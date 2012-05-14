@@ -14,13 +14,19 @@ typedef struct castle_instream_batch_processor
     char   *cursor;
     size_t  bytes_consumed;
     struct  castle_immut_tree_construct *da_stream;
+    int     iters;
 } c_instream_batch_proc;
+
+typedef struct castle_stream_value_tuple
+{
+    int cvt_complete;
+    c_val_tup_t cvt;
+} c_stream_val_tup_t;
 
 void castle_instream_batch_proc_construct(c_instream_batch_proc *batch_proc,
                                           char* buf,
-                                          size_t buf_len_bytes,
-                                          struct  castle_immut_tree_construct *da_stream);
-int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** raw_key, c_val_tup_t *cvt);
+                                          size_t buf_len_bytes);
+int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** raw_key, c_stream_val_tup_t *cvt);
 void castle_instream_batch_proc_destroy(c_instream_batch_proc *batch_proc);
 
 #endif

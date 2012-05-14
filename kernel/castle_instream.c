@@ -3,8 +3,7 @@
 
 void castle_instream_batch_proc_construct(c_instream_batch_proc *batch_proc,
                                           char   *buf,
-                                          size_t  buf_len_bytes,
-                                          struct  castle_immut_tree_construct *da_stream)
+                                          size_t  buf_len_bytes)
 {
     BUG_ON(!batch_proc); /* caller must alloc! */
     BUG_ON(!buf);
@@ -13,7 +12,10 @@ void castle_instream_batch_proc_construct(c_instream_batch_proc *batch_proc,
 
     batch_proc->cursor = batch_proc->batch_buf;
     batch_proc->bytes_consumed = 0;
-    batch_proc->da_stream = da_stream;
+    batch_proc->iters = 0;
+
+    castle_printk(LOG_DEBUG, "%s::[%p] buf_len_bytes=%u\n",
+            __FUNCTION__, batch_proc, batch_proc->batch_buf_len_bytes);
 }
 
 /* return -ESPIPE when cursor reaches or moves beyond buffer bound */
@@ -48,10 +50,13 @@ static int castle_instream_batch_consume(char *dst, c_instream_batch_proc *batch
 }
 
 /* return ENOSR when batch buffer processing complete */
-int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** raw_key, c_val_tup_t *cvt)
+int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** raw_key, c_stream_val_tup_t *scvt)
 {
     c_stream_entry_hdr entry_hdr;
     void *val;
+    c_val_tup_t *cvt = &scvt->cvt;
+    scvt->cvt_complete = 0;
+    CVT_INVALID_INIT(scvt->cvt);
 
     BUG_ON(!batch_proc);
 
@@ -77,6 +82,11 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
     //castle_printk(LOG_UNLIMITED, "%s::entry_hdr, type:%u, timestamp: %llu, key_length:%u, val_length: %llu\n",
     //    __FUNCTION__, entry_hdr.type, entry_hdr.timestamp, entry_hdr.key_length, entry_hdr.val_length);
 
+    if (entry_hdr.type == CASTLE_STREAMING_ENTRY_HEADER_TYPE_NULL)
+        return ENOSR; /* EOF */
+
+    batch_proc->iters++;
+
     if (entry_hdr.key_length > VLBA_TREE_MAX_KEY_SIZE) /* This is a bad bug! Userspace corruption? */
     {
         castle_printk(LOG_ERROR, "%s::got key_length %lu; userspace corruption?\n",
@@ -87,13 +97,14 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
         (batch_proc->batch_buf_len_bytes -
          batch_proc->bytes_consumed)   ) /* This is probably user error. */
     {
-        castle_printk(LOG_ERROR, "%s::got val_length %llu; user error?\n",
-            __FUNCTION__, entry_hdr.val_length);
+        castle_printk(LOG_ERROR, "%s:: entry val length=%llu, batch buffer length=%llu, "
+            "bytes consumed by processor so far=%llu; user error?\n",
+            __FUNCTION__,
+            entry_hdr.val_length,
+            batch_proc->batch_buf_len_bytes,
+            batch_proc->bytes_consumed);
         return -ENOSPC;
     }
-
-    if (entry_hdr.type == CASTLE_STREAMING_ENTRY_HEADER_TYPE_NULL)
-        return ENOSR; /* EOF */
 
     *raw_key = batch_proc->cursor; /* Key follows the header */
     /* New raw key pointer obtained (caller does key packing). */
@@ -118,29 +129,12 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
             if (entry_hdr.val_length <= MAX_INLINE_VAL_SIZE)
             {
                 CVT_INLINE_INIT(*cvt, entry_hdr.val_length, val);
+                scvt->cvt_complete = 1;
             }
             else if (entry_hdr.val_length <= MEDIUM_OBJECT_LIMIT)
             {
-                c_ext_pos_t cep;
-                int total_blocks;
-                c_byte_off_t ext_space_needed;
-
-                /* Allocate space for the new copy. */
-                total_blocks = (entry_hdr.val_length - 1) / C_BLK_SIZE + 1;
-                ext_space_needed = total_blocks * C_BLK_SIZE;
-
-                castle_printk(LOG_UNLIMITED, "%s::medium object support not available yet.\n", __FUNCTION__);
-                return -EINVAL;
-
-                //BUG_ON(castle_ext_freespace_get(&batch_proc->da_stream->tree->data_ext_free,
-                //            ext_space_needed,
-                //            0,
-                //            &cep) < 0);
-
-                /* Copy value into MO extent. */
-                /////TODO
-
-                CVT_MEDIUM_OBJECT_INIT(*cvt, entry_hdr.val_length, cep);
+                CVT_STREAM_INCOMPLETE_MEDIUM_OBJECT_INIT(*cvt, entry_hdr.val_length, val);
+                scvt->cvt_complete = 0;
             }
             else
             {
@@ -149,7 +143,7 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
             }
             break;
         default:
-            castle_printk(LOG_UNLIMITED, "%s::TODO\n", __FUNCTION__);
+            castle_printk(LOG_UNLIMITED, "%s::TODO@tr\n", __FUNCTION__);
             BUG(); /* all other cvt types not yet implemented */
             break;
     }
@@ -169,6 +163,9 @@ int castle_instream_batch_proc_next(c_instream_batch_proc *batch_proc, void ** r
 void castle_instream_batch_proc_destroy(c_instream_batch_proc *batch_proc)
 {
     /* NoOp... for now... but please use it anyway!!! */
+    castle_printk(LOG_DEBUG, "%s::[%p] terminating after %u iters.\n",
+            __FUNCTION__, batch_proc, batch_proc->iters);
+
     BUG_ON(0);
 }
 
@@ -184,20 +181,21 @@ static int castle_instream_batch_proc_2_entries_unit_test(void)
     struct castle_btree_type *btree = castle_btree_type_get(SLIM_TREE_TYPE);
     void * raw_key = NULL;
     void * key = NULL;
-    c_val_tup_t cvt;
+    c_stream_val_tup_t scvt;
     int err;
     int entries_found = 0;
 
-    castle_instream_batch_proc_construct(&proc, input_batch, 500, NULL);
-    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &cvt)))
+    castle_instream_batch_proc_construct(&proc, input_batch, 500);
+    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &scvt)))
     {
         char val_buf[6];
         memset(val_buf, 0, 6);
 
         key = btree->key_pack(raw_key, NULL, NULL);
-        BUG_ON(!CVT_INLINE(cvt));
-        BUG_ON(cvt.length != 5);
-        memcpy(val_buf, cvt.val_p, cvt.length);
+        BUG_ON(!scvt.cvt_complete);
+        BUG_ON(!CVT_INLINE(scvt.cvt));
+        BUG_ON(scvt.cvt.length != 5);
+        memcpy(val_buf, scvt.cvt.val_p, scvt.cvt.length);
 
         castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
         btree->key_print(LOG_DEVEL, key);
