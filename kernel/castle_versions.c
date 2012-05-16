@@ -948,6 +948,7 @@ static int castle_version_add(c_ver_t version,
     atomic64_set(&v->stats.tombstone_deletes, 0);
     atomic64_set(&v->stats.version_deletes, 0);
     atomic64_set(&v->stats.key_replaces, 0);
+    atomic64_set(&v->stats.timestamp_rejects, 0);
 
     /* Clean timestamp. */
     memset(&v->creation_timestamp, 0, sizeof(struct timeval));
