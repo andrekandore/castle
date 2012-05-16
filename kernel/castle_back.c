@@ -2138,9 +2138,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         if (CVT_INLINE(*val))
             memcpy(buf_con->buf + buf_con->cur_kv_off, val->val_p, val_len);
         else
-        {
             castle_back_buffer_ool_memcpy(buf_con->buf + buf_con->cur_kv_off, val);
-        }
     }
     else
     {
