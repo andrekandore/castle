@@ -2145,7 +2145,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         kv_hdr->collection_id = collection_id;
     }
 
-    kv_hdr->val_len        = val_len;
+    kv_hdr->val_len        = val->length;
     kv_hdr->user_timestamp = val->user_timestamp;
 
     /* Update buffer constructor (kernel). */
