@@ -978,25 +978,6 @@ enum {
     CASTLE_RESPONSE_FLAG_TOMBSTONE        = (1 << 0),  /**< Value is a tombstone.                 */
 };
 
-// following to allow libcastle to compile during transition to buffy
-#if 1
-struct castle_iter_val {
-    uint64_t               length;
-    uint8_t                type;
-    union {
-        uint8_t           *val;
-        c_collection_id_t  collection_id;
-    };
-};
-
-struct castle_key_value_list {
-    struct castle_key_value_list *next;
-    c_vl_bkey_t                  *key;
-    struct castle_iter_val       *val;
-    castle_user_timestamp_t       user_timestamp;
-};
-#endif
-
 /**
  * Value types for val_type in c_buf_user_kv_hdr_t, c_buf_kv_hdr_t.
  *
