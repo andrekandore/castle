@@ -13,8 +13,8 @@
 
 #include <linux/module.h>
 #include <linux/kernel.h>
-#include <linux/lzo.h>
 #include <asm/unaligned.h>
+#include "lzo.h"
 #include "lzodefs.h"
 
 static noinline size_t
