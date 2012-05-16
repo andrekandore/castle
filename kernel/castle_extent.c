@@ -1294,13 +1294,13 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 
     /* Extent structure. */
     ext->ext_id             = ext_id;
+    ext->flags              = 0;
     ext->alive              = 1;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
     ext->pool               = NULL;
     atomic_set(&ext->link_cnt, 1);
-    ext->use_shadow_map     = 0;
     ext->shadow_map         = NULL;
     spin_lock_init(&ext->shadow_map_lock);
 
@@ -3183,7 +3183,6 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->k_factor              = rda_spec->k_factor;
     ext->ext_type              = ext_type;
     ext->da_id                 = da_id;
-    ext->use_shadow_map        = 0;
     ext->shadow_map            = NULL;
     ext->dirtytree->flush_prio = castle_ext_flush_prio_get(ext->ext_type, ext->size);
 #ifdef CASTLE_PERF_DEBUG
@@ -3693,12 +3692,12 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
     /*
      * This extent may be being remapped, in which case writes may also need to be directed via its
      * shadow map. This needs to be checked under the shadow map lock, but that lock and the
-     * 'use_shadow_map' flag are only initialised for 'normal' extents, hence the extent id checks.
+     * CASTLE_EXT_REBUILD_BIT flag are only initialised for 'normal' extents, hence the extent id checks.
      */
     if ((rw == WRITE) && (!SUPER_EXTENT(ext->ext_id)) && !(ext->ext_id == MICRO_EXT_ID))
     {
         spin_lock(&ext->shadow_map_lock);
-        if (ext->use_shadow_map &&
+        if (test_bit(CASTLE_EXT_REBUILD_BIT, &ext->flags) &&
           ((offset >= ext->shadow_map_range.start) && (offset < ext->shadow_map_range.end)))
         {
             /*
@@ -5306,7 +5305,7 @@ int process_rebuild_chunk(c_ext_t *ext, int chunkno, int unused1, int unused2)
     remap_chunks = castle_alloc(k_factor*sizeof(c_disk_chk_t));
     BUG_ON(!remap_chunks);
 
-    ext->use_shadow_map = 1;
+    set_bit(CASTLE_EXT_REBUILD_BIT, &ext->flags);
 
     /*
      * Populate the remap chunks array that will be used to write out remapped data.
@@ -5673,7 +5672,7 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
 void cleanup_extent(c_ext_t *ext, int update_seqno)
 {
     spin_lock(&ext->shadow_map_lock);
-    ext->use_shadow_map = 0;
+    clear_bit(CASTLE_EXT_REBUILD_BIT, &ext->flags);
     spin_unlock(&ext->shadow_map_lock);
 
     if (ext->shadow_map)

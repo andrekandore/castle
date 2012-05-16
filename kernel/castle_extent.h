@@ -16,12 +16,16 @@ typedef enum {
 
 struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 
+#define CASTLE_EXT_ALIVE_BIT            (0)
+#define CASTLE_EXT_REBUILD_BIT          (1) /* Extent rebuild started. Use shadow maps only. */
+
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
     c_chk_cnt_t         size;           /* Number of chunks                             */
     c_rda_type_t        type;           /* RDA type                                     */
     uint32_t            k_factor;       /* K factor in K-RDA                            */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
+    unsigned long       flags;          /* Bit Flags.                                   */
     struct list_head    hash_list;
     struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
     struct list_head    verify_list;    /* Used for testing.                            */
@@ -33,7 +37,6 @@ typedef struct castle_extent {
     spinlock_t          shadow_map_lock;
     c_disk_chk_t        *shadow_map;
     c_ext_mask_range_t  shadow_map_range; /* Range of chunks covered by shadow map. */
-    int                 use_shadow_map; /* Extent is currently being remapped           */
     atomic_t            link_cnt;
     /* This global mask gets updated after freeing resources. Checkpoint has to commit
      * this to mstore. */
