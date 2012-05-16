@@ -1295,7 +1295,6 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     /* Extent structure. */
     ext->ext_id             = ext_id;
     ext->flags              = 0;
-    ext->alive              = 1;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -1321,6 +1320,8 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
 #endif
     ext->global_mask = EMPTY_MASK_RANGE;
 
+    set_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
+
     debug("Allocated extent ext_id=%lld.\n", ext->ext_id);
 
     return ext;
@@ -1345,7 +1346,7 @@ void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
         BUG_ON(ext->da_id != da_id);
 
         /* Mark the extent as alive. */
-        ext->alive = 1;
+        set_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
     }
 }
 
@@ -1365,7 +1366,7 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
 
-    if (ext->alive == 0)
+    if (!test_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags))
     {
         castle_printk(LOG_INFO, "Found dead extent: %llu\n", ext->ext_id);
         castle_extent_free(ext->ext_id);
@@ -1928,7 +1929,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     /* ext_alloc() would set the alive bit to 1. Shouldn't do that during module reload.
      * Instead, extent owner would mark it alive. */
-    ext->alive = 0;
+    clear_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
 
     CONVERT_MENTRY_TO_EXTENT(ext, mstore_entry);
     ext->dirtytree->flush_prio = castle_ext_flush_prio_get(ext->ext_type, ext->size);

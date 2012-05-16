@@ -44,7 +44,6 @@ typedef struct castle_extent {
     struct list_head    mask_list;      /* List of all valid masks - latest first.      */
     struct list_head    schks_list;     /* List of partially used superchunks.          */
     c_res_pool_t       *pool;           /* Reservation pool that this extent tied to.*/
-    uint8_t             alive;
     struct castle_cache_extent_dirtytree *dirtytree; /**< Dirty c2bs in this extent.    */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
