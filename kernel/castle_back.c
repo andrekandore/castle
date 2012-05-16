@@ -2102,6 +2102,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
 #define MIN_RESERVE_BYTES   (sizeof(c_buf_hdr_t) + sizeof(c_buf_kv_hdr_t))
     c_buf_kv_hdr_t *kv_hdr;
     int key_len, val_len;
+    uint32_t total_kvp_len;
 
     key_len = key->length + 4;
     if (CVT_INLINE(*val)
@@ -2114,17 +2115,16 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         val_len = 0;
 
     /* Return immediately if the buffer is too small. */
-    if (unlikely(sizeof(c_buf_kv_hdr_t) + key_len + val_len > buf_con->buf_rem))
+    total_kvp_len = sizeof(c_buf_kv_hdr_t) + key_len + val_len;
+    if (unlikely(total_kvp_len > buf_con->buf_rem))
         return -ENOSPC;
 
     /* Get current key value header. */
     kv_hdr = buf_con->buf + buf_con->cur_hdr_off;
     buf_con->cur_hdr_off += sizeof(c_buf_kv_hdr_t);
-    buf_con->buf_rem     -= sizeof(c_buf_kv_hdr_t);
 
     /* Copy key into buffer. */
     buf_con->cur_kv_off -= key_len;
-    buf_con->buf_rem    -= key_len;
     kv_hdr->key_off      = buf_con->cur_kv_off;
     memcpy(buf_con->buf + buf_con->cur_kv_off, key, key_len);
 
@@ -2132,7 +2132,6 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     if (likely(val_len))
     {
         buf_con->cur_kv_off -= val_len;
-        buf_con->buf_rem    -= val_len;
         kv_hdr->val_off      = buf_con->cur_kv_off;
         kv_hdr->val_type     = CASTLE_VALUE_TYPE_INLINE;
         if (CVT_INLINE(*val))
@@ -2150,6 +2149,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     kv_hdr->user_timestamp = val->user_timestamp;
 
     /* Update buffer constructor (kernel). */
+    buf_con->buf_rem -= total_kvp_len;
     buf_con->nr_entries++;
 
     return 0;
