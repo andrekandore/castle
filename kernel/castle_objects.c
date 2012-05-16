@@ -1083,11 +1083,14 @@ int castle_object_batch_in_stream(struct  castle_attachment *attachment,
         }
 
         BUG_ON(!scvt.cvt_complete);
-        BUG_ON(castle_da_in_stream_entry_add(da_stream,
+        err = castle_da_in_stream_entry_add(da_stream,
                     key,
                     attachment->version,
-                    scvt.cvt));
+                    scvt.cvt);
         castle_free(key);
+
+        if (err)
+            break;
     }
     if(err != ENOSR)
     {
