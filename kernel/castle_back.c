@@ -2106,7 +2106,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     key_len = key->length + 4;
     if (CVT_INLINE(*val)
             || (CVT_ON_DISK(*val) && buf_con->flags & CASTLE_RING_FLAG_ITER_GET_OOL
-                && val->length < buf_con->buf_len - MIN_RESERVE_BYTES))
+                && MIN_RESERVE_BYTES + key_len + val->length <= buf_con->buf_len))
         val_len = val->length;
     else
         val_len = 0;
@@ -2114,7 +2114,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         val_len = 0;
 
     /* Return immediately if the buffer is too small. */
-    if (unlikely(key_len + val_len > buf_con->buf_rem))
+    if (unlikely(sizeof(c_buf_kv_hdr_t) + key_len + val_len > buf_con->buf_rem))
         return -ENOSPC;
 
     /* Get current key value header. */
@@ -2138,7 +2138,9 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         if (CVT_INLINE(*val))
             memcpy(buf_con->buf + buf_con->cur_kv_off, val->val_p, val_len);
         else
+        {
             castle_back_buffer_ool_memcpy(buf_con->buf + buf_con->cur_kv_off, val);
+        }
     }
     else
     {
