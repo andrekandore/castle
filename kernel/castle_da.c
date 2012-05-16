@@ -12907,9 +12907,21 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
                                   c_ver_t                             version,
                                   c_val_tup_t                         cvt)
 {
+    int is_new_key;
+
     /* Large objects not supported for now. */
     BUG_ON(CVT_LARGE_OBJECT(cvt));
 
+    /* Check if this is a new key. */
+    is_new_key = (constr->last_key)? constr->btree->key_compare(key, constr->last_key): 1;
+
+    if (is_new_key < 0)
+    {
+        castle_printk(LOG_ERROR, "Stream-in keys should be in increasing order.\n");
+        return -EINVAL;
+    }
+
+    constr->is_new_key = is_new_key;
     return castle_immut_tree_entry_add(constr,
                                        0,       /* Depth */
                                        key,
