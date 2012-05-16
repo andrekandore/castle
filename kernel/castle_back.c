@@ -2142,10 +2142,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     }
     else
     {
-        uint8_t val_type;
-        val_type = castle_back_buffer_cvt_type_to_user(*val);
-        BUG_ON(val_type == CASTLE_VALUE_TYPE_INLINE);
-        kv_hdr->val_type      = val_type;
+        kv_hdr->val_type      = castle_back_buffer_cvt_type_to_user(*val);
         kv_hdr->collection_id = collection_id;
     }
 
