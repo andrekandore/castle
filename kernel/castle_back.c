@@ -2151,6 +2151,8 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     /* Update buffer constructor (kernel). */
     buf_con->buf_rem -= total_kvp_len;
     buf_con->nr_entries++;
+    if (val->length && val_len)
+        buf_con->buf_hdr->flags |= CASTLE_BUFFER_FLAG_HAS_OOL;
 
     return 0;
 }
@@ -2224,7 +2226,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
     if (key == NULL)
     {
         /* Finalise buffer, inform consumer the iterator has terminated. */
-        castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_COMPLETE);
+        castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_STATUS_COMPLETE);
 
         /* Iterator has finished.  Fake up an iter_finish request and pass it
          * to castle_back_iter_finish() to end the iterator.
@@ -2257,7 +2259,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         /* The buffer was too small to save the key-value pair.
          * Finalise buffer, inform consumer the iterator has more keys. */
         BUG_ON(ret != -ENOSPC);
-        castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_HAS_MORE);
+        castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_STATUS_HAS_MORE);
 
         /* key->length + 4 because key->length does not include overheads. */
         stateful_op->iterator.saved_key = castle_dup_or_copy(key, key->length + 4, NULL, NULL);
@@ -2345,7 +2347,7 @@ static void __castle_back_iter_next(void *data)
         {
             BUG_ON(ret != -ENOSPC);
             error("iterator buffer too small\n");
-            castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_HAS_MORE);
+            castle_back_buffer_fini(&stateful_op->iterator.buf_con, CASTLE_BUFFER_STATUS_HAS_MORE);
             castle_back_buffer_put(conn, op->buf);
             castle_back_iter_reply(stateful_op, op, -EINVAL);
 

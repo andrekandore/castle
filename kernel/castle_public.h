@@ -1029,11 +1029,19 @@ typedef struct castle_buffer_key_value_header {
  * Status values for status in c_buf_hdr_t.
  */
 typedef enum {
-    CASTLE_BUFFER_COMPLETE = 0,
-    CASTLE_BUFFER_HAS_MORE,
-    CASTLE_BUFFER_ERROR,
-    CASTLE_BUFFER_STATE_MAX
+    CASTLE_BUFFER_STATUS_COMPLETE = 0,              /**< Final buffer, no more data to return.  */
+    CASTLE_BUFFER_STATUS_HAS_MORE,                  /**< More data to return in subsequent buf. */
+    CASTLE_BUFFER_STATUS_ERROR,                     /**< Error occurred (overflows, etc.)       */
+    /* Note: Status values are stored in a uint8_t.  Don't overflow. */
 } c_buf_status_t;
+
+/**
+ * Flag bits for flags in c_buf_hdr_t.
+ */
+typedef enum {
+    CASTLE_BUFFER_FLAG_HAS_OOL          = (1 << 0), /**< Buffer contains non-inline values.     */
+    /* Note: Flags are stored in a uin8_t.  Don't overflow. */
+} c_buf_flags_t;
 
 /**
  * Header for Castle key-value buffers, for iters and stream in/out.
