@@ -1161,11 +1161,13 @@ static inline uint8_t castle_back_val_type_kernel_to_user(c_val_tup_t cvt)
 {
     /* We should never be returning those to userspace. */
     BUG_ON(CVT_NODE(cvt));
-    BUG_ON(CVT_COUNTER_ADD(cvt));
 
     /* Check for counters before checking for inline (which will also be true). */
-    if(CVT_COUNTER_SET(cvt) || CVT_LOCAL_COUNTER(cvt))
-        return CASTLE_VALUE_TYPE_INLINE_COUNTER;
+    if(CVT_COUNTER_SET(cvt) || CVT_COUNTER_LOCAL_SET(cvt))
+        return CASTLE_VALUE_TYPE_COUNTER;
+
+    if(CVT_COUNTER_ADD(cvt) || CVT_COUNTER_LOCAL_ADD(cvt))
+        return CASTLE_VALUE_TYPE_COUNTER_DELTA;
 
     if(CVT_INLINE(cvt))
         return CASTLE_VALUE_TYPE_INLINE;
@@ -1231,15 +1233,16 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *kas_val,
                                                uint32_t buf_used,
                                                uint32_t *this_v_used,
                                                c_collection_id_t collection_id,
-                                               int get_ool)
+                                               uint8_t flags)
 {
     struct castle_iter_val *val_copy = (struct castle_iter_val *)kas_val_dst;
     uint32_t length, val_length, rem_buf_len;
 
     rem_buf_len = buf_len - buf_used; /* Space available in val_dst */
 
-    if (CVT_INLINE(*kas_val)
-            || (get_ool && CVT_ON_DISK(*kas_val) && (kas_val->length < buf_len)))
+    if (CVT_INLINE(*kas_val) ||
+            ((flags & CASTLE_RING_FLAG_ITER_GET_OOL) &&
+             CVT_ON_DISK(*kas_val) && (kas_val->length < buf_len)))
         val_length = kas_val->length;
     else
         val_length = 0;
@@ -1254,8 +1257,17 @@ static uint32_t castle_back_val_kernel_to_user(c_val_tup_t *kas_val,
         return 0;
     }
 
+    /* Shouldn't see any counter adds, if it is not incremental backup. */
+    BUG_ON(!(flags & CASTLE_RING_FLAG_INC_BACKUP) && CVT_COUNTER_ADD(*kas_val));
+
     val_copy->type   = castle_back_val_type_kernel_to_user(*kas_val);
     val_copy->length = kas_val->length;
+
+    /* If it is not incremental backup, make sure we never return
+     * CASTLE_VALUE_TYPE_COUNTER_DELTA. */
+    if (!(flags & CASTLE_RING_FLAG_INC_BACKUP) &&
+            (val_copy->type == CASTLE_VALUE_TYPE_COUNTER_DELTA))
+        val_copy->type = CASTLE_VALUE_TYPE_COUNTER;
 
     if (val_length)
     {
@@ -2209,7 +2221,6 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
                                                    uint32_t buf_used)
 {
     int save_val = !(stateful_op->flags & CASTLE_RING_FLAG_ITER_NO_VALUES);
-    int get_ool  =   stateful_op->flags & CASTLE_RING_FLAG_ITER_GET_OOL;
     uint32_t rem_buf_len;   /* How much space is free in the userland buffer.   */
     uint32_t this_kv_used;  /* How much space has been used saving this KVP.    */
     uint32_t key_len, val_len, cvt_len = 0;
@@ -2258,7 +2269,7 @@ static uint32_t castle_back_save_key_value_to_list(struct castle_back_stateful_o
                                                  buf_used + this_kv_used,       /* buf_used     */
                                                  &val_len,                      /* this_v_used  */
                                                  collection_id,                 /* collection_id*/
-                                                 get_ool);                      /* get_ool      */
+                                                 stateful_op->flags);           /* flags        */
         if (val_len == 0)
         {
             this_kv_used = 0;
