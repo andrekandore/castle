@@ -3352,8 +3352,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                    lfs->rwct ?
                                                         EXT_T_T0_INTERNAL_NODES :
                                                         EXT_T_INTERNAL_NODES,
-                                                   lfs->internal_ext.size, 1,
-                                                   NULL, NULL);
+                                                   lfs->internal_ext.size, 1);
 
     if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
     {
@@ -3365,8 +3364,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                        lfs->rwct ?
                                                             EXT_T_T0_INTERNAL_NODES :
                                                             EXT_T_INTERNAL_NODES,
-                                                       lfs->internal_ext.size, 1,
-                                                       lfs_data, lfs_callback);
+                                                       lfs->internal_ext.size, 1);
         if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
@@ -3389,8 +3387,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                                        EXT_T_LEAF_NODES,
                                                                   lfs->tree_ext.size,
                                                                   0,
-                                                                  1,
-                                                                  NULL, NULL);
+                                                                  1);
                 castle_printk(LOG_DEBUG, "%s::growable ssd extent %d\n", __FUNCTION__,
                         lfs->tree_ext.ext_id);
             }
@@ -3401,8 +3398,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                                 EXT_T_T0_LEAF_NODES :
                                                                 EXT_T_LEAF_NODES,
                                                            lfs->tree_ext.size,
-                                                           1,
-                                                           NULL, NULL);
+                                                           1);
         }
     }
 
@@ -3421,9 +3417,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                                    EXT_T_LEAF_NODES,
                                                               lfs->tree_ext.size,
                                                               0, /*ext_size*/
-                                                              1, /*in_tran*/
-                                                              lfs_data,
-                                                              lfs_callback);
+                                                              1); /*in_tran*/
             castle_printk(LOG_DEBUG, "%s::growable tree extent %d\n", __FUNCTION__,
                     lfs->tree_ext.ext_id);
         }
@@ -3434,9 +3428,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                             EXT_T_T0_LEAF_NODES :
                                                             EXT_T_LEAF_NODES,
                                                        lfs->tree_ext.size,
-                                                       1, /*in_tran*/
-                                                       lfs_data,
-                                                       lfs_callback);
+                                                       1); /*in_tran*/
     }
 
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
@@ -3461,8 +3453,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                                EXT_T_MEDIUM_OBJECTS,
                                                           lfs->data_ext.size,
                                                           0,
-                                                          1,
-                                                          lfs_data, lfs_callback);
+                                                          1);
         castle_printk(LOG_DEBUG, "%s::growable data extent %d\n", __FUNCTION__,
                 lfs->data_ext.ext_id);
     }
@@ -3472,8 +3463,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
                                                    lfs->rwct ?
                                                         EXT_T_T0_MEDIUM_OBJECTS :
                                                         EXT_T_MEDIUM_OBJECTS,
-                                                   lfs->data_ext.size, 1,
-                                                   lfs_data, lfs_callback);
+                                                   lfs->data_ext.size, 1);
 
     if (EXT_ID_INVAL(lfs->data_ext.ext_id))
     {
@@ -3504,6 +3494,11 @@ skip_data_ext:
     return 0;
 
 no_space:
+    /* Register callback with extents. */
+    BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
+                                          lfs_callback,
+                                          lfs_data));
+
     /* If the allocation is not a reallocation, update victim count. */
     if (lfs_callback && !is_realloc)
         castle_da_lfs_victim_count_inc(da);
@@ -3684,8 +3679,7 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
                                          da->id,
                                          EXT_T_T0_INTERNAL_NODES,
                                          MAX_DYNAMIC_INTERNAL_SIZE * C_CHK_SIZE,
-                                         1 /* in tran */,
-                                         data, lfs_callback);
+                                         1); /* in tran */
     if (ret)
     {
         /* FAILED to allocate internal node HDD extent. */
@@ -3700,8 +3694,7 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
                                          da->id,
                                          EXT_T_T0_LEAF_NODES,
                                          MAX_DYNAMIC_TREE_SIZE * C_CHK_SIZE,
-                                         1 /* in tran */,
-                                         data, lfs_callback);
+                                         1); /* in tran */
     if (ret)
     {
         /* FAILED to allocate leaf node HDD extent. */
@@ -3716,8 +3709,7 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
                                          da->id,
                                          EXT_T_T0_MEDIUM_OBJECTS,
                                          MAX_DYNAMIC_DATA_SIZE * C_CHK_SIZE,
-                                         1 /* in tran */,
-                                         data, lfs_callback);
+                                         1); /* in tran */
     if (ret)
     {
         /* FAILED to allocate value extent. */
@@ -3740,7 +3732,12 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
 no_space:
     /* Mark DA as LFS victim. */
     if (lfs_callback)
+    {
+        BUG_ON(castle_extent_lfs_callback_add(1, /* In transaction. */
+                                              lfs_callback,
+                                              data));
         castle_da_lfs_victim_count_inc(da);
+    }
 
     castle_extent_transaction_end();
 
