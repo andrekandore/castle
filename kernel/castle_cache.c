@@ -6421,9 +6421,7 @@ static void castle_cache_dirty_user_flood(void)
                                            INVAL_DA,
                                            EXT_T_META_DATA,
                                            DIRTY_EXT_CHUNKS, /* 24GB */
-                                           0 /*in_tran*/,
-                                           NULL,
-                                           NULL);
+                                           0); /*in_tran*/
         BUG_ON(EXT_ID_INVAL(dirty_ext_id));
         castle_printk(LOG_USERINFO, "%s: Allocated extent ID %ld\n",
                 __FUNCTION__, dirty_ext_id);

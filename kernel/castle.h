@@ -2018,9 +2018,7 @@ int                   castle_new_ext_freespace_init(c_ext_free_t     *ext_free,
                                                     c_da_t            da_id,
                                                     c_ext_type_t      ext_type,
                                                     c_byte_off_t      size,
-                                                    int               in_tran,
-                                                    void              *data,
-                                                    c_ext_event_callback_t callback);
+                                                    int               in_tran);
 void                  castle_ext_freespace_size_update
                                                    (c_ext_free_t *ext_free,
                                                     int           do_checks);

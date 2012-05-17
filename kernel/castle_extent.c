@@ -197,8 +197,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_ext_type_t   ext_type,
                                        c_chk_cnt_t    ext_size,
                                        c_chk_cnt_t    alloc_size,
-                                       c_ext_id_t     ext_id,
-                                       c_ext_event_t *hdl);
+                                       c_ext_id_t     ext_id);
 void __castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytree,
                                    int check_hash);
 
@@ -1696,8 +1695,7 @@ static int castle_extent_meta_ext_create(void)
                                   EXT_T_META_DATA,
                                   meta_ext_size,
                                   meta_ext_size,
-                                  META_EXT_ID,
-                                  NULL);
+                                  META_EXT_ID);
     if (ext_id != META_EXT_ID)
     {
         castle_printk(LOG_WARN, "Meta Extent Allocation Failed\n");
@@ -1734,8 +1732,7 @@ static int castle_extent_mstore_ext_create(void)
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID,
-                                  NULL);
+                                  MSTORE_EXT_ID);
     if (ext_id != MSTORE_EXT_ID)
         return -ENOSPC;
 
@@ -1743,8 +1740,7 @@ static int castle_extent_mstore_ext_create(void)
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID+1,
-                                  NULL);
+                                  MSTORE_EXT_ID+1);
     if (ext_id != MSTORE_EXT_ID+1)
         return -ENOSPC;
 
@@ -3042,32 +3038,14 @@ c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
                                       c_ext_type_t             ext_type,
                                       c_chk_cnt_t              ext_size,
                                       c_chk_cnt_t              alloc_size,
-                                      int                      in_tran,
-                                      void                    *data,
-                                      c_ext_event_callback_t   callback)
+                                      int                      in_tran)
 {
     int ret = 0;
-    c_ext_event_t *event_hdl = NULL;
-
-    /* Either get both parameters or none. */
-    BUG_ON((callback && !data) || (!callback && data));
-
-    /* Allocate event handler structure and call low level extent alloc(). */
-    if (callback)
-    {
-        event_hdl = castle_zalloc(sizeof(c_ext_event_t));
-
-        if (!event_hdl)
-            return INVAL_EXT_ID;
-
-        event_hdl->callback = callback;
-        event_hdl->data     = data;
-    }
 
     /* If the caller is not already in transaction. start a transaction. */
     if (!in_tran)   castle_extent_transaction_start();
 
-    ret = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID, event_hdl);
+    ret = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
 
     /* End the transaction. */
     if (!in_tran)   castle_extent_transaction_end();
@@ -3095,28 +3073,10 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
                                c_da_t                   da_id,
                                c_ext_type_t             ext_type,
                                c_chk_cnt_t              ext_size,
-                               int                      in_tran,
-                               void                    *data,
-                               c_ext_event_callback_t   callback)
+                               int                      in_tran)
 {
     return castle_extent_alloc_sparse(rda_type, da_id, ext_type, ext_size, ext_size,
-                                      in_tran, data, callback);
-}
-
-/**
- * Add the low freespace callback to the victim list.
- */
-static void _castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
-{
-    BUG_ON(!castle_extent_in_transaction());
-
-    /* Add the victim handler to the list of handlers of specific type. This handler gets
-     * called, when more space is available. */
-    if (event_hdl)
-    {
-        /* Add to the end, to maintain FIFO. */
-        list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
-    }
+                                      in_tran);
 }
 
 int castle_extent_lfs_callback_add(int in_tran, c_ext_event_callback_t callback, void *data)
@@ -3135,7 +3095,12 @@ int castle_extent_lfs_callback_add(int in_tran, c_ext_event_callback_t callback,
     event_hdl->data     = data;
 
     if (!in_tran)   castle_extent_transaction_start();
-    _castle_extent_lfs_callback_add(event_hdl);
+
+    /* Add the victim handler to the list of handlers of specific type. This handler gets
+     * called, when more space is available. */
+    /* Add to the end, to maintain FIFO. */
+    list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
+
     if (!in_tran)   castle_extent_transaction_end();
 
     return 0;
@@ -3165,8 +3130,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
                                        c_ext_type_t     ext_type,
                                        c_chk_cnt_t      ext_size,
                                        c_chk_cnt_t      alloc_size,
-                                       c_ext_id_t       ext_id,
-                                       c_ext_event_t   *event_hdl)
+                                       c_ext_id_t       ext_id)
 {
     c_ext_t *ext = NULL;
     int ret = 0;
@@ -3315,9 +3279,6 @@ alloc_done:
         castle_extents_sb->ext_id_seq++;
     }
 
-    /* Extent allocation is SUCCESS. No need of event handler. Free it. */
-    castle_check_free(event_hdl);
-
     return ext->ext_id;
 
 __low_space:
@@ -3325,9 +3286,6 @@ __low_space:
                   da_id,
                   castle_ext_type_str[ext_type],
                   alloc_size);
-    /* Add the victim handler to the list of handlers of specific type. This handler gets
-     * called, when more space is available. */
-    _castle_extent_lfs_callback_add(event_hdl);
 
 __hell:
     if (pool)
