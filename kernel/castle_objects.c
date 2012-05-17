@@ -949,17 +949,6 @@ int castle_object_replace(struct castle_object_replace *replace,
     if (!key)
         return -ENOMEM;
 
-    //BUG_ON(castle_object_cvt_create(replace));
-
-    //BUG_ON(castle_da_in_stream_entry_add(da->in_str_tree_constr,
-    //                            key,
-    //                            attachment->version,
-    //                            replace->cvt));
-
-    //replace->complete(replace, 0);
-
-    //return 0;
-
     /* Allocate castle bio with a single bvec. */
     ret = -ENOMEM;
     c_bio = castle_utils_bio_alloc(1);
