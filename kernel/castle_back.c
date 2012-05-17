@@ -139,6 +139,10 @@ struct castle_back_op
 struct castle_back_iterator
 {
     c_collection_id_t             collection_id;    /**< Collection ID.                     */
+    int                           get_all;          /**< If set, iterator will return all   */
+                                                    /**< keys, with all # dims.             */
+                                                    /**< start/end_key below are be both    */
+                                                    /**< invaild.                           */
     c_vl_bkey_t                  *start_key;        /**< Iterator start key.                */
     c_vl_bkey_t                  *end_key;          /**< Iterator end key.                  */
     c_vl_bkey_t                  *saved_key;        /**< Saved key when buffer filled up.   */
@@ -1912,7 +1916,7 @@ static void castle_back_iter_start(void *data)
     struct castle_attachment *attachment;
     c_vl_bkey_t *start_key;
     c_vl_bkey_t *end_key;
-    int err;
+    int err, get_all;
 
     stateful_debug("conn=%p op=%p\n", conn, op);
 
@@ -1945,24 +1949,37 @@ static void castle_back_iter_start(void *data)
         goto err2;
     }
 
-    /* start_key and end_key are freed by castle_object_iter_finish */
-    err = castle_back_key_copy_get(conn, op->req.iter_start.start_key_ptr,
-        op->req.iter_start.start_key_len, &start_key);
-    if (err)
-        goto err2;
 
-    err = castle_back_key_copy_get(conn, op->req.iter_start.end_key_ptr,
-        op->req.iter_start.end_key_len, &end_key);
-    if (err)
-        goto err3;
+    /* Special case: if both start and end_key are NULL, the RQ will be over
+       entire dataset, without any hypercube filtering. */
+    if (unlikely((op->req.iter_start.start_key_ptr == NULL) &&
+                 (op->req.iter_start.end_key_ptr == NULL)))
+    {
+        start_key = end_key = NULL;
+        get_all = 1;
+    }
+    else
+    {
+        /* start_key and end_key are freed by castle_object_iter_finish */
+        err = castle_back_key_copy_get(conn, op->req.iter_start.start_key_ptr,
+            op->req.iter_start.start_key_len, &start_key);
+        if (err)
+            goto err2;
 
+        err = castle_back_key_copy_get(conn, op->req.iter_start.end_key_ptr,
+            op->req.iter_start.end_key_len, &end_key);
+        if (err)
+            goto err3;
+
+        get_all = 0;
 #ifdef DEBUG
-    stateful_debug("start_key: \n");
-    vl_bkey_print(LOG_DEBUG, start_key);
+        stateful_debug("start_key: \n");
+        vl_bkey_print(LOG_DEBUG, start_key);
 
-    stateful_debug("end_key: \n");
-    vl_bkey_print(LOG_DEBUG, end_key);
+        stateful_debug("end_key: \n");
+        vl_bkey_print(LOG_DEBUG, end_key);
 #endif
+    }
 
     stateful_op->tag = CASTLE_RING_ITER_START;
     stateful_op->flags = op->req.flags;
@@ -1976,6 +1993,7 @@ static void castle_back_iter_start(void *data)
     stateful_op->curr_op = op;
 
     stateful_op->iterator.collection_id = op->req.iter_start.collection_id;
+    stateful_op->iterator.get_all = get_all;
     stateful_op->iterator.saved_key = NULL;
     stateful_op->iterator.start_key = start_key;
     stateful_op->iterator.end_key = end_key;
@@ -1993,6 +2011,7 @@ static void castle_back_iter_start(void *data)
         stateful_op->flags |= CASTLE_RING_FLAG_RET_TOMBSTONE;
 
     err = castle_object_iter_init(attachment,
+                                  get_all,
                                   start_key,
                                   end_key,
                                   &stateful_op->iterator.iterator,
@@ -2484,8 +2503,11 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
         CVT_INLINE_FREE(stateful_op->iterator.saved_val);
     }
 
-    castle_free(stateful_op->iterator.start_key);
-    castle_free(stateful_op->iterator.end_key);
+    if (!stateful_op->iterator.get_all)
+    {
+        castle_free(stateful_op->iterator.start_key);
+        castle_free(stateful_op->iterator.end_key);
+    }
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 

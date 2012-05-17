@@ -2332,35 +2332,43 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
         proxy_ct = &iter->cts_proxy->cts[i];
         ct_iter  = &iter->ct_iters[nr_iters];
 
-        switch (proxy_ct->state)
+        if (iter->get_all)
         {
-            case NO_REDIR:
-                /* No redirection, use requested start and end keys. */
-                ct_start_key    = iter->start_key;
-                ct_end_key      = iter->end_key;
-                break;
-            case REDIR_INTREE:
-                /* Input tree, start at key_next(partition key), or at start_key
-                 * whichever greater.
-                 * Prior keys (if queried for) are handled by the output tree. */
-                if(btree->key_compare(iter->start_key, proxy_ct->pk_next) >= 0)
-                    ct_start_key = iter->start_key;
-                else
-                    ct_start_key = proxy_ct->pk_next;
-                ct_end_key       = iter->end_key;
-                break;
-            case REDIR_OUTTREE:
-                /* Output tree, end at partition key or at end key, whichever
-                 * smaller.
-                 * Later keys are handled by the input trees. */
-                ct_start_key    = iter->start_key;
-                if(btree->key_compare(iter->end_key, proxy_ct->pk) >= 0)
-                    ct_end_key  = proxy_ct->pk;
-                else
-                    ct_end_key  = iter->end_key;
-                break;
-            default:
-                BUG();
+            ct_start_key = btree->min_key;
+            ct_end_key = btree->max_key;
+        }
+        else
+        {
+            switch (proxy_ct->state)
+            {
+                case NO_REDIR:
+                    /* No redirection, use requested start and end keys. */
+                    ct_start_key    = iter->start_key;
+                    ct_end_key      = iter->end_key;
+                    break;
+                case REDIR_INTREE:
+                    /* Input tree, start at key_next(partition key), or at start_key
+                     * whichever greater.
+                     * Prior keys (if queried for) are handled by the output tree. */
+                    if(btree->key_compare(iter->start_key, proxy_ct->pk_next) >= 0)
+                        ct_start_key = iter->start_key;
+                    else
+                        ct_start_key = proxy_ct->pk_next;
+                    ct_end_key       = iter->end_key;
+                    break;
+                case REDIR_OUTTREE:
+                    /* Output tree, end at partition key or at end key, whichever
+                     * smaller.
+                     * Later keys are handled by the input trees. */
+                    ct_start_key    = iter->start_key;
+                    if(btree->key_compare(iter->end_key, proxy_ct->pk) >= 0)
+                        ct_end_key  = proxy_ct->pk;
+                    else
+                        ct_end_key  = iter->end_key;
+                    break;
+                default:
+                    BUG();
+            }
         }
 
         /* Initialise CT iterator. */
@@ -2459,6 +2467,7 @@ inline void castle_da_rq_iter_relevant_ct_cb(void *private, int key_exists)
  */
 static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *proxy_ct,
                                                 struct castle_btree_type *btree,
+                                                int get_all,
                                                 void *start_key,
                                                 void *end_key,
                                                 void **start_stripped,
@@ -2468,6 +2477,11 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
     if (inc_backup_iter && !castle_da_inc_backup_needed(proxy_ct->ct))
         /* Skip this tree for backup. */
         return 0;
+
+    if (get_all)
+        /* If query is over entire key range, the tree is relevant independently
+            of it's merge state. */
+        return 1;
 
     if (proxy_ct->state == REDIR_INTREE
             && btree->key_compare(proxy_ct->pk_next, end_key) > 0)
@@ -2518,6 +2532,7 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
  * Determine which trees are relevant for a range query of start_key to end_key.
  *
  * @param   iter        Range query iterator to check CTs for
+ * @param   get_all     Range query over entire data set, start/end_key unused
  * @param   start_key   Range query start key
  * @param   end_key     Range query end key
  *
@@ -2542,6 +2557,7 @@ static inline int castle_da_rq_iter_ct_relevant(struct castle_da_cts_proxy_ct *p
  * @also castle_da_rq_iter_relevant_ct_cb()
  */
 int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
+                                       int get_all,
                                        void *start_key,
                                        void *end_key)
 {
@@ -2562,6 +2578,7 @@ int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
     {
         switch (castle_da_rq_iter_ct_relevant(&cts_proxy->cts[i],
                                               btree,
+                                              get_all,
                                               start_key,
                                               end_key,
                                               &iter->start_stripped,
@@ -2613,6 +2630,7 @@ int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
  * @param   iter        Range query iterator to initialise
  * @param   version     Version to query
  * @param   da_id       DA to iterate
+ * @param   get_all     Get entire data set, start/end_key invalid
  * @param   start_key   Range query start key
  * @param   end_key     Range query end key
  * @param   seq_id      Unique ID for tracing purposes
@@ -2632,6 +2650,7 @@ int castle_da_rq_iter_relevant_cts_get(c_da_rq_iter_t *iter,
 void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
                             c_ver_t version,
                             c_da_t da_id,
+                            int get_all,
                             void *start_key,
                             void *end_key,
                             int seq_id,
@@ -2672,13 +2691,14 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     iter->da                = da;
     iter->init_cb           = init_cb;
     iter->private           = private;
+    iter->get_all           = get_all;
     /* It's safe to reference the passed start and end keys as the caller will
      * not go away at least until we asynchronously wake them up. */
     iter->start_key         = start_key;
     iter->end_key           = end_key;
 
     /* Determine CTs relevant to range query. */
-    if (castle_da_rq_iter_relevant_cts_get(iter, start_key, end_key) != 0)
+    if (castle_da_rq_iter_relevant_cts_get(iter, get_all, start_key, end_key) != 0)
         goto alloc_fail2;
 
     /* The remainder of the iterator initialisation is done asynchronously.
