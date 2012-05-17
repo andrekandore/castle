@@ -3106,7 +3106,7 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
 /**
  * Add the low freespace callback to the victim list.
  */
-static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
+static void _castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
 {
     BUG_ON(!castle_extent_in_transaction());
 
@@ -3117,6 +3117,28 @@ static void castle_extent_lfs_callback_add(c_ext_event_t *event_hdl)
         /* Add to the end, to maintain FIFO. */
         list_add_tail(&event_hdl->list, &castle_lfs_victim_list);
     }
+}
+
+int castle_extent_lfs_callback_add(int in_tran, c_ext_event_callback_t callback, void *data)
+{
+    c_ext_event_t *event_hdl = NULL;
+
+    /* Either get both parameters or none. */
+    BUG_ON(callback == NULL);
+
+    /* Allocate event handler structure and call low level extent alloc(). */
+    event_hdl = castle_zalloc(sizeof(c_ext_event_t));
+    if (!event_hdl)
+        return -ENOMEM;
+
+    event_hdl->callback = callback;
+    event_hdl->data     = data;
+
+    if (!in_tran)   castle_extent_transaction_start();
+    _castle_extent_lfs_callback_add(event_hdl);
+    if (!in_tran)   castle_extent_transaction_end();
+
+    return 0;
 }
 
 /**
@@ -3305,7 +3327,7 @@ __low_space:
                   alloc_size);
     /* Add the victim handler to the list of handlers of specific type. This handler gets
      * called, when more space is available. */
-    castle_extent_lfs_callback_add(event_hdl);
+    _castle_extent_lfs_callback_add(event_hdl);
 
 __hell:
     if (pool)
@@ -5930,25 +5952,6 @@ static int freespace_available(void)
         return 1;
 }
 
-/*
- * Initialise extent processing low-freespace handler.
- */
-static void init_lfs_handler(void)
-{
-    c_ext_event_t *event_hdl = NULL;
-
-    event_hdl = castle_zalloc(sizeof(c_ext_event_t));
-    if (!event_hdl)
-        BUG();
-
-    event_hdl->callback = castle_extents_process_callback;
-    event_hdl->data     = NULL;
-
-    castle_extent_transaction_start();
-    castle_extent_lfs_callback_add(event_hdl);
-    castle_extent_transaction_end();
-}
-
 #define SHORT_CHECKPOINT_PERIOD 5
 
 /* Controls whether castle_periodic_checkpoint needs to synchronise with extent processor. */
@@ -6265,7 +6268,11 @@ retry:
                             switch (ret) {
                                 case -ENOSPC:
                                     out_of_freespace = 1;
-                                    init_lfs_handler();
+
+                                    /* Initialise extent processing low-freespace handler. */
+                                    BUG_ON(castle_extent_lfs_callback_add(0, /* Not in trans. */
+                                                    castle_extents_process_callback,
+                                                    NULL));
                                     /*
                                      * We're going to park, waiting for freespace.  Disable
                                      * checkpoint sync in the meantime (otherwise checkpoint will
