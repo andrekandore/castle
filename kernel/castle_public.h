@@ -1043,6 +1043,8 @@ typedef enum {
     /* Note: Flags are stored in a uin8_t.  Don't overflow. */
 } c_buf_flags_t;
 
+#define CASTLE_BUFFER_VERSION   1
+
 /**
  * Header for Castle key-value buffers, for iters and stream in/out.
  */
@@ -1052,7 +1054,9 @@ typedef struct castle_buffer_header {
     /*          4 */ uint16_t       nr_entries;     /**< Number of entries in the buffer.       */
     /*          6 */ uint8_t        flags;          /**< Flags specified to this buffer.        */
     /*          7 */ uint8_t        status;         /**< Status of this buffer.                 */
-    /*          8 */
+    /*          8 */ uint8_t        version;        /**< Buffer version.                        */
+    /*          9 */ uint8_t        _unused[7];
+    /*          16 */
 } PACKED c_buf_hdr_t;
 
 /**

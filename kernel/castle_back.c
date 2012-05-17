@@ -2185,6 +2185,7 @@ static void castle_back_buffer_init(c_buf_constructor_t *buf_con,
     buf_hdr->flags      = 0;
     buf_hdr->nr_entries = 0;
     buf_hdr->index_off  = buf_con->cur_hdr_off;
+    buf_hdr->version    = CASTLE_BUFFER_VERSION;
 }
 
 /**
