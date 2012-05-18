@@ -1751,7 +1751,7 @@ static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
     BUG_ON(!list_empty(&stateful_op->op_queue));
     BUG_ON(stateful_op->curr_op != NULL);
 
-    castle_object_iter_finish(stateful_op->iterator.iterator);
+    castle_object_iter_finish(stateful_op->iterator.iterator, -ETIMEDOUT);
 
     spin_lock(&stateful_op->lock);
     castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
@@ -2540,7 +2540,7 @@ static void __castle_back_iter_finish(void *data)
     BUG_ON(stateful_op->cancelled);
     stateful_op->cancelled++;
 
-    err = castle_object_iter_finish(stateful_op->iterator.iterator);
+    err = castle_object_iter_finish(stateful_op->iterator.iterator, 0);
 
     stateful_debug(stateful_op_fmt_str" err=%d\n",
             stateful_op2str(stateful_op), err);

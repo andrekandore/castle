@@ -28,7 +28,7 @@ int          castle_object_iter_init         (struct castle_attachment *attachme
 int          castle_object_iter_next         (castle_object_iterator_t *iterator,
                                               castle_object_iter_next_available_t callback,
                                               void *data);
-int          castle_object_iter_finish       (castle_object_iterator_t *iter);
+int          castle_object_iter_finish       (castle_object_iterator_t *iter, int err);
 int          castle_object_replace           (struct castle_object_replace *replace,
                                               struct castle_attachment *attachment,
                                               int cpu_index,

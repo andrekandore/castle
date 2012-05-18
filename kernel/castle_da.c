@@ -2254,10 +2254,6 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 {
     int i;
 
-    /* Only cancel the iterator if it was actually initialized properly. */
-    if (iter->err != 0)
-        return;
-
     /* Cancel merged iterator. */
     castle_ct_merged_iter_cancel(&iter->merged_iter);
 
@@ -2277,7 +2273,12 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
 
     /* Complete incremental backup. */
     if (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)
+    {
+        if (iter->err)
+            castle_printk(LOG_USERINFO, "Incremental backup has failed\n");
+
         castle_da_incremental_backup_finish(iter->da, iter->err);
+    }
 }
 
 /**
@@ -13044,6 +13045,8 @@ static int castle_da_incremental_backup_finish(struct castle_double_array *da, i
     /* Sanity Checks. */
     BUG_ON(!test_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags));
 
+    castle_printk(LOG_USERINFO, "Completing Backup on DA: 0x%x with err: %d.\n", da->id, err);
+
     if (!err)
     {
         tree_seq_t ct_seq;
@@ -13063,8 +13066,6 @@ static int castle_da_incremental_backup_finish(struct castle_double_array *da, i
         castle_da_barrier_ct_destroy(da, da->inc_backup.barrier_ct);
 
     clear_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags);
-
-    castle_printk(LOG_USERINFO, "Completed Backup on DA: 0x%x.\n", da->id);
 
     da->inc_backup.barrier_ct = NULL;
 
