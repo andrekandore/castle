@@ -1261,8 +1261,11 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
     return 0;
 }
 
-int castle_object_iter_finish(castle_object_iterator_t *iterator)
+int castle_object_iter_finish(castle_object_iterator_t *iterator, int err)
 {
+    /* Pass the error to da_rq_iter, it is important for incremental backup. */
+    iterator->da_rq_iter.err = err;
+
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
     iterator->btree->key_dealloc(iterator->end_key);
