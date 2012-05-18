@@ -2072,13 +2072,15 @@ static void castle_back_buffer_ool_memcpy(void *dest, c_val_tup_t *cvt_src)
  */
 static uint8_t castle_back_buffer_cvt_type_to_user(c_val_tup_t cvt)
 {
-    /* We should never be returning those to userspace. */
+    /* We should never be returning these to userspace. */
     BUG_ON(CVT_NODE(cvt));
-    BUG_ON(CVT_COUNTER_ADD(cvt));
 
     /* Check for counters before checking for inline (which will also be true). */
-    if(CVT_COUNTER_SET(cvt) || CVT_LOCAL_COUNTER(cvt))
-        return CASTLE_VALUE_TYPE_INLINE_COUNTER;
+    if(CVT_COUNTER_SET(cvt) || CVT_COUNTER_LOCAL_SET(cvt))
+        return CASTLE_VALUE_TYPE_COUNTER;
+
+    if(CVT_COUNTER_ADD(cvt) || CVT_COUNTER_LOCAL_ADD(cvt))
+        return CASTLE_VALUE_TYPE_COUNTER_DELTA;
 
     if(CVT_INLINE(cvt))
         return CASTLE_VALUE_TYPE_INLINE;
@@ -2122,6 +2124,10 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     c_buf_kv_hdr_t *kv_hdr;
     int key_len, val_len;
     uint32_t total_kvp_len;
+    uint8_t val_type;
+
+    /* Only incremental backup should return counter adds. */
+    BUG_ON(!(buf_con->flags & CASTLE_RING_FLAG_INC_BACKUP) && CVT_COUNTER_ADD(*val));
 
     key_len = key->length + 4;
     if (CVT_INLINE(*val)
@@ -2148,22 +2154,31 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     memcpy(buf_con->buf + buf_con->cur_kv_off, key, key_len);
 
     /* Copy value into buffer (or set collection_id). */
+    val_type = castle_back_buffer_cvt_type_to_user(*val);
     if (likely(val_len))
     {
         buf_con->cur_kv_off -= val_len;
         kv_hdr->val_off      = buf_con->cur_kv_off;
-        kv_hdr->val_type     = CASTLE_VALUE_TYPE_INLINE;
         if (CVT_INLINE(*val))
             memcpy(buf_con->buf + buf_con->cur_kv_off, val->val_p, val_len);
         else
+        {
             castle_back_buffer_ool_memcpy(buf_con->buf + buf_con->cur_kv_off, val);
+            kv_hdr->val_type = CASTLE_VALUE_TYPE_INLINE;
+        }
     }
     else
-    {
-        kv_hdr->val_type      = castle_back_buffer_cvt_type_to_user(*val);
         kv_hdr->collection_id = collection_id;
-    }
 
+    /* With the exception of iterators for incremental backup we will have
+     * accumulated counters from all trees relevant to the requested range so
+     * return a counter "set" type in the buffer.  By its nature, incremental
+     * backup may have seen a subset of trees, so return the "delta" type. */
+    if (!(buf_con->flags & CASTLE_RING_FLAG_INC_BACKUP)
+            && val_type == CASTLE_VALUE_TYPE_COUNTER_DELTA)
+        kv_hdr->val_type   = CASTLE_VALUE_TYPE_COUNTER;
+    else
+        kv_hdr->val_type   = val_type;
     kv_hdr->val_len        = val->length;
     kv_hdr->user_timestamp = val->user_timestamp;
 

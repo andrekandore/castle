@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 40 /* last updated by LT */
+#define CASTLE_PROTOCOL_VERSION 41 /* last updated by LT */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -987,10 +987,11 @@ enum {
     CASTLE_VALUE_TYPE_INVALID         = 0,
     /* Following types can be considered "inline" */
     CASTLE_VALUE_TYPE_INLINE          = 1,
-    CASTLE_VALUE_TYPE_INLINE_COUNTER  = 2,
-    CASTLE_VALUE_TYPE_TOMBSTONE       = 3,
+    CASTLE_VALUE_TYPE_COUNTER         = 2,
+    CASTLE_VALUE_TYPE_COUNTER_DELTA   = 3,
+    CASTLE_VALUE_TYPE_TOMBSTONE       = 4,
     /* Following types can be considered "out of line" */
-    CASTLE_VALUE_TYPE_OUT_OF_LINE     = 4
+    CASTLE_VALUE_TYPE_OUT_OF_LINE     = 10
 };
 
 /**
