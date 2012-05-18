@@ -748,10 +748,9 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
         return -EBADFD;
     }
 
-    /* We don't queue the op during fastpath. */
-    BUG_ON(op->req.tag == CASTLE_RING_ITER_FINISH_FASTPATH);
+    BUG_ON(op->req.tag == CASTLE_RING_ITER_FINISH_FASTPATH && !list_empty(&stateful_op->op_queue));
 
-    if (op->req.tag == CASTLE_RING_ITER_FINISH)
+    if (op->req.tag == CASTLE_RING_ITER_FINISH || op->req.tag == CASTLE_RING_ITER_FINISH_FASTPATH)
         /* Don't process any queued ITER_NEXT ops if we have been informed that
          * the iterator is to terminate (either by ITER_NEXT or userspace). */
         list_add(&op->list, &stateful_op->op_queue);
