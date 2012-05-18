@@ -748,6 +748,9 @@ static int castle_back_stateful_op_queue_op(struct castle_back_stateful_op *stat
         return -EBADFD;
     }
 
+    /* We don't queue the op during fastpath. */
+    BUG_ON(op->req.tag == CASTLE_RING_ITER_FINISH_FASTPATH);
+
     if (op->req.tag == CASTLE_RING_ITER_FINISH)
         /* Don't process any queued ITER_NEXT ops if we have been informed that
          * the iterator is to terminate (either by ITER_NEXT or userspace). */
@@ -1955,6 +1958,7 @@ static void castle_back_iter_call_queued(struct castle_back_stateful_op *statefu
                 break;
 
             case CASTLE_RING_ITER_FINISH:
+            case CASTLE_RING_ITER_FINISH_FASTPATH:
                 /* ITER_FINISH can only ever occur once for a stateful op, so
                  * don't requeue allowing a no-requeue fastpath iterator. */
                 stateful_debug(stateful_op_fmt_str" ITER_FINISH\n",
@@ -2348,7 +2352,7 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         spin_lock(&stateful_op->lock);
         BUG_ON(!stateful_op->curr_op);
 
-        op->req.tag = CASTLE_RING_ITER_FINISH;
+        op->req.tag = CASTLE_RING_ITER_FINISH_FASTPATH;
         op->req.iter_finish.token = stateful_op->token;
         spin_unlock(&stateful_op->lock);
 
@@ -2652,13 +2656,20 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 static void __castle_back_iter_finish(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
+    struct castle_back_op *op = stateful_op->curr_op;
     int err;
 
     /* Verify this iter hasn't been finished twice. */
     BUG_ON(stateful_op->cancelled);
     stateful_op->cancelled++;
 
-    err = castle_object_iter_finish(stateful_op->iterator.iterator, 0);
+    /* CASTLE_RING_ITER_FINISH_FASTPATH: Finished after returning all keys.
+     *
+     * CASTLE_RING_ITER_FINISH: Explicit call for finish from userspace, which means iterator
+     * hasn't yet returned all the keys. If it did, iterator should already be closed by
+     * CASTLE_RING_ITER_FINISH_FASTPATH before. */
+    err = castle_object_iter_finish(stateful_op->iterator.iterator,
+                          (op->req.tag == CASTLE_RING_ITER_FINISH_FASTPATH)? 0: -ECONNABORTED);
 
     stateful_debug(stateful_op_fmt_str" err=%d\n",
             stateful_op2str(stateful_op), err);
