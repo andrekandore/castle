@@ -782,6 +782,7 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_ITER_NEXT 8
 #define CASTLE_RING_ITER_SKIP 9
 #define CASTLE_RING_ITER_FINISH 10
+//#define CASTLE_RING_ITER_FINISH_FASTPATH 19 : Added below.
 #define CASTLE_RING_REMOVE 11
 #define CASTLE_RING_COUNTER_REPLACE 12
 #define CASTLE_RING_TIMESTAMPED_REPLACE 13
@@ -791,6 +792,7 @@ typedef struct castle_var_length_btree_key {
 #define CASTLE_RING_STREAM_IN_START 16
 #define CASTLE_RING_STREAM_IN_NEXT 17
 #define CASTLE_RING_STREAM_IN_FINISH 18
+#define CASTLE_RING_ITER_FINISH_FASTPATH 19
 
 typedef uint32_t castle_interface_token_t;
 
