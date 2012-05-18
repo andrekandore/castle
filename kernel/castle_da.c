@@ -3494,31 +3494,29 @@ skip_data_ext:
     return 0;
 
 no_space:
-    /* Register callback with extents. */
-    BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
-                                          lfs_callback,
-                                          lfs_data));
-
-    /* If the allocation is not a reallocation, update victim count. */
-    if (lfs_callback && !is_realloc)
-        castle_da_lfs_victim_count_inc(da);
-
     /* Take a copy of ext IDs. */
     internal_ext_id = lfs->internal_ext.ext_id;
     tree_ext_id = lfs->tree_ext.ext_id;
     BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
 
-    /* If there is no callback, no need to kep sizes in this LFS structure. */
-    if (!lfs_callback)
-    {
-        castle_da_lfs_ct_reset(lfs);
-    }
-    else
+    if (lfs_callback)
     {
         /* Reset ext ids. */
         lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
         lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+
+        /* Register callback with extents. */
+        BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
+                                              lfs_callback,
+                                              lfs_data));
+
+        /* If the allocation is not a reallocation, update victim count. */
+        if (!is_realloc)
+            castle_da_lfs_victim_count_inc(da);
     }
+    /* If there is no callback, no need to keep sizes in this LFS structure. */
+    else
+        castle_da_lfs_ct_reset(lfs);
 
     /* End extent transaction. */
     castle_extent_transaction_end();
