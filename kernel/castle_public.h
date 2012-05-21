@@ -1009,6 +1009,7 @@ typedef struct castle_buffer_user_key_value_header {
         void               *val;
         c_collection_id_t   collection_id;
     };
+    castle_user_timestamp_t user_timestamp;
 } c_buf_user_kv_hdr_t;
 
 /**

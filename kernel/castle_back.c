@@ -996,58 +996,43 @@ static int castle_back_reply(struct castle_back_op *op,
 }
 
 /**
- * Copy userland key from user_key to key_out (size key_len).
+ * Copy userland key from one buffer to another.
  *
- * @param user_key  Source key pointer (UAS)
- * @param key_len   Size of user_key
- * @param key_out   Destination pointer (KAS)
+ * @param   src_key Pointer to key
+ * @param   key_len Size of src_key
+ * @param   dst_key Where to copy src_key
+ *
+ * NOTE: Caller must ensure that src_key is in a buffer that will not go away.
  */
-static int castle_back_key_copy_get(struct castle_back_conn *conn,
-                                    c_vl_bkey_t *user_key,
-                                    uint32_t key_len,
-                                    c_vl_bkey_t **key_out)
+static int _castle_back_key_copy_get(c_vl_bkey_t *src_key,
+                                     uint32_t key_len,
+                                     c_vl_bkey_t **dst_key)
 {
-    struct castle_back_buffer *buf;
     c_vl_bkey_t *bkey;
-    int i, err;
-
-    /*
-     * Get buffer with key in it and create a temporary copy
-     * of it, doing whole bunch of checks to make sure we have
-     * a valid key
-     */
+    int err, i;
 
     if (key_len < sizeof(c_vl_bkey_t) || key_len > VLBA_TREE_MAX_KEY_SIZE)
     {
         error("Bad key length %u\n", key_len);
-        err = -ENAMETOOLONG;
-        goto err0;
+        return -ENAMETOOLONG;
     }
 
-    /* Work out the start (inclusive), and the end point (exclusive) of the key block
-       in user memory. */
-    buf = castle_back_buffer_get(conn, (unsigned long)user_key, key_len);
-    if (!buf)
-    {
-        error("Bad user pointer %p\n", user_key);
-        err = -EINVAL;
-        goto err0;
-    }
-
-    bkey = castle_dup_or_copy(castle_back_user_to_kernel(buf, user_key), key_len, NULL, NULL);
+    /* Perform checks on a temporary copy of the key to ensure the key is valid
+     * and that the userspace doesn't modify the key during checks. */
+    bkey = castle_dup_or_copy(src_key, key_len, NULL, NULL);
 
     if (key_len != (bkey->length + 4))
     {
         error("Buffer length(%u) doesn't match with key length(%u)\n", key_len, bkey->length+4);
         err = -EINVAL;
-        goto err1;
+        goto err;
     }
 
     if (*((uint64_t *)bkey->_unused) != 0)
     {
         error("Unused bits need to be set to 0\n");
         err = -EINVAL;
-        goto err1;
+        goto err;
     }
 
     /* Check if the key length is smaller than space needed for all dim_heads. */
@@ -1055,14 +1040,14 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
     {
         error("Too many dimensions %d\n", bkey->nr_dims);
         err = -EINVAL;
-        goto err1;
+        goto err;
     }
 
     if (bkey->nr_dims == 0)
     {
         error("Zero-dimensional key\n");
         err = -EINVAL;
-        goto err1;
+        goto err;
     }
 
     debug("Original key pointer %p\n", user_key);
@@ -1070,16 +1055,16 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
     /* Check if all the key dimensions or sane. */
     for (i=0; i < bkey->nr_dims; i++)
     {
-        uint32_t dim_len    = castle_object_btree_key_dim_length(bkey, i);
-        uint8_t  dim_flags  = castle_object_btree_key_dim_flags_get(bkey, i);
-        uint8_t *dim_data   = castle_object_btree_key_dim_get(bkey, i);
+        uint32_t dim_len   = castle_object_btree_key_dim_length(bkey, i);
+        uint8_t  dim_flags = castle_object_btree_key_dim_flags_get(bkey, i);
+        uint8_t *dim_data  = castle_object_btree_key_dim_get(bkey, i);
 
         /* Flags other than INFINITY flags are not supported. */
         if (dim_flags & (KEY_DIMENSION_FLAGS_MASK ^ KEY_DIMENSION_INFINITY_FLAGS_MASK))
         {
             error("Found flags other than INFINITY %u\n", dim_flags);
             err = -EINVAL;
-            goto err1;
+            goto err;
         }
 
         /* Only one kind of infinity is possible. */
@@ -1088,7 +1073,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
         {
             error("Found both PLUS_INFINITY and MINUS_INFINITY for the same dimension.\n");
             err = -EINVAL;
-            goto err1;
+            goto err;
         }
 
         /* Length should be zero, if the dimension is infinity. */
@@ -1096,7 +1081,7 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
         {
             error("Found mis-match for INFINITY flags and dimension length.\n");
             err = -EINVAL;
-            goto err1;
+            goto err;
         }
 
         /* Dimension payload shouldn't cross key boundaries. */
@@ -1105,13 +1090,11 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
             error("Dimension payload going beyond the key boundaries [%p, %u] - [%p, %u]\n",
                   dim_data, dim_len, bkey, key_len);
             err = -EINVAL;
-            goto err1;
+            goto err;
         }
     }
 
-    *key_out = bkey;
-
-    castle_back_buffer_put(conn, buf);
+    *dst_key = bkey;
 
 #ifdef DEBUG
     vl_bkey_print(LOG_DEBUG, bkey);
@@ -1119,9 +1102,43 @@ static int castle_back_key_copy_get(struct castle_back_conn *conn,
 
     return 0;
 
-err1: castle_free(bkey);
-      castle_back_buffer_put(conn, buf);
-err0: return err;
+err:
+    castle_free(bkey);
+    return err;
+}
+
+/**
+ * Copy userland key from uas_key to dst_key (size key_len).
+ *
+ * @param conn      Connection to get buffer for
+ * @param uas_key   Source key pointer (UAS)
+ * @param key_len   Size of user_key
+ * @param dst_key   Destination pointer (KAS)
+ */
+static int castle_back_key_copy_get(struct castle_back_conn *conn,
+                                    c_vl_bkey_t *uas_key,
+                                    uint32_t key_len,
+                                    c_vl_bkey_t **dst_key)
+{
+    struct castle_back_buffer *buf;
+    c_vl_bkey_t *src_key;
+    int err;
+
+    /* Take a reference to the usrspace buffer and work out start (inclusive)
+     * and end point (exclusive) of the key block in user space. */
+    buf = castle_back_buffer_get(conn, (unsigned long)uas_key, key_len);
+    if (!buf)
+    {
+        error("Bad user pointer %p\n", uas_key);
+        return -EINVAL;
+    }
+
+    src_key = castle_back_user_to_kernel(buf, uas_key);
+    err = _castle_back_key_copy_get(src_key, key_len, dst_key);
+
+    castle_back_buffer_put(conn, buf);
+
+    return err;
 }
 
 static void castle_back_replace_complete(struct castle_object_replace *replace, int err)
@@ -2043,6 +2060,135 @@ err1: /* No one could have added another op to queue as we haven't returns token
       spin_lock(&stateful_op->lock);
       castle_back_put_stateful_op(conn, stateful_op);
 err0: castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+}
+
+/**
+ * Free any memory allocated by castle_buffer_kvp_get().
+ *
+ * @also castle_buffer_kvp_get()
+ */
+void castle_buffer_kvp_free(c_buf_user_kv_hdr_t *user_hdr)
+{
+    castle_free(user_hdr->key);
+}
+
+/**
+ * Get key value pair from buffer.
+ *
+ * @param   buf_con     Pointer to buffer consumer structure
+ * @param   kv_index    Get kv_index^th key from buffer
+ * @param   user_hdr    Return structure
+ *
+ * This is the kernel re-implementation of the same libcastle function.
+ *
+ * NOTE: Consumer must call castle_buffer_kvp_free() on success.
+ *
+ * @return -EINVAL  Buffer sanity checking failed
+ * @return  0       Success
+ *
+ * @also castle_buffer_kvp_free()
+ */
+int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
+                          int kv_index,
+                          c_buf_user_kv_hdr_t *user_hdr)
+{
+    c_buf_kv_hdr_t kv_hdr;
+    uint32_t key_len;
+    int err;
+
+    /* Get copy of key value header.  kv_hdrs[] already sanity checked. */
+    memcpy(&kv_hdr, &buf_con->kv_hdrs[kv_index], sizeof(c_buf_kv_hdr_t));
+
+    /* Sanity check key in buffer and set key pointer. */
+    if (kv_hdr.key_off + sizeof(c_vl_bkey_t) > buf_con->buf_len)
+        return -EINVAL;
+    user_hdr->key = buf_con->buf + kv_hdr.key_off;
+    key_len = user_hdr->key->length + 4;
+    if (kv_hdr.key_off + key_len > buf_con->buf_len)
+        return -EINVAL;
+    if ((err = _castle_back_key_copy_get(user_hdr->key, key_len, &user_hdr->key)))
+        return err;
+
+    /* Sanity check value in buffer and set val pointer or collection_id. */
+    if (kv_hdr.val_type == CASTLE_VALUE_TYPE_INVALID)
+    {
+        err = -EINVAL;
+        goto err;
+    }
+    else if (kv_hdr.val_type < CASTLE_VALUE_TYPE_OUT_OF_LINE)
+    {
+        if (kv_hdr.val_off + kv_hdr.val_len > buf_con->buf_len)
+        {
+            err = -EINVAL;
+            goto err;
+        }
+        if (kv_hdr.val_len > MEDIUM_OBJECT_LIMIT)
+        {
+            err = -EINVAL;
+            goto err;
+        }
+        user_hdr->val = buf_con->buf + kv_hdr.val_off;
+    }
+    else if (kv_hdr.val_type == CASTLE_VALUE_TYPE_OUT_OF_LINE)
+    {
+        user_hdr->val           = NULL;
+        user_hdr->collection_id = kv_hdr.collection_id;
+    }
+    else
+    {
+        err = -EINVAL;
+        goto err;
+    }
+
+    user_hdr->val_type       = kv_hdr.val_type;
+    user_hdr->val_len        = kv_hdr.val_len;
+    user_hdr->user_timestamp = kv_hdr.user_timestamp;
+
+    return 0;
+
+err:
+    castle_buffer_kvp_free(user_hdr);
+
+    return err;
+}
+
+/**
+ * Initialise buffer consumer and return number of key and value pairs.
+ *
+ * This is the kernel re-implementation of the same libcastle function.
+ */
+int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
+                                void *buf,
+                                uint32_t buf_len)
+{
+    c_buf_hdr_t *buf_hdr;
+    uint16_t nr_entries;
+    uint32_t index_off;
+
+    /* Sanity check buffer header fits in buffer and set pointer. */
+    if (buf_len < sizeof(c_buf_hdr_t))
+        return -EINVAL;
+    buf_hdr = buf;
+
+    /* Sanity check buffer version. */
+    if (buf_hdr->version != CASTLE_BUFFER_VERSION)
+        return -EINVAL;
+
+    /* Sanity check all key value headers fit in buffer.
+     *
+     * Store copies of nr_entries and index_off as we can't guarantee that they
+     * won't be changed after we check them. */
+    nr_entries = buf_hdr->nr_entries;
+    index_off  = buf_hdr->index_off;
+    if (index_off + nr_entries * sizeof(c_buf_kv_hdr_t) > buf_len)
+        return -EINVAL;
+
+    buf_con->buf     = buf;
+    buf_con->buf_len = buf_len;
+    buf_con->buf_hdr = buf_hdr;
+    buf_con->kv_hdrs = buf + index_off;
+
+    return nr_entries;
 }
 
 /**
@@ -3433,6 +3579,146 @@ static void castle_back_put_chunk_continue(void *data)
     might_resched();
 }
 
+/**
+ * Perform stream in on stateful_op->curr_op->buf.
+ */
+static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *stateful_op)
+{
+    struct castle_back_op *op = stateful_op->curr_op;
+    struct castle_immut_tree_construct *da_stream;
+    struct castle_attachment *attachment;
+    struct castle_btree_type *btree;
+    c_buf_user_kv_hdr_t kv_hdr;
+    c_buf_consumer_t buf_con;
+    int err, nr_keys, kvp;
+    c_val_tup_t cvt;
+    void *key;
+
+    /* Basic init and checks. */
+    BUG_ON(!stateful_op->attachment);
+    da_stream  = stateful_op->stream_in.da_stream;
+    attachment = stateful_op->attachment;
+    btree      = castle_double_array_btree_type_get(attachment);
+
+    /* Initialise buffer consumer, get number of keys. */
+    nr_keys    = castle_buffer_consumer_init(&buf_con,
+                                             op->buf->buffer,
+                                             op->buf->size);
+    if (nr_keys < 0)
+        return -EINVAL;
+
+    /* Iterate over all key value pairs in the buffer. */
+    for (kvp = 0; kvp < nr_keys; kvp++)
+    {
+        err = castle_buffer_kvp_get(&buf_con, kvp, &kv_hdr);
+        if (err)
+            return err;
+
+        /* Construct key. */
+        key = btree->key_pack(kv_hdr.key, NULL, NULL);
+        if (!key)
+        {
+            err = -ENOMEM;
+            goto err;
+        }
+#if 0
+        castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
+        btree->key_print(LOG_DEVEL, key);
+#endif
+
+        /* Construct the CVT. */
+        switch (kv_hdr.val_type)
+        {
+            case CASTLE_VALUE_TYPE_INLINE:
+                /* Buffer inline vlaue could be inline or a medium object. */
+                if (kv_hdr.val_len <= MAX_INLINE_VAL_SIZE)
+                {
+                    CVT_INLINE_INIT(cvt, kv_hdr.val_len, kv_hdr.val);
+                }
+                else
+                {
+                    c_byte_off_t ext_space_needed;
+                    c_ext_pos_t mobj_ext_cep;
+                    int total_blocks;
+                    void *val_ptr;
+
+                    BUG_ON(kv_hdr.val_len > MEDIUM_OBJECT_LIMIT);
+
+                    /* Allocate space for the new copy. */
+                    BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
+                    total_blocks = (kv_hdr.val_len - 1) / C_BLK_SIZE + 1;
+                    ext_space_needed = total_blocks * C_BLK_SIZE;
+                    castle_printk(LOG_DEBUG, "%s::total_blocks = %u, ext_space_needed = %lu\n",
+                        total_blocks, ext_space_needed);
+                    BUG_ON(castle_ext_freespace_get(&da_stream->tree->data_ext_free,
+                                                    ext_space_needed,
+                                                    0,
+                                                    &mobj_ext_cep) < 0);
+
+                    /* Copy buffer value into medium object extent. */
+                    val_ptr = kv_hdr.val;
+                    while (total_blocks > 0)
+                    {
+                        int blocks;
+                        c2_block_t *c_c2b;
+                        int step = total_blocks * PAGE_SIZE;
+
+                        blocks = total_blocks;
+                        total_blocks -= blocks;
+
+                        c_c2b = castle_cache_block_get(mobj_ext_cep, blocks, MERGE_OUT);
+                        write_lock_c2b(c_c2b);
+                        update_c2b(c_c2b);
+                        memcpy(c2b_buffer(c_c2b), kv_hdr.val, step);
+                        dirty_c2b(c_c2b);
+                        write_unlock_c2b(c_c2b);
+                        put_c2b(c_c2b);
+                        mobj_ext_cep.offset += step;
+                        val_ptr += step;
+                    }
+
+                    CVT_MEDIUM_OBJECT_INIT(cvt, kv_hdr.val_len, mobj_ext_cep);
+                }
+                break;
+            case CASTLE_VALUE_TYPE_COUNTER:
+                CVT_COUNTER_SET_INIT(cvt, kv_hdr.val_len, kv_hdr.val);
+                break;
+            case CASTLE_VALUE_TYPE_COUNTER_DELTA:
+                CVT_COUNTER_ADD_INIT(cvt, kv_hdr.val_len, kv_hdr.val);
+                break;
+            case CASTLE_VALUE_TYPE_TOMBSTONE:
+                CVT_TOMBSTONE_INIT(cvt);
+                break;
+            case CASTLE_VALUE_TYPE_OUT_OF_LINE:
+                /* @TODO support out of line objects in stream-in */
+                // could be mobj or lobj
+                err = -EINVAL;
+                goto err;
+                break;
+            default:
+                BUG(); /* trust castle_buffer_kvp_get() */
+                break;
+        }
+        cvt.user_timestamp = kv_hdr.user_timestamp;
+
+        BUG_ON(castle_da_in_stream_entry_add(da_stream,
+                                             key,
+                                             attachment->version,
+                                             cvt));
+
+        castle_free(key);
+        castle_buffer_kvp_free(&kv_hdr);
+    }
+
+    return 0;
+
+err:
+    if (key)
+        castle_free(key);
+    castle_buffer_kvp_free(&kv_hdr);
+    return err;
+}
+
 static void castle_back_stream_in_continue(void *data)
 {
     struct castle_back_stateful_op *stateful_op = data;
@@ -3455,15 +3741,9 @@ static void castle_back_stream_in_continue(void *data)
     {
         case CASTLE_RING_STREAM_IN_NEXT:
             spin_unlock(&stateful_op->lock);
-            ret = castle_object_batch_in_stream(attachment,
-                    stateful_op->stream_in.da_stream,
-                    stateful_op->curr_op->buf->buffer,
-                    stateful_op->curr_op->buf->size);
-            if (ret)
-            {
+            if ((ret = castle_back_stream_in_buf_process(stateful_op)))
                 castle_printk(LOG_ERROR, "%s::stateful op %llu failed with error code %d.\n",
                         __FUNCTION__, stateful_op->token, ret);
-            }
             spin_lock(&stateful_op->lock);
             castle_back_buffer_put(stateful_op->conn, op->buf);
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
