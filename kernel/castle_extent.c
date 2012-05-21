@@ -3040,17 +3040,17 @@ c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
                                       c_chk_cnt_t              alloc_size,
                                       int                      in_tran)
 {
-    int ret = 0;
+    c_ext_id_t ext_id;
 
     /* If the caller is not already in transaction. start a transaction. */
     if (!in_tran)   castle_extent_transaction_start();
 
-    ret = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
+    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
 
     /* End the transaction. */
     if (!in_tran)   castle_extent_transaction_end();
 
-    return ret;
+    return ext_id;
 }
 
 /**
