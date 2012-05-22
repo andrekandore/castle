@@ -12890,6 +12890,8 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
     if (is_new_key < 0)
     {
         castle_printk(LOG_ERROR, "Stream-in keys should be in increasing order.\n");
+        constr->btree->key_print(LOG_DEBUG, constr->last_key);
+        constr->btree->key_print(LOG_DEBUG, key);
         return -EINVAL;
     }
 

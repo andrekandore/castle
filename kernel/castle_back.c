@@ -157,9 +157,10 @@ struct castle_back_iterator
 struct castle_back_stream_in
 {
     c_collection_id_t     collection_id;           /**< Collection ID.                            */
-    c_chk_cnt_t           expected_entries;        /**< How many entries the user said to expect. */
+    uint64_t              expected_entries;        /**< How many entries the user said to expect. */
     c_chk_cnt_t           expected_dataext_chunks; /**< How many chunks the user said we would need
                                                         for medium objects extent.                */
+    uint64_t              received_entries;        /**< Entries provided so far.                  */
     struct castle_immut_tree_construct *da_stream; /**< DA in_stream structure.                   */
 };
 
@@ -3211,6 +3212,8 @@ static void castle_back_stream_in_start(void *data)
                                     = op->req.stream_in_start.entries_count;
     stateful_op->stream_in.expected_dataext_chunks
                                     = op->req.stream_in_start.medium_object_chunks;
+    stateful_op->stream_in.received_entries
+                                    = 0;
 
     tree_ext_size     = castle_back_stream_in_tree_ext_size_wc_estimate(stateful_op);
     internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
@@ -3604,22 +3607,33 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     nr_keys    = castle_buffer_consumer_init(&buf_con,
                                              op->buf->buffer,
                                              op->buf->size);
-    if (nr_keys < 0)
+    if (unlikely(nr_keys < 0))
         return -EINVAL;
+
+    if (unlikely(stateful_op->stream_in.received_entries
+                + nr_keys > stateful_op->stream_in.expected_entries))
+    {
+        castle_printk(LOG_DEBUG, "%s: Attempt to insert %d keys would overflow "
+                "expected %lu (already received %lu).\n",
+                nr_keys,
+                stateful_op->stream_in.expected_entries,
+                stateful_op->stream_in.received_entries);
+        return -ENOSPC;
+    }
 
     /* Iterate over all key value pairs in the buffer. */
     for (kvp = 0; kvp < nr_keys; kvp++)
     {
         err = castle_buffer_kvp_get(&buf_con, kvp, &kv_hdr);
         if (err)
-            return err;
+            goto err1;
 
         /* Construct key. */
         key = btree->key_pack(kv_hdr.key, NULL, NULL);
         if (!key)
         {
             err = -ENOMEM;
-            goto err;
+            goto err2;
         }
 #if 0
         castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
@@ -3693,7 +3707,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                 /* @TODO support out of line objects in stream-in */
                 // could be mobj or lobj
                 err = -EINVAL;
-                goto err;
+                goto err2;
                 break;
             default:
                 BUG(); /* trust castle_buffer_kvp_get() */
@@ -3705,18 +3719,22 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                                                          key,
                                                          attachment->version,
                                                          cvt)))
-            goto err;
+            goto err2;
 
         castle_free(key);
         castle_buffer_kvp_free(&kv_hdr);
     }
 
+    stateful_op->stream_in.received_entries += nr_keys;
+
     return 0;
 
-err:
+err2:
     if (key)
         castle_free(key);
     castle_buffer_kvp_free(&kv_hdr);
+err1:
+    stateful_op->stream_in.received_entries += kvp + 1;
     return err;
 }
 
