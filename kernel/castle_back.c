@@ -3701,10 +3701,11 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         }
         cvt.user_timestamp = kv_hdr.user_timestamp;
 
-        BUG_ON(castle_da_in_stream_entry_add(da_stream,
-                                             key,
-                                             attachment->version,
-                                             cvt));
+        if (unlikely(err = castle_da_in_stream_entry_add(da_stream,
+                                                         key,
+                                                         attachment->version,
+                                                         cvt)))
+            goto err;
 
         castle_free(key);
         castle_buffer_kvp_free(&kv_hdr);
