@@ -161,6 +161,7 @@ struct castle_back_stream_in
     c_chk_cnt_t           expected_dataext_chunks; /**< How many chunks the user said we would need
                                                         for medium objects extent.                */
     uint64_t              received_entries;        /**< Entries provided so far.                  */
+    c_byte_off_t          received_mobj_off;       /**< Last offset used in medium object extent. */
     struct castle_immut_tree_construct *da_stream; /**< DA in_stream structure.                   */
 };
 
@@ -3212,6 +3213,8 @@ static void castle_back_stream_in_start(void *data)
                                     = op->req.stream_in_start.medium_object_chunks;
     stateful_op->stream_in.received_entries
                                     = 0;
+    stateful_op->stream_in.received_mobj_off
+                                    = 0;
 
     tree_ext_size     = castle_back_stream_in_tree_ext_size_wc_estimate(stateful_op);
     internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
@@ -3662,10 +3665,18 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     ext_space_needed = total_blocks * C_BLK_SIZE;
                     castle_printk(LOG_DEBUG, "%s::total_blocks = %u, ext_space_needed = %lu\n",
                         total_blocks, ext_space_needed);
-                    BUG_ON(castle_ext_freespace_get(&da_stream->tree->data_ext_free,
-                                                    ext_space_needed,
-                                                    0,
-                                                    &mobj_ext_cep) < 0);
+                    if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
+                                                        ext_space_needed,
+                                                        0, /* was_preallocated */
+                                                        &mobj_ext_cep)) < 0)
+                    {
+                        castle_printk(LOG_DEBUG, "%s: Failed to get medium object freespace, "
+                                "err=%d.\n", __FUNCTION__);
+                        err = -ENOSPC;
+                        goto err2;
+                    }
+                    else
+                        stateful_op->stream_in.received_mobj_off = mobj_ext_cep.offset;
 
                     /* Copy buffer value into medium object extent. */
                     val_ptr = kv_hdr.val;
