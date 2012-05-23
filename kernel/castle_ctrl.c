@@ -40,19 +40,30 @@ static DEFINE_MUTEX(castle_control_lock);
 static DECLARE_WAIT_QUEUE_HEAD(castle_control_wait_q);
 
 struct task_struct *ctrl_lock_holder = NULL;
+static long ctrl_lock_start_jiffies;
+
 void castle_ctrl_lock(void)
 {
     mutex_lock(&castle_control_lock);
     ctrl_lock_holder = current;
+    ctrl_lock_start_jiffies = jiffies;
 }
 
 void castle_ctrl_unlock(void)
 {
+    long duration;
+
     /* if we BUG here, it means we just did a CASTLE_TRANSACTION_END without
        first doing a CASTLE_TRANSACTION_BEGIN. */
     BUG_ON(!castle_ctrl_is_locked());
     ctrl_lock_holder = NULL;
+    duration = jiffies - ctrl_lock_start_jiffies;
     mutex_unlock(&castle_control_lock);
+    if(duration > 1000)
+    {
+        castle_printk(LOG_ERROR, "Detected ctrl lock being taken for > 1000 jiffies (~1s).");
+        WARN_ON(1);
+    }
 }
 
 int castle_ctrl_is_locked(void)
@@ -965,6 +976,13 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
     /* Handle ioctl from the control program outside of the transaction lock. */
     if(castle_ctrl_prog_ioctl(&ioctl))
         goto copy_out;
+
+    if(ioctl.cmd == CASTLE_CTRL_COLLECTION_DETACH)
+    {
+        castle_printk(LOG_USERINFO,
+                     "Request to detach attachment %d received.\n",
+                     ioctl.collection_detach.collection);
+    }
 
     CASTLE_TRANSACTION_BEGIN;
     debug("Lock taken: in_atomic=%d.\n", in_atomic());
