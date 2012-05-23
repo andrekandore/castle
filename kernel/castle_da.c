@@ -3308,7 +3308,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
 {
     struct castle_double_array *da = lfs->da;
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
-    c_chk_cnt_t phy_ext_size;
+    unsigned long ext_flags;
 
     if (growable)
         castle_printk(LOG_UNLIMITED, "%s::growable\n", __FUNCTION__);
@@ -3355,7 +3355,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
                                                    da->id,
                                                    EXT_T_INTERNAL_NODES,
-                                                   lfs->internal_ext.size, 1);
+                                                   lfs->internal_ext.size,
+                                                   CASTLE_EXT_FLAGS_NONE, 1);
 
     if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
     {
@@ -3365,7 +3366,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                        da->id,
                                                        EXT_T_INTERNAL_NODES,
-                                                       lfs->internal_ext.size, 1);
+                                                       lfs->internal_ext.size,
+                                                       CASTLE_EXT_FLAGS_NONE, 1);
         if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
@@ -3379,15 +3381,14 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
          * ATTEMPT to allocate leaf node SSD extent. */
         if(castle_use_ssd_leaf_nodes)
         {
-            /* If the extent is growable don't allocate any space on disk, for now. */
-            phy_ext_size = growable ? 0: lfs->tree_ext.size;
+            ext_flags = growable ? CASTLE_EXT_FLAG_GROWABLE : CASTLE_EXT_FLAGS_NONE;
 
-            lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_ssd_rda_lvl(),
-                                                              da->id,
-                                                              EXT_T_LEAF_NODES,
-                                                              lfs->tree_ext.size,
-                                                              phy_ext_size,
-                                                              1);
+            lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
+                                                       da->id,
+                                                       EXT_T_LEAF_NODES,
+                                                       lfs->tree_ext.size,
+                                                       ext_flags,
+                                                       1);
             castle_printk(LOG_DEBUG, "%s:: ssd extent %d\n", __FUNCTION__,
                                      lfs->tree_ext.ext_id);
         }
@@ -3397,18 +3398,18 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
     {
         /* If the extent is growable don't allocate any space on disk, for now. */
-        phy_ext_size = growable ? 0: lfs->tree_ext.size;
+        ext_flags = growable ? CASTLE_EXT_FLAG_GROWABLE : CASTLE_EXT_FLAGS_NONE;
 
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
         lfs->leafs_on_ssds = 0;
 
-        lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
-                                                          da->id,
-                                                          EXT_T_LEAF_NODES,
-                                                          lfs->tree_ext.size,
-                                                          phy_ext_size,
-                                                          1); /*in_tran*/
+        lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                                   da->id,
+                                                   EXT_T_LEAF_NODES,
+                                                   lfs->tree_ext.size,
+                                                   ext_flags,
+                                                   1); /*in_tran*/
         castle_printk(LOG_DEBUG, "%s:: tree extent %d\n", __FUNCTION__,
                                  lfs->tree_ext.ext_id);
 
@@ -3428,14 +3429,14 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
      * sum of both the trees. */
 
     /* If the extent is growable don't allocate any space on disk, for now. */
-    phy_ext_size = growable ? 0: lfs->data_ext.size;
+    ext_flags = growable ? CASTLE_EXT_FLAG_GROWABLE : CASTLE_EXT_FLAGS_NONE;
 
-    lfs->data_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
-                                                      da->id,
-                                                      EXT_T_MEDIUM_OBJECTS,
-                                                      lfs->data_ext.size,
-                                                      phy_ext_size,
-                                                      1);
+    lfs->data_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                               da->id,
+                                               EXT_T_MEDIUM_OBJECTS,
+                                               lfs->data_ext.size,
+                                               ext_flags,
+                                               1);
 
     castle_printk(LOG_DEBUG, "%s:: data extent %d\n", __FUNCTION__,
                              lfs->data_ext.ext_id);

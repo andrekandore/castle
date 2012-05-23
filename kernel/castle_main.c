@@ -300,6 +300,7 @@ int castle_new_ext_freespace_init(c_ext_free_t           *ext_free,
                                  da_id,
                                  ext_type,
                                  nr_chunks,
+                                 CASTLE_EXT_FLAGS_NONE,
                                  in_tran);
     if(EXT_ID_INVAL(ext_id))
         return -ENOSPC;

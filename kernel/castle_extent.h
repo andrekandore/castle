@@ -19,6 +19,13 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 #define CASTLE_EXT_ALIVE_BIT            (0)
 #define CASTLE_EXT_REBUILD_BIT          (1) /* Extent rebuild started. Use shadow maps only. */
 
+/* Extent bit flags that are used as parameters for castle_extent_alloc(). */
+#define CASTLE_EXT_GROWABLE_BIT         (63)
+#define CASTLE_EXT_FLAG_GROWABLE        (1UL << 63)
+
+#define CASTLE_EXT_FLAGS_NONE           (0UL)
+
+
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
     c_chk_cnt_t         size;           /* Number of chunks                             */
@@ -65,13 +72,7 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              c_da_t                 da_id,
                                                              c_ext_type_t           ext_type,
                                                              c_chk_cnt_t            chk_cnt,
-                                                             int                    in_tran);
-
-c_ext_id_t          castle_extent_alloc_sparse              (c_rda_type_t           rda_type,
-                                                             c_da_t                 da_id,
-                                                             c_ext_type_t           ext_type,
-                                                             c_chk_cnt_t            ext_size,
-                                                             c_chk_cnt_t            alloc_size,
+                                                             unsigned long          flags,
                                                              int                    in_tran);
 
 int                 castle_extent_grow                      (c_ext_id_t             ext_id,

@@ -3033,26 +3033,6 @@ out:
     return err;
 }
 
-c_ext_id_t castle_extent_alloc_sparse(c_rda_type_t             rda_type,
-                                      c_da_t                   da_id,
-                                      c_ext_type_t             ext_type,
-                                      c_chk_cnt_t              ext_size,
-                                      c_chk_cnt_t              alloc_size,
-                                      int                      in_tran)
-{
-    c_ext_id_t ext_id;
-
-    /* If the caller is not already in transaction. start a transaction. */
-    if (!in_tran)   castle_extent_transaction_start();
-
-    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
-
-    /* End the transaction. */
-    if (!in_tran)   castle_extent_transaction_end();
-
-    return ext_id;
-}
-
 /**
  * Allocate an extent.
  *
@@ -3073,10 +3053,19 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
                                c_da_t                   da_id,
                                c_ext_type_t             ext_type,
                                c_chk_cnt_t              ext_size,
+                               unsigned long            flags,
                                int                      in_tran)
 {
-    return castle_extent_alloc_sparse(rda_type, da_id, ext_type, ext_size, ext_size,
-                                      in_tran);
+    c_ext_id_t ext_id;
+    c_chk_cnt_t alloc_size = test_bit(CASTLE_EXT_GROWABLE_BIT, &flags)? 0: ext_size;
+
+    if (!in_tran)   castle_extent_transaction_start();
+
+    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
+
+    if (!in_tran)   castle_extent_transaction_end();
+
+    return ext_id;
 }
 
 int castle_extent_lfs_callback_add(int in_tran, c_ext_event_callback_t callback, void *data)
