@@ -470,7 +470,9 @@ struct castle_elist_entry {
     /*         60 */ c_ext_mask_range_t prev_mask;  /**< Freespace held by the extent, compare
                                                          this with current valid mask and free extra
                                                          space on reboot. */
-    /*         68 */ uint8_t         _unused[60];
+    /*         68 */ uint64_t        flags;
+    /*         76 */ uint64_t        linked_ext_id;
+    /*         84 */ uint8_t         _unused[44];
     /*        128 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_elist_entry) != 128);

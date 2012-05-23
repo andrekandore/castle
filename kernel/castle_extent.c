@@ -89,6 +89,8 @@
         (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         (_ext)->ext_type    = (_me)->ext_type;                              \
         (_ext)->da_id       = (_me)->da_id;                                 \
+        (_ext)->linked_ext_id= (_me)->linked_ext_id;                        \
+        (_ext)->flags       |= (_me)->flags;                                \
         (_ext)->dirtytree->ext_size = (_me)->size;                          \
         (_ext)->dirtytree->ext_type = (_me)->ext_type;
 #else
@@ -100,6 +102,8 @@
         (_ext)->maps_cep    = (_me)->maps_cep;                              \
         (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         (_ext)->ext_type    = (_me)->ext_type;                              \
+        (_ext)->flags      |= (_me)->flags;                                 \
+        (_ext)->linked_ext_id= (_me)->linked_ext_id;                        \
         (_ext)->da_id       = (_me)->da_id;
 #endif
 
@@ -113,6 +117,8 @@
         (_me)->ext_type     = (_ext)->ext_type;                             \
         (_me)->cur_mask     = GET_LATEST_MASK(_ext)->range;                 \
         (_me)->prev_mask    = (_ext)->global_mask;                          \
+        (_me)->flags        = ((_ext)->flags & CASTLE_EXT_ON_DISK_FLAGS_MASK); \
+        (_me)->linked_ext_id= (_ext)->linked_ext_id;                        \
         (_me)->da_id        = (_ext)->da_id;
 
 #define FAULT_CODE EXTENT_FAULT
@@ -1294,6 +1300,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     /* Extent structure. */
     ext->ext_id             = ext_id;
     ext->flags              = 0;
+    ext->linked_ext_id      = INVAL_EXT_ID;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -3558,6 +3565,60 @@ int castle_extent_exists(c_ext_id_t ext_id)
         return 1;
 
     return 0;
+}
+
+/**
+ * Find if the extent is compressed.
+ *
+ * @return  0   Not a compressed extent.
+ * @return  1   It is a compressed extent.
+ * @return -1   Virtual decompressed extent for compressed extent.
+ */
+int castle_extent_is_compressed(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (ext)
+    {
+        if (test_bit(CASTLE_EXT_COMPRESSED_BIT, &ext->flags))
+            return 1;
+
+        if (test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags))
+            return -1;
+    }
+
+    return 0;
+}
+
+c_ext_id_t castle_extent_compressed_ext_id_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (ext && test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags))
+        return ext->linked_ext_id;
+
+    return INVAL_EXT_ID;
+}
+
+c_ext_id_t castle_extent_decompressed_ext_id_get(c_ext_id_t ext_id)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (ext && test_bit(CASTLE_EXT_COMPRESSED_BIT, &ext->flags))
+        return ext->linked_ext_id;
+
+    return INVAL_EXT_ID;
+}
+
+c_byte_off_t castle_extent_compressed_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
+{
+    c_ext_t *ext = castle_extents_hash_get(cep.ext_id);
+
+    BUG_ON(!test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags));
+
+    *comp_ext_cep = cep;
+
+    return C_EXT_COMPR_BLK_SZ;
 }
 
 static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)

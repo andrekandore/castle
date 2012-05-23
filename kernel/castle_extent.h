@@ -19,13 +19,25 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 #define CASTLE_EXT_ALIVE_BIT            (0)
 #define CASTLE_EXT_REBUILD_BIT          (1) /* Extent rebuild started. Use shadow maps only. */
 
-/* Extent bit flags that are used as parameters for castle_extent_alloc(). */
-#define CASTLE_EXT_GROWABLE_BIT         (63)
-#define CASTLE_EXT_FLAG_GROWABLE        (1UL << 63)
-#define CASTLE_EXT_MUTEX_LOCKED_BIT     (62)
-#define CASTLE_EXT_FLAG_MUTEX_LOCKED    (1UL << 62)
+#define CASTLE_EXT_GROWABLE_BIT         (2)
+#define CASTLE_EXT_FLAG_GROWABLE        (1UL << 2)
+
+#define CASTLE_EXT_MUTEX_LOCKED_BIT     (3)
+#define CASTLE_EXT_FLAG_MUTEX_LOCKED    (1UL << 3)
+
+#define CASTLE_EXT_COMPRESSED_BIT       (4)
+#define CASTLE_EXT_FLAG_COMPRESSED      (1UL << 4)
+
+#define CASTLE_EXT_DECOMPRESSED_BIT     (5)
+#define CASTLE_EXT_FLAG_DECOMPRESSED    (1UL << 5)
 
 #define CASTLE_EXT_FLAGS_NONE           (0UL)
+
+#define CASTLE_EXT_ON_DISK_FLAGS_MASK           \
+        (CASTLE_EXT_FLAG_COMPRESSED |           \
+         CASTLE_EXT_FLAG_DECOMPRESSED)
+
+#define C_EXT_COMPR_BLK_SZ (64 * 1024)
 
 
 typedef struct castle_extent {
@@ -35,6 +47,7 @@ typedef struct castle_extent {
     uint32_t            k_factor;       /* K factor in K-RDA                            */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     unsigned long       flags;          /* Bit Flags.                                   */
+    c_ext_id_t          linked_ext_id;  /* Extent that is coupled with this extent.     */
     struct list_head    hash_list;
     struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
     struct list_head    verify_list;    /* Used for testing.                            */
@@ -117,6 +130,12 @@ int                 castle_extent_link                      (c_ext_id_t     ext_
 int                 castle_extent_unlink                    (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
+int                 castle_extent_is_compressed             (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_compressed_ext_id_get     (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_decompressed_ext_id_get   (c_ext_id_t     ext_id);
+c_byte_off_t        castle_extent_compressed_map_get        (c_ext_pos_t    cep,
+                                                             c_ext_pos_t   *comp_ext_cep);
+
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
 uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
                                                              c_chk_t        offset,
