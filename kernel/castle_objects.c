@@ -830,7 +830,7 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
                                      c_bvec->tree->da->id,
                                      EXT_T_LARGE_OBJECT,
                                      nr_chunks,
-                                     CASTLE_EXT_FLAGS_NONE, 0);  /* Not in transaction. */
+                                     CASTLE_EXT_FLAGS_NONE);  /* Not in transaction. */
 
     if(EXT_ID_INVAL(cep.ext_id))
     {

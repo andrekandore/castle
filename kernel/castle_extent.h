@@ -22,6 +22,8 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 /* Extent bit flags that are used as parameters for castle_extent_alloc(). */
 #define CASTLE_EXT_GROWABLE_BIT         (63)
 #define CASTLE_EXT_FLAG_GROWABLE        (1UL << 63)
+#define CASTLE_EXT_MUTEX_LOCKED_BIT     (62)
+#define CASTLE_EXT_FLAG_MUTEX_LOCKED    (1UL << 62)
 
 #define CASTLE_EXT_FLAGS_NONE           (0UL)
 
@@ -72,8 +74,7 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              c_da_t                 da_id,
                                                              c_ext_type_t           ext_type,
                                                              c_chk_cnt_t            chk_cnt,
-                                                             unsigned long          flags,
-                                                             int                    in_tran);
+                                                             unsigned long          flags);
 
 int                 castle_extent_grow                      (c_ext_id_t             ext_id,
                                                              c_chk_cnt_t            count);

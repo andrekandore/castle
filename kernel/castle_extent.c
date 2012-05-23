@@ -3053,17 +3053,18 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
                                c_da_t                   da_id,
                                c_ext_type_t             ext_type,
                                c_chk_cnt_t              ext_size,
-                               unsigned long            flags,
-                               int                      in_tran)
+                               unsigned long            flags)
 {
     c_ext_id_t ext_id;
     c_chk_cnt_t alloc_size = test_bit(CASTLE_EXT_GROWABLE_BIT, &flags)? 0: ext_size;
 
-    if (!in_tran)   castle_extent_transaction_start();
+    if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
+        castle_extent_transaction_start();
 
     ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
 
-    if (!in_tran)   castle_extent_transaction_end();
+    if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
+        castle_extent_transaction_end();
 
     return ext_id;
 }

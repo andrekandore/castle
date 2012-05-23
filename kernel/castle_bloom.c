@@ -130,8 +130,7 @@ int castle_bloom_create(castle_bloom_t *bf,
                                      da_id,
                                      EXT_T_BLOOM_FILTER,
                                      size / C_CHK_SIZE,
-                                     CASTLE_EXT_FLAGS_NONE,
-                                     0);
+                                     CASTLE_EXT_FLAGS_NONE);
     if (!EXT_ID_INVAL(bf->ext_id))
         /* Successfully allocated SSD extent. */
         bf->block_size_pages = BLOOM_BLOCK_SIZE_SSD_PAGES;
@@ -142,8 +141,7 @@ int castle_bloom_create(castle_bloom_t *bf,
                                          da_id,
                                          EXT_T_BLOOM_FILTER,
                                          size / C_CHK_SIZE,
-                                         CASTLE_EXT_FLAGS_NONE,
-                                         0);
+                                         CASTLE_EXT_FLAGS_NONE);
         if (!EXT_ID_INVAL(bf->ext_id))
             /* Successfully allocated HDD extent. */
             bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
