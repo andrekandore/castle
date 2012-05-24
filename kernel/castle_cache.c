@@ -59,6 +59,7 @@ enum c2b_state_bits {
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
     C2B_compressed,         /**< Block contains compressed data, is from on-disk compressed ext.*/
+    C2B_immutable,          /**< Block contents are finalised and will not be modified further. */
     C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
     C2B_clock,              /**< Block on castle_cache_block_clock (protected by _clock_lock).  */
     C2B_num_state_bits,     /**< Number of allocated c2b state bits (must be last).             */
@@ -156,6 +157,7 @@ C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
 C2B_FNS(compressed, compressed)
+C2B_FNS(immutable, immutable)
 C2B_FNS(evictlist, evictlist)
 C2B_TAS_FNS(evictlist, evictlist)
 C2B_FNS(clock, clock)
