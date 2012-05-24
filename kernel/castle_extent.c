@@ -2898,7 +2898,7 @@ static inline c_ext_pos_t castle_extent_map_cep_get(c_ext_pos_t map_start,
  *                  slaves chosen by the RDA spec).
  * @return  0:      Success.
  */
-int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size)
+static int castle_extent_space_alloc(c_ext_t *ext, c_da_t da_id, c_chk_cnt_t alloc_size)
 {
     struct castle_extent_state *ext_state;
     struct castle_slave *slaves[ext->k_factor];
@@ -3117,6 +3117,38 @@ int castle_extent_lfs_callback_add(int in_tran, c_ext_event_callback_t callback,
     return 0;
 }
 
+static int castle_extent_meta_ext_space_get(c_ext_t *ext, uint32_t nr_blocks)
+{
+    if (ext->ext_id == META_EXT_ID)
+    {
+        ext->maps_cep.ext_id = MICRO_EXT_ID;
+        ext->maps_cep.offset = 0;
+        return 0;
+    }
+
+    if ((nr_blocks == 1) && (castle_extent_meta_pool_get(&ext->maps_cep.offset)))
+    {
+        ext->maps_cep.ext_id = META_EXT_ID;
+        return 0;
+    }
+
+    if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
+    {
+        castle_printk(LOG_WARN, "Too big of an extent/crossing the boundary.\n");
+        return -1;
+    }
+
+    debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
+    if((ext->maps_cep.offset >> 20) !=
+       (ext->maps_cep.offset + nr_blocks * C_BLK_SIZE) >> 20)
+        castle_printk(LOG_USERINFO, "Metaext, used=0x%llx, size=0x%llx\n",
+               atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
+
+    BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
+
+    return 0;
+}
+
 /**
  * Allocate a new extent.
  *
@@ -3144,12 +3176,10 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
                                        c_ext_id_t       ext_id)
 {
     c_ext_t *ext = NULL;
-    int ret = 0;
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
-    uint32_t     nr_blocks;
-    int allocated_from_meta_pool = 0;
+    uint32_t nr_blocks = 0;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -3204,60 +3234,36 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     {
         debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
                          alloc_size, castle_rda_type_str[rda_type]);
-        goto __low_space;
+        goto __hell;
     }
 
     /* Block aligned chunk maps for each extent. */
     nr_blocks = map_size(ext_size, rda_spec->k_factor);
-    if (ext->ext_id == META_EXT_ID)
+    if (castle_extent_meta_ext_space_get(ext, nr_blocks))
     {
-        ext->maps_cep.ext_id = MICRO_EXT_ID;
-        ext->maps_cep.offset = 0;
-    }
-    else if ((nr_blocks == 1) &&
-             (castle_extent_meta_pool_get(&ext->maps_cep.offset)))
-    {
-        allocated_from_meta_pool = 1;
-        ext->maps_cep.ext_id = META_EXT_ID;
-    }
-    else
-    {
-        if (castle_ext_freespace_get(&meta_ext_free, (nr_blocks * C_BLK_SIZE), 0, &ext->maps_cep))
-        {
-            castle_printk(LOG_WARN, "Too big of an extent/crossing the boundary.\n");
-            goto __hell;
-        }
-        debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
-        if((ext->maps_cep.offset >> 20) !=
-           (ext->maps_cep.offset + nr_blocks * C_BLK_SIZE) >> 20)
-            castle_printk(LOG_USERINFO, "Metaext, used=0x%llx, size=0x%llx\n",
-                   atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
-    }
-
-    BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
-
-    if (alloc_size == 0)
-        goto alloc_done;
-
-    /* We must have already set the pool. */
-    BUG_ON(ext->pool == NULL || ext->pool != pool);
-
-    if ((ret = castle_extent_space_alloc(ext, da_id, alloc_size)) == -ENOSPC)
-    {
-        debug("Extent alloc failed to allocate space for %u chunks\n", alloc_size);
-        goto __low_space;
-    }
-    else if (ret < 0)
-    {
-        debug("Extent alloc failed for %u chunks\n", alloc_size);
+        nr_blocks = 0;
         goto __hell;
     }
 
-    /* Pool is just local, destroy it before returning. */
-    __castle_res_pool_extent_detach(ext);
-    __castle_res_pool_destroy(pool);
+    if (alloc_size)
+    {
+        /* We must have already set the pool. */
+        BUG_ON(ext->pool == NULL || ext->pool != pool);
 
-alloc_done:
+        if (castle_extent_space_alloc(ext, da_id, alloc_size))
+        {
+            debug("Extent alloc failed to allocate space for %u chunks\n", alloc_size);
+            goto __hell;
+        }
+    }
+
+    if (pool)
+    {
+        /* Pool is just local, destroy it before returning. */
+        __castle_res_pool_extent_detach(ext);
+        __castle_res_pool_destroy(pool);
+    }
+
     /* Successfully allocated space for extent. Create a mask for it. */
     BUG_ON(castle_extent_mask_create(ext,
                                      MASK_RANGE(0, alloc_size),
@@ -3276,13 +3282,11 @@ alloc_done:
 
     return ext->ext_id;
 
-__low_space:
+__hell:
     castle_printk(LOG_INFO, "Failed to create extent for DA: %u of type %s for %u chunks\n",
                   da_id,
                   castle_ext_type_str[ext_type],
                   alloc_size);
-
-__hell:
     if (pool)
     {
         __castle_res_pool_extent_detach(ext);
@@ -3290,7 +3294,7 @@ __hell:
     }
 
     /* If we allocated from the meta extent pool, put it back ... */
-    if (allocated_from_meta_pool)
+    if (nr_blocks == 1)
         castle_extent_meta_pool_replace(ext->maps_cep.offset);
 
     if (ext)
