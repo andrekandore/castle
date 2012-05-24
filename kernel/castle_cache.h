@@ -21,6 +21,8 @@ STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS + C2B_STATE_ACCESS_
  */
 typedef struct castle_cache_extent_dirtytree {
     c_ext_id_t          ext_id;             /**< Extent ID this dirtylist describes.            */
+    c_ext_id_t          compr_ext_id;       /**< Extent ID of compressed extent.  Will be
+                                                 INVAL_EXT_ID if ext_id !C_COMPR_VIRTUAL.       */
     spinlock_t          lock;               /**< Protects count, rb_root.                       */
     atomic_t            ref_cnt;            /**< References to this dirtylist.                  */
     struct rb_root      rb_root;            /**< RB-tree of dirty c2bs.                         */
@@ -30,7 +32,7 @@ typedef struct castle_cache_extent_dirtytree {
     int                 nr_pages;           /**< Sum of c2b->nr_pages for c2bs in tree.
                                                  Protected by lock.                             */
     c_byte_off_t        unflushed_off;      /**< Offset before which has been flushed.          */
-    c_byte_off_t        comp_unflushed_off; /**< Offset before which has been flushed in
+    c_byte_off_t        compr_unflushed_off;/**< Offset before which has been flushed in
                                                  compressed extent.                             */
 #ifdef CASTLE_PERF_DEBUG
     c_chk_cnt_t         ext_size;           /**< Size of extent when created (in chunks).       */

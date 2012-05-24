@@ -1331,6 +1331,8 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     INIT_LIST_HEAD(&ext->dirtytree->list);
     spin_lock_init(&ext->dirtytree->lock);
     ext->dirtytree->ext_id             = ext_id;
+    //@TODO BM: to make this happen, wherever necessary
+//    ext->dirtytree->compr_ext_id       = castle_compr_compressed_ext_id_get(ext_id);
     ext->dirtytree->ref_cnt            = ATOMIC(1);
     ext->dirtytree->rb_root            = RB_ROOT;
     ext->dirtytree->flush_prio         = (uint8_t)-1;
