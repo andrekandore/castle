@@ -3311,10 +3311,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED;
 
     if (growable)
-    {
         growable_ext_flags |= CASTLE_EXT_FLAG_GROWABLE;
-        castle_printk(LOG_UNLIMITED, "%s::growable\n", __FUNCTION__);
-    }
 
     /* da_lfs_ct functions are being used only by merge code. */
     BUG_ON(lfs->rwct);
