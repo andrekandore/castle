@@ -202,8 +202,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t   rda_type,
                                        c_da_t         da_id,
                                        c_ext_type_t   ext_type,
                                        c_chk_cnt_t    ext_size,
-                                       c_chk_cnt_t    alloc_size,
-                                       c_ext_id_t     ext_id);
+                                       c_ext_id_t     ext_id,
+                                       unsigned long  flags);
 void __castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytree,
                                    int check_hash);
 
@@ -1720,8 +1720,8 @@ static int castle_extent_meta_ext_create(void)
     ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
                                   meta_ext_size,
-                                  meta_ext_size,
-                                  META_EXT_ID);
+                                  META_EXT_ID,
+                                  CASTLE_EXT_FLAGS_NONE);
     if (ext_id != META_EXT_ID)
     {
         castle_printk(LOG_WARN, "Meta Extent Allocation Failed\n");
@@ -1757,16 +1757,16 @@ static int castle_extent_mstore_ext_create(void)
     ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID);
+                                  MSTORE_EXT_ID,
+                                  CASTLE_EXT_FLAGS_NONE);
     if (ext_id != MSTORE_EXT_ID)
         return -ENOSPC;
 
     ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
                                   MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_SPACE_SIZE * i / k_factor,
-                                  MSTORE_EXT_ID+1);
+                                  MSTORE_EXT_ID+1,
+                                  CASTLE_EXT_FLAGS_NONE);
     if (ext_id != MSTORE_EXT_ID+1)
         return -ENOSPC;
 
@@ -3082,12 +3082,11 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
                                unsigned long            flags)
 {
     c_ext_id_t ext_id;
-    c_chk_cnt_t alloc_size = test_bit(CASTLE_EXT_GROWABLE_BIT, &flags)? 0: ext_size;
 
     if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
         castle_extent_transaction_start();
 
-    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, alloc_size, INVAL_EXT_ID);
+    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, INVAL_EXT_ID, flags);
 
     if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
         castle_extent_transaction_end();
@@ -3177,10 +3176,11 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
                                        c_da_t           da_id,
                                        c_ext_type_t     ext_type,
                                        c_chk_cnt_t      ext_size,
-                                       c_chk_cnt_t      alloc_size,
-                                       c_ext_id_t       ext_id)
+                                       c_ext_id_t       ext_id,
+                                       unsigned long    flags)
 {
     c_ext_t *ext = NULL;
+    c_chk_cnt_t alloc_size;
     c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
     struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
@@ -3199,6 +3199,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         WARN_ON(1);
         return INVAL_EXT_ID;
     }
+
+    alloc_size = test_bit(CASTLE_EXT_GROWABLE_BIT, &flags) ? 0: ext_size;
 
     debug("Creating extent of size: %u/%u\n", ext_size, alloc_size);
     ext = castle_ext_alloc(0);
