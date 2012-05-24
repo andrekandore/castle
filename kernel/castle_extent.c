@@ -3571,58 +3571,67 @@ int castle_extent_exists(c_ext_id_t ext_id)
     return 0;
 }
 
-/**
- * Find if the extent is compressed.
- *
- * @return  0   Not a compressed extent.
- * @return  1   It is a compressed extent.
- * @return -1   Virtual decompressed extent for compressed extent.
- */
-int castle_extent_is_compressed(c_ext_id_t ext_id)
+int castle_compr_type_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
     if (ext)
     {
-        if (test_bit(CASTLE_EXT_COMPRESSED_BIT, &ext->flags))
-            return 1;
+        if (test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &ext->flags))
+            return C_COMPR_COMPRESSED;
 
-        if (test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags))
-            return -1;
+        if (test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
+            return C_COMPR_VIRTUAL;
     }
 
-    return 0;
+    return C_COMPR_NORMAL;
 }
 
-c_ext_id_t castle_extent_compressed_id_get(c_ext_id_t ext_id)
+c_ext_id_t castle_compr_compressed_ext_id_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
-    if (ext && test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags))
+    if (ext && test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
         return ext->linked_ext_id;
 
     return INVAL_EXT_ID;
 }
 
-c_ext_id_t castle_extent_decompressed_id_get(c_ext_id_t ext_id)
+c_ext_id_t castle_compr_virtual_ext_id_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
-    if (ext && test_bit(CASTLE_EXT_COMPRESSED_BIT, &ext->flags))
+    if (ext && test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &ext->flags))
         return ext->linked_ext_id;
 
     return INVAL_EXT_ID;
 }
 
-c_byte_off_t castle_extent_compressed_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
+#define C_EXT_COMPR_BLK_SZ (64 * 1024)
+
+c_byte_off_t castle_compr_block_size_get(c_ext_id_t ext_id)
+{
+    return C_EXT_COMPR_BLK_SZ;
+}
+
+c_byte_off_t castle_compr_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
 {
     c_ext_t *ext = castle_extents_hash_get(cep.ext_id);
 
-    BUG_ON(!test_bit(CASTLE_EXT_DECOMPRESSED_BIT, &ext->flags));
+    BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags));
 
-    *comp_ext_cep = cep;
+    /* Offset should be block aligned. */
+    BUG_ON(cep.offset & C_EXT_COMPR_BLK_SZ);
+
+    comp_ext_cep->ext_id = ext->linked_ext_id;
+    comp_ext_cep->offset = cep.offset;
 
     return C_EXT_COMPR_BLK_SZ;
+}
+
+void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off_t comp_blk_bytes)
+{
+    return;
 }
 
 static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)

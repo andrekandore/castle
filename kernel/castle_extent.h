@@ -25,19 +25,17 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 #define CASTLE_EXT_MUTEX_LOCKED_BIT     (3)
 #define CASTLE_EXT_FLAG_MUTEX_LOCKED    (1UL << 3)
 
-#define CASTLE_EXT_COMPRESSED_BIT       (4)
-#define CASTLE_EXT_FLAG_COMPRESSED      (1UL << 4)
+#define CASTLE_EXT_COMPR_COMPRESSED_BIT (4)
+#define CASTLE_EXT_FLAG_COMPR_COMPRESSED (1UL << 4)
 
-#define CASTLE_EXT_DECOMPRESSED_BIT     (5)
-#define CASTLE_EXT_FLAG_DECOMPRESSED    (1UL << 5)
+#define CASTLE_EXT_COMPR_VIRTUAL_BIT    (5)
+#define CASTLE_EXT_FLAG_COMPR_VIRTUAL   (1UL << 5)
 
 #define CASTLE_EXT_FLAGS_NONE           (0UL)
 
 #define CASTLE_EXT_ON_DISK_FLAGS_MASK           \
-        (CASTLE_EXT_FLAG_COMPRESSED |           \
-         CASTLE_EXT_FLAG_DECOMPRESSED)
-
-#define C_EXT_COMPR_BLK_SZ (64 * 1024)
+        (CASTLE_EXT_FLAG_COMPR_COMPRESSED |     \
+         CASTLE_EXT_FLAG_COMPR_VIRTUAL)
 
 
 typedef struct castle_extent {
@@ -204,11 +202,47 @@ int                 castle_extent_lfs_callback_add           (int               
                                                               void                  *data);
 
 /* Compressed extents API. */
-int                 castle_extent_is_compressed             (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_compressed_id_get         (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_decompressed_id_get       (c_ext_id_t     ext_id);
-c_byte_off_t        castle_extent_compressed_map_get        (c_ext_pos_t    cep,
-                                                             c_ext_pos_t   *comp_ext_cep);
+
+enum {
+    C_COMPR_COMPRESSED,     /**< On-disk compressed extent.         */
+    C_COMPR_VIRTUAL,        /**< Virtual decompressed extent.       */
+    C_COMPR_NORMAL          /**< Normal extent. No compression.     */
+};
+int                 castle_compr_type_get                    (c_ext_id_t     ext_id);
+
+/**
+ * @return  compressed_ext_id   if the extent is virtual extent.
+ * @return  INVAL_EXT_ID        oterwise
+ */
+c_ext_id_t          castle_compr_compressed_ext_id_get       (c_ext_id_t     ext_id);
+
+/**
+ * @return  virtual_ext_id      if the extent is compressed extent.
+ * @return  INVAL_EXT_ID        oterwise
+ */
+c_ext_id_t          castle_compr_virtual_ext_id_get          (c_ext_id_t     ext_id);
+
+c_byte_off_t        castle_compr_block_size_get              (c_ext_id_t     ext_id);
+
+/**
+ * @param [in]  cep of virtual extent.
+ * @param [out] corresponding cep in compressed extent for the given virtual extent.
+ *
+ * @return Size of the compressed block.
+ *
+ * Note: virt_cep.offset should be aligned to compression block size.
+ */
+c_byte_off_t        castle_compr_map_get                     (c_ext_pos_t    virt_cep,
+                                                              c_ext_pos_t   *comp_cep);
+
+/**
+ * @param [in]  cep of virtual extent.
+ * @param [in]  cep of compressed extent.
+ * @param [in]  Size of the compressed output block size.
+ */
+void                castle_compr_map_set                     (c_ext_pos_t    virt_cep,
+                                                              c_ext_pos_t    comp_cep,
+                                                              c_byte_off_t   comp_blk_bytes);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
