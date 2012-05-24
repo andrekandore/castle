@@ -130,11 +130,6 @@ int                 castle_extent_link                      (c_ext_id_t     ext_
 int                 castle_extent_unlink                    (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
-int                 castle_extent_is_compressed             (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_compressed_ext_id_get     (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_decompressed_ext_id_get   (c_ext_id_t     ext_id);
-c_byte_off_t        castle_extent_compressed_map_get        (c_ext_pos_t    cep,
-                                                             c_ext_pos_t   *comp_ext_cep);
 
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
 uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
@@ -207,6 +202,13 @@ int                 castle_extent_min_rda_lvl_get            (void);
 int                 castle_extent_lfs_callback_add           (int                  in_trans,
                                                               c_ext_event_callback_t callback,
                                                               void                  *data);
+
+/* Compressed extents API. */
+int                 castle_extent_is_compressed             (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_compressed_ext_id_get     (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_decompressed_ext_id_get   (c_ext_id_t     ext_id);
+c_byte_off_t        castle_extent_compressed_map_get        (c_ext_pos_t    cep,
+                                                             c_ext_pos_t   *comp_ext_cep);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
