@@ -58,6 +58,7 @@ enum c2b_state_bits {
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).   */
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
+    C2B_compressed,         /**< Block contains compressed data, is from on-disk compressed ext.*/
     C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
     C2B_clock,              /**< Block on castle_cache_block_clock (protected by _clock_lock).  */
     C2B_num_state_bits,     /**< Number of allocated c2b state bits (must be last).             */
@@ -154,6 +155,7 @@ C2B_FNS(remap, remap)
 C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
+C2B_FNS(compressed, compressed)
 C2B_FNS(evictlist, evictlist)
 C2B_TAS_FNS(evictlist, evictlist)
 C2B_FNS(clock, clock)
@@ -1217,6 +1219,7 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     c2_ext_dirtytree_t *dirtytree;
     unsigned long flags;
 
+    BUG_ON(c2b_compressed(c2b));
     BUG_ON(atomic_read(&c2b->count) == 0);
 
     /* Get extent dirtytree from c2b. */
@@ -1272,6 +1275,8 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     unsigned long flags;
     c_chk_cnt_t start, end;
     int cmp;
+
+    BUG_ON(c2b_compressed(c2b));
 
     /* Get the current valid extent space. This is not a strict check. Strict check
      * would have to use the mask_id that the client is using. */
@@ -1417,8 +1422,9 @@ void dirty_c2b(c2_block_t *c2b)
             spin_unlock_irq(&castle_cache_block_evictlist_lock);
         }
 
-        /* Place dirty c2b onto per-extent dirtytree. */
-        c2_dirtytree_insert(c2b);
+        /* Place uncompressed dirty c2bs onto per-extent dirtytree. */
+        if (!c2b_compressed(c2b))
+            c2_dirtytree_insert(c2b);
     }
 }
 
@@ -1456,8 +1462,9 @@ void clean_c2b(c2_block_t *c2b)
     if (c2b_remap(c2b) && !c2b_dirty(c2b))
         return;
 
-    /* Remove from per-extent dirtytree. */
-    c2_dirtytree_remove(c2b);
+    /* Remove from per-extent dirtytree if it is not compressed. */
+    if (!c2b_compressed(c2b))
+        c2_dirtytree_remove(c2b);
 
     BUG_ON(atomic_read(&c2b->count) == 0);
 
@@ -3136,7 +3143,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     struct page *page;
     c_ext_pos_t dcep;
     c2_page_t *c2p;
-    int i, uptodate;
+    int i, uptodate, compressed;
     struct mutex *vmap_per_cpu_mutex_ptr;
     struct page ** vmap_per_cpu_pgs_ptr;
 
@@ -3156,11 +3163,14 @@ static void castle_cache_block_init(c2_block_t *c2b,
 #endif
     /* Init the page array (note: this may substitute some c2ps,
        if they already exist in the hash. */
-    uptodate = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
+    uptodate   = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
+    compressed = castle_compr_type_get(cep.ext_id) == C_COMPR_COMPRESSED;
     /* Initialise c2b. */
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;
-    c2b->state.bits = INIT_C2B_BITS | (uptodate ? (1 << C2B_uptodate) : 0);
+    c2b->state.bits = INIT_C2B_BITS
+                            | (uptodate   ? (1 << C2B_uptodate)   : 0)
+                            | (compressed ? (1 << C2B_compressed) : 0);
     c2b->state.partition = 0;
     c2b->state.accessed  = 1;   /* not zero, but not a lot either */
     c2b->nr_pages = nr_pages;
