@@ -3587,7 +3587,7 @@ int castle_extent_is_compressed(c_ext_id_t ext_id)
     return 0;
 }
 
-c_ext_id_t castle_extent_compressed_ext_id_get(c_ext_id_t ext_id)
+c_ext_id_t castle_extent_compressed_id_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 
@@ -3597,7 +3597,7 @@ c_ext_id_t castle_extent_compressed_ext_id_get(c_ext_id_t ext_id)
     return INVAL_EXT_ID;
 }
 
-c_ext_id_t castle_extent_decompressed_ext_id_get(c_ext_id_t ext_id)
+c_ext_id_t castle_extent_decompressed_id_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
 

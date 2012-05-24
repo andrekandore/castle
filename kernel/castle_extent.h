@@ -205,8 +205,8 @@ int                 castle_extent_lfs_callback_add           (int               
 
 /* Compressed extents API. */
 int                 castle_extent_is_compressed             (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_compressed_ext_id_get     (c_ext_id_t     ext_id);
-c_ext_id_t          castle_extent_decompressed_ext_id_get   (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_compressed_id_get         (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_decompressed_id_get       (c_ext_id_t     ext_id);
 c_byte_off_t        castle_extent_compressed_map_get        (c_ext_pos_t    cep,
                                                              c_ext_pos_t   *comp_ext_cep);
 
