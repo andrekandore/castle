@@ -2038,6 +2038,20 @@ void castle_extents_start(void)
 #define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
 #define map_size(_ext_chks, _k_factor)  (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))
 
+#define C_COMPR_BLK_SZ (64 * 1024)
+
+#define compr_blk_maps_per_page         (PAGE_SIZE / (2 * sizeof(c_byte_off_t)))
+#define compr_blks_per_chk              (C_CHK_SIZE / C_COMPR_BLK_SZ)
+#define compr_map_size(_compr_blks)     (1 + ((_compr_blks)-1) / compr_blk_maps_per_page)
+
+static int castle_extent_meta_ext_space_needed(c_ext_t *ext, unsigned long flags)
+{
+    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &flags))
+        return map_size(ext->size, ext->k_factor);
+
+    return compr_map_size(ext->size / compr_blks_per_chk);
+}
+
 //#define COMPACTION_DRY_RUN
 struct castle_meta_compactor {
     void *bitmap;
@@ -2061,7 +2075,7 @@ static int castle_extent_meta_mark(c_ext_t *ext, void *compactor_p)
         return 0;
     }
 
-    map_size_pgs = map_size(ext->size, ext->k_factor);
+    map_size_pgs = castle_extent_meta_ext_space_needed(ext, ext->flags);
     if(ext->maps_cep.offset % PAGE_SIZE != 0)
     {
         castle_printk(LOG_ERROR,
@@ -2147,7 +2161,7 @@ static int castle_extent_meta_copy(c_ext_t *ext, void *compactor_p)
         return 0;
     }
 
-    map_size_pgs = map_size(ext->size, ext->k_factor);
+    map_size_pgs = castle_extent_meta_ext_space_needed(ext, ext->flags);
     unused_idx = castle_extent_meta_unused_find(compactor, map_size_pgs);
     if(unused_idx < 0)
     {
@@ -3086,7 +3100,52 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
     if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
         castle_extent_transaction_start();
 
-    ext_id = _castle_extent_alloc(rda_type, da_id, ext_type, ext_size, INVAL_EXT_ID, flags);
+    ext_id = _castle_extent_alloc(rda_type,
+                                  da_id,
+                                  ext_type,
+                                  ext_size,
+                                  INVAL_EXT_ID,
+                                  flags);
+
+    if (EXT_ID_INVAL(ext_id))
+        goto out;
+
+    /* Asked to create a compressed extent? */
+    if (test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &flags))
+    {
+        /* The one we've already created is for compressed on-disk extent. */
+        c_ext_t *comp_ext = castle_extents_hash_get(ext_id);
+        c_ext_t *virt_ext;
+
+        /* Now, create virtual extent to represent decompressed extent space. */
+        ext_id = _castle_extent_alloc(rda_type,
+                                      da_id,
+                                      ext_type,
+                                      ext_size,
+                                      INVAL_EXT_ID,
+                                      flags | CASTLE_EXT_FLAG_COMPR_VIRTUAL);
+        /* Failed to create virtual extent. */
+        if (EXT_ID_INVAL(ext_id))
+        {
+            /* Free-up compressed extent, created above. */
+            castle_extent_free(comp_ext->ext_id);
+            goto out;
+        }
+
+        virt_ext = castle_extents_hash_get(ext_id);
+
+        /* Set the bits. */
+        set_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &comp_ext->flags);
+        set_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags);
+
+        /* Link these two extents. */
+        comp_ext->linked_ext_id = virt_ext->ext_id;
+        virt_ext->linked_ext_id = comp_ext->ext_id;
+
+        /* Thats easy!! we are done. */
+    }
+
+out:
 
     if (!test_bit(CASTLE_EXT_MUTEX_LOCKED_BIT, &flags))
         castle_extent_transaction_end();
@@ -3181,10 +3240,10 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 {
     c_ext_t *ext = NULL;
     c_chk_cnt_t alloc_size;
-    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
-    struct castle_extents_superblock *castle_extents_sb;
     c_res_pool_t *pool = NULL;
     uint32_t nr_blocks = 0;
+    c_rda_spec_t *rda_spec = castle_rda_spec_get(rda_type);
+    struct castle_extents_superblock *castle_extents_sb;
 
     BUG_ON(!castle_extent_in_transaction());
     BUG_ON(!extent_init_done && !LOGICAL_EXTENT(ext_id));
@@ -3200,7 +3259,8 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
         return INVAL_EXT_ID;
     }
 
-    alloc_size = test_bit(CASTLE_EXT_GROWABLE_BIT, &flags) ? 0: ext_size;
+    alloc_size = (test_bit(CASTLE_EXT_GROWABLE_BIT, &flags) ||
+                        test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &flags)) ? 0: ext_size;
 
     debug("Creating extent of size: %u/%u\n", ext_size, alloc_size);
     ext = castle_ext_alloc(0);
@@ -3245,7 +3305,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     }
 
     /* Block aligned chunk maps for each extent. */
-    nr_blocks = map_size(ext_size, rda_spec->k_factor);
+    nr_blocks = castle_extent_meta_ext_space_needed(ext, flags);
     if (castle_extent_meta_ext_space_get(ext, nr_blocks))
     {
         nr_blocks = 0;
@@ -3408,7 +3468,6 @@ static void castle_extent_resource_release(void *data)
     struct castle_extents_superblock *castle_extents_sb = NULL;
     c_ext_id_t ext_id = ext->ext_id;
     struct list_head *pos, *tmp;
-    int nr_blocks;
 
     /* Should be in transaction. */
     BUG_ON(!castle_extent_in_transaction());
@@ -3456,8 +3515,7 @@ static void castle_extent_resource_release(void *data)
      * If this allocation used only 1 page of the meta extent, and the meta extent pool
      * is not full, then add this page to the meta extent pool released list.
      */
-    nr_blocks = map_size(ext->size, ext->k_factor);
-    if (nr_blocks == 1)
+    if (castle_extent_meta_ext_space_needed(ext, ext->flags) == 1)
     {
         BUG_ON(ext->maps_cep.ext_id != META_EXT_ID);
         castle_extent_meta_pool_release(ext->maps_cep.offset);
@@ -3611,11 +3669,9 @@ c_ext_id_t castle_compr_virtual_ext_id_get(c_ext_id_t ext_id)
     return INVAL_EXT_ID;
 }
 
-#define C_EXT_COMPR_BLK_SZ (64 * 1024)
-
 c_byte_off_t castle_compr_block_size_get(c_ext_id_t ext_id)
 {
-    return C_EXT_COMPR_BLK_SZ;
+    return C_COMPR_BLK_SZ;
 }
 
 c_byte_off_t castle_compr_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
@@ -3625,12 +3681,12 @@ c_byte_off_t castle_compr_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
     BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags));
 
     /* Offset should be block aligned. */
-    BUG_ON(cep.offset & C_EXT_COMPR_BLK_SZ);
+    BUG_ON(cep.offset & C_COMPR_BLK_SZ);
 
     comp_ext_cep->ext_id = ext->linked_ext_id;
     comp_ext_cep->offset = cep.offset;
 
-    return C_EXT_COMPR_BLK_SZ;
+    return C_COMPR_BLK_SZ;
 }
 
 void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off_t comp_blk_bytes)
@@ -3723,6 +3779,9 @@ uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
 
     if(ext == NULL)
         return 0;
+
+    /* Can't do map_get() on compressed virtual extents. */
+    BUG_ON(test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags));
 
     if (offset >= ext->size)
     {
@@ -4578,25 +4637,31 @@ void castle_extent_rebuild_ext_put(c_ext_t *ext, int is_locked)
  */
 static int rebuild_list_add(c_ext_t *ext, void *unused)
 {
-    /*
-     * We are not handling logical extents. The extent is not already at current_rebuild_seqno. The
-     * extent is not marked for deletion (it is a live extent).
-     */
-    if ((!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID)) &&
-        (ext->curr_rebuild_seqno < atomic_read(&current_rebuild_seqno)))
-    {
-        /*
-         * Take a reference to the extent. We will drop this when we have finished remapping
-         * the extent.
-         */
-        if (castle_extent_rebuild_ext_get(ext, 1) < 0)
-            /* Extent is already dead. */
-            return 0;
+    /* Don't rebuild super extents. They are per-disk. */
+    if (SUPER_EXTENT(ext->ext_id))
+        return 0;
 
-        debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
-               ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
-        list_add_tail(&ext->process_list, &extent_list);
-    }
+    /* No Micro extent. They are n-RDA for n-disks. */
+    if (ext->ext_id == MICRO_EXT_ID)
+        return 0;
+
+    /* No compression virtual extents. */
+    if (test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
+        return 0;
+
+    /* No extent that is created after disk is dead. */
+    if (ext->curr_rebuild_seqno >= atomic_read(&current_rebuild_seqno))
+        return 0;
+
+    /* No dead extents. */
+    if (castle_extent_rebuild_ext_get(ext, 1) < 0)
+        return 0;
+
+    debug("Adding extent %llu to rebuild list for extent seqno %u, global seqno %u\n",
+           ext->ext_id, ext->curr_rebuild_seqno, atomic_read(&current_rebuild_seqno));
+
+    list_add_tail(&ext->process_list, &extent_list);
+
     return 0;
 }
 
