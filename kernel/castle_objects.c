@@ -639,7 +639,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     /* Some sanity checks on the prev_cvt. */
     BUG_ON(!CVT_INVALID(prev_cvt) && !CVT_LEAF_VAL(prev_cvt));
-    BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != 0));
+    BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != sizeof(uint64_t)));
 
     /* Check if this insert should be disabled immediately because of it's timestamp vs
        other entries in the T0. */
@@ -752,8 +752,12 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     /* Deal with tombstones first. */
     if(tombstone)
     {
-        CVT_TOMBSTONE_INIT(replace->cvt);
         /* No need to allocate any memory/extent space for tombstones. */
+        struct timeval now;
+        STATIC_BUG_ON(sizeof(uint64_t) != sizeof((((struct timeval *)(0))->tv_sec)));
+        do_gettimeofday(&now);
+        CVT_TOMBSTONE_INIT(replace->cvt, (uint64_t)now.tv_sec);
+        debug("%s::inserted tombstone at time %llu\n", __FUNCTION__, now.tv_sec);
         return 0;
     }
 
@@ -1523,7 +1527,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
             get->reply_start(get,
                              0,
                              cvt.length,
-                             CVT_TOMBSTONE_VAL_PTR(cvt),
+                             CVT_TOMBSTONE_TS_PTR(cvt),
                              cvt.length);
         }
         else

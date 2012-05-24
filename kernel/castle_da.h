@@ -176,6 +176,11 @@ struct castle_da_merge {
                                             current key stream in _castle_da_entry_add; used to set
                                             out_tree->max_versions_per_key. */
 
+    /* Stuff for tombstone discard. */
+    int is_top_level;
+    struct timeval start_time;
+    castle_user_timestamp_t min_u_ts_excluded_cts;
+
 };
 
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
@@ -207,10 +212,17 @@ int  castle_double_array_request_cpus  (void);
 
 struct castle_btree_type
     *castle_double_array_btree_type_get(struct castle_attachment *att);
+
+/* Doubling Array creation time options retrieval */
 uint8_t
     castle_da_user_timestamping_check(struct castle_double_array *da);
 uint8_t
     castle_attachment_user_timestamping_check(struct castle_attachment *att);
+uint8_t
+    castle_da_versioning_check(struct castle_double_array *da);
+uint8_t
+    castle_attachment_versioning_check(struct castle_attachment *att);
+
 c_chk_cnt_t
      castle_double_array_size_get (struct castle_double_array *da);
 void castle_double_array_queue    (c_bvec_t *c_bvec);

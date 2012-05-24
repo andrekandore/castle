@@ -347,7 +347,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
 
     /* Bloom filters don't store values, just keys. Since btree code requires values,
        store tombstones. */
-    CVT_TOMBSTONE_INIT(cvt);
+    CVT_TOMBSTONE_INIT(cvt, 0);
 
     if(mode == BAIK_REPLACE_LAST_KEY)
     {

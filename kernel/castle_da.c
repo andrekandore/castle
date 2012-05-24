@@ -5521,6 +5521,55 @@ static void castle_merge_sleep_return(struct castle_da_merge *merge)
     }
 }
 
+
+/**
+ * A simplified approach to tomstone discard; one that is applicable to versionless workloads.
+ *
+ * @return 1 if tombstone is discardable, else 0
+ *
+ * @also castle_timestamped_tombstone_discardable_check
+ **/
+static int castle_da_tombstone_discardable_check(struct castle_da_merge *merge, c_val_tup_t cvt)
+{
+    uint64_t tombstone_realtime;
+
+    BUG_ON(!CVT_TOMBSTONE(cvt));
+
+    /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
+    tombstone_realtime = cvt.tombstone_timestamp;
+    debug("%s::found a tombstone with wallclock ts %llu.\n",
+        __FUNCTION__, tombstone_realtime);
+    if (merge->start_time.tv_sec < tombstone_realtime)
+    {
+        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted??? System clock may be messed up.\n");
+        return 0;
+    }
+
+    if( !( (merge->start_time.tv_sec - tombstone_realtime) >
+                atomic64_read(&merge->da->tombstone_discard_threshold_time_s)) )
+    {
+        debug("%s::merge id %u, cannot discard tombstone (req 1b)\n", __FUNCTION__, merge->id);
+        return 0;
+    }
+
+    if (castle_da_user_timestamping_check(merge->da))
+    {
+        castle_user_timestamp_t u_ts;
+        u_ts = cvt.user_timestamp;
+
+        /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
+           on every tree not involved with this merge. */
+        if( u_ts > merge->min_u_ts_excluded_cts )
+        {
+            debug("%s::merge id %u, cannot discard tombstone (req 2)\n", __FUNCTION__, merge->id);
+            return 0;
+        }
+    }
+
+    return 1; /* This tombstone is discardable. */
+
+}
+
 static int castle_da_entry_do(struct castle_da_merge *merge,
                               void *key,
                               c_val_tup_t cvt,
@@ -5554,6 +5603,20 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         /*
          * The skipped key gets freed along with the input extent.
          */
+        return EXIT_SUCCESS;
+    }
+
+    /* Tombstone discardable? (no tv_resolver) */
+    if (CVT_TOMBSTONE(cvt) &&
+        !castle_da_versioning_check(merge->da) &&
+        merge->is_top_level &&
+        castle_da_tombstone_discardable_check(merge, cvt))
+    {
+        atomic64_inc(&merge->da->stats.tombstone_discard.tombstone_discards);
+        castle_version_stats_entry_discard(version,
+                                           cvt,
+                                           CVS_TIMESTAMP_DISCARD,
+                                           &merge->version_states);
         return EXIT_SUCCESS;
     }
 
@@ -6051,13 +6114,18 @@ deser_done:
         castle_da_get(da);
     }
 
+    /* Set things up for tombstone discard (with or without tv_resolver) */
+    if (castle_da_merge_top_level_check(merge))
+        merge->is_top_level = 1;
+    do_gettimeofday(&merge->start_time);
+
     /* We need a DFS resolver if this is a level 2+ merge, AND we are timestamping, OR if this is
        the top-level merge and we need to discard non-queriable tombstones. */
-    if (merge->level >1)
+    if (merge->level >1 && castle_da_versioning_check(merge->da))
     {
         if (castle_da_user_timestamping_check(merge->da))
             dfs_resolver_functions |= DFS_RESOLVE_TIMESTAMPS;
-        if (castle_da_merge_top_level_check(merge))
+        if (merge->is_top_level)
             dfs_resolver_functions |= DFS_RESOLVE_TOMBSTONES;
     }
     if(dfs_resolver_functions != DFS_RESOLVE_NOTHING)
@@ -6145,6 +6213,8 @@ deser_done:
 
     if (merge->tv_resolver)
         castle_dfs_resolver_construct_complete(merge->tv_resolver);
+    else
+        merge->min_u_ts_excluded_cts = castle_da_min_ts_cts_exclude_this_merge_get(merge);
 
     if (merge->level != 1)
     {
@@ -11604,6 +11674,18 @@ uint8_t castle_da_user_timestamping_check(struct castle_double_array *da)
 uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
 {
     return castle_da_user_timestamping_check(att->col.da);
+}
+/**
+ * Return the versioning flag associated with a particular DA.
+ */
+uint8_t castle_da_versioning_check(struct castle_double_array *da)
+{
+    BUG_ON(!da);
+    return (!(da->creation_opts & CASTLE_DA_OPTS_NO_VERSIONING));
+}
+uint8_t castle_attachment_versioning_check(struct castle_attachment *att)
+{
+    return castle_da_versioning_check(att->col.da);
 }
 
 /**

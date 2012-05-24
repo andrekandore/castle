@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 40 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 41 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -217,6 +217,7 @@ typedef uint64_t c_da_opts_t;       /**< Options bitmask for DA options that mus
 enum {
     CASTLE_DA_OPTS_NONE                  = (0),             /**< No options (all defaults). */
     CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Disable user timestamping. */
+    CASTLE_DA_OPTS_NO_VERSIONING         = (2 << 0)         /**< Disable versioning.        */
 };
 
 /* Golden Nugget - Types */

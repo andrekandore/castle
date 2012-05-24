@@ -33,6 +33,10 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
     BUG_ON(!merge);
     BUG_ON(!dfs_resolver);
 
+    /* We don't need a tv_resolver if we aren't timestamping and versioning */
+    BUG_ON(!castle_da_user_timestamping_check(merge->da));
+    BUG_ON(!castle_da_versioning_check(merge->da));
+
     /* No DFS resolver for merges below level 2; it's unnecessary and UNSAFE (see trac #4749) */
     BUG_ON(merge->level < 2);
 
@@ -339,39 +343,30 @@ static void DEBUG_castle_dfs_resolver_stack_check(c_uint32_stack *stack)
  */
 static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_resolver,
                                                           c_ver_t ver,
-                                                          castle_user_timestamp_t u_ts)
+                                                          c_val_tup_t cvt)
 {
-    int ret;
-    struct timeval tombstone_realtime;
+    uint64_t tombstone_realtime;
+    castle_user_timestamp_t u_ts;
+
     BUG_ON(!dfs_resolver);
+
+    BUG_ON(!CVT_TOMBSTONE(cvt));
+
     /* We only call this check if it's a timestamped DA */
     BUG_ON(!castle_da_user_timestamping_check(dfs_resolver->merge->da));
+    u_ts = cvt.user_timestamp;
 
     /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
-    /* (we guesstimate the tombstone's real timestsamp as the immute timestamp of
-       it's version) */
-
-    /* Sub-requirement: cannot discard tombstone in leaf version */
-    debug("%s::merge id %u, checking if version %u is leaf\n",
-            __FUNCTION__, dfs_resolver->merge->id, ver);
-    ret = castle_version_is_mutable(ver);
-    BUG_ON(ret == -EINVAL);
-    if(ret)
+    tombstone_realtime = cvt.tombstone_timestamp;
+    debug("%s::found a tombstone with wallclock ts %llu.\n",
+        __FUNCTION__, tombstone_realtime);
+    if (dfs_resolver->now.tv_sec < tombstone_realtime)
     {
-        debug("%s::merge id %u, cannot discard tombstone (req 1a)\n",
-                __FUNCTION__, dfs_resolver->merge->id);
+        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted??? System clock may be messed up.\n");
         return 0;
     }
 
-    tombstone_realtime = castle_version_immute_timestamp_get(ver);
-    if(timeval_compare(&dfs_resolver->now, &tombstone_realtime) < 0)
-    {
-        debug("%s::merge id %u, cannot discard tombstone (merge started before tombstone's version became immutable)\n",
-                __FUNCTION__, dfs_resolver->merge->id);
-        return 0;
-    }
-
-    if( !( (dfs_resolver->now.tv_sec - tombstone_realtime.tv_sec) >
+    if( !( (dfs_resolver->now.tv_sec - tombstone_realtime) >
                 atomic64_read(&dfs_resolver->merge->da->tombstone_discard_threshold_time_s)) )
     {
         debug("%s::merge id %u, cannot discard tombstone (req 1b)\n",
@@ -480,16 +475,13 @@ uint32_t castle_dfs_resolver_process(c_dfs_resolver *dfs_resolver)
               CVT_TOMBSTONE(stack_top_cvt) ) )   /*    OR the newest ancestor is a tombstone)... */
         {
             int discard_tombstone = 0;
-            debug("%s::[%p] may discard tombstone, pending timestamping requirements.\n",
-                    __FUNCTION__, merge);
-
             if( dfs_resolver->functions & DFS_RESOLVE_TIMESTAMPS )
             {
                 /* and it's satisfied the timestamping requirements... */
                 discard_tombstone =
                     castle_timestamped_tombstone_discardable_check(dfs_resolver,
                             entry_i_version,
-                            entry_i_ts);
+                            entry_i_cvt);
             }
             else /* - OR - */
             {
