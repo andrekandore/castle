@@ -20,18 +20,21 @@ STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS + C2B_STATE_ACCESS_
  *          1 reference per dirty c2b
  */
 typedef struct castle_cache_extent_dirtytree {
-    c_ext_id_t          ext_id;     /**< Extent ID this dirtylist describes.          */
-    spinlock_t          lock;       /**< Protects count, rb_root.                     */
-    atomic_t            ref_cnt;    /**< References to this dirtylist.                */
-    struct rb_root      rb_root;    /**< RB-tree of dirty c2bs.                       */
-    struct list_head    list;       /**< Position in a castle_cache_extent_dirtylist. */
-    uint8_t             flush_prio; /**< Decides which dirtylist to use (low #, is
-                                         higher priority.                             */
-    int                 nr_pages;   /**< Sum of c2b->nr_pages for c2bs in tree.
-                                         Protected by lock.                           */
+    c_ext_id_t          ext_id;             /**< Extent ID this dirtylist describes.            */
+    spinlock_t          lock;               /**< Protects count, rb_root.                       */
+    atomic_t            ref_cnt;            /**< References to this dirtylist.                  */
+    struct rb_root      rb_root;            /**< RB-tree of dirty c2bs.                         */
+    struct list_head    list;               /**< Position in a castle_cache_extent_dirtylist.   */
+    uint8_t             flush_prio;         /**< Decides which dirtylist to use (low #, is
+                                                 higher priority.                               */
+    int                 nr_pages;           /**< Sum of c2b->nr_pages for c2bs in tree.
+                                                 Protected by lock.                             */
+    c_byte_off_t        unflushed_off;      /**< Offset before which has been flushed.          */
+    c_byte_off_t        comp_unflushed_off; /**< Offset before which has been flushed in
+                                                 compressed extent.                             */
 #ifdef CASTLE_PERF_DEBUG
-    c_chk_cnt_t         ext_size;   /**< Size of extent when created (in chunks).     */
-    c_ext_type_t        ext_type;   /**< Extent type when created.                    */
+    c_chk_cnt_t         ext_size;           /**< Size of extent when created (in chunks).       */
+    c_ext_type_t        ext_type;           /**< Extent type when created.                      */
 #endif
 } c2_ext_dirtytree_t;
 

@@ -1328,15 +1328,18 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->rebuild_mask_id    = INVAL_MASK_ID;
 
     /* Per-extent RB dirtytree structure. */
-    ext->dirtytree->ext_id     = ext_id;
-    ext->dirtytree->ref_cnt    = ATOMIC(1);
-    ext->dirtytree->rb_root    = RB_ROOT;
-    ext->dirtytree->flush_prio = (uint8_t)-1;
     INIT_LIST_HEAD(&ext->dirtytree->list);
     spin_lock_init(&ext->dirtytree->lock);
+    ext->dirtytree->ext_id             = ext_id;
+    ext->dirtytree->ref_cnt            = ATOMIC(1);
+    ext->dirtytree->rb_root            = RB_ROOT;
+    ext->dirtytree->flush_prio         = (uint8_t)-1;
+    ext->dirtytree->nr_pages           = 0;
+    ext->dirtytree->unflushed_off      = 0;
+    ext->dirtytree->comp_unflushed_off = 0;
 #ifdef CASTLE_PERF_DEBUG
-    ext->dirtytree->ext_size= 0;
-    ext->dirtytree->ext_type= ext->ext_type;
+    ext->dirtytree->ext_size           = 0;
+    ext->dirtytree->ext_type           = ext->ext_type;
 #endif
     ext->global_mask = EMPTY_MASK_RANGE;
 
