@@ -502,6 +502,33 @@ int castle_extent_space_reserve(c_rda_type_t       rda_type,
     return ret;
 }
 
+static void __castle_res_pool_extent_attach(c_res_pool_t *pool, c_ext_t *ext);
+
+static c_res_pool_t * _castle_res_pool_create(c_rda_type_t      rda_type,
+                                              c_chk_cnt_t       logical_chk_cnt,
+                                              c_ext_t          *ext)
+{
+    c_res_pool_t *pool;
+
+    pool = castle_alloc(sizeof(c_res_pool_t));
+    if (!pool)
+        return NULL;
+
+    /* Init the pool. */
+    castle_res_pool_init(pool);
+
+    /* Reserve space for it. */
+    if (logical_chk_cnt && __castle_extent_space_reserve(rda_type, logical_chk_cnt, pool))
+    {
+        castle_free(pool);
+        return NULL;
+    }
+
+    if (ext) __castle_res_pool_extent_attach(pool, ext);
+
+    return pool;
+}
+
 /**
  * Creates a new reservation pool.
  *
@@ -518,22 +545,9 @@ c_res_pool_id_t castle_res_pool_create(c_rda_type_t rda_type, c_chk_cnt_t logica
     /* Should be part of a extent transaction, to avoid race with checkpoints. */
     castle_extent_transaction_start();
 
-    pool = castle_alloc(sizeof(c_res_pool_t));
+    pool = _castle_res_pool_create(rda_type, logical_chk_cnt, NULL);
     if (!pool)
         goto out;
-
-    /* Init the pool. */
-    castle_res_pool_init(pool);
-
-    /* Reserve space for it. */
-    if (logical_chk_cnt && __castle_extent_space_reserve(rda_type, logical_chk_cnt, pool))
-    {
-        /* Failed to allocate space for pool. */
-        castle_extent_transaction_end();
-        castle_free(pool);
-
-        return INVAL_RES_POOL;
-    }
 
     /* Get a new pool ID. */
     pool->id = castle_next_res_pool_id++;
@@ -550,17 +564,11 @@ out:
     return (pool? pool->id: INVAL_RES_POOL);
 }
 
-void __castle_res_pool_destroy(c_res_pool_t *pool)
+static void __castle_res_pool_destroy(c_res_pool_t *pool)
 {
     castle_printk(LOG_DEBUG, "Destroying pool: %u\n", pool->id);
 
-    castle_res_pool_print(pool);
-
     castle_res_pool_unreserve(pool);
-
-    castle_res_pool_print(pool);
-
-    castle_res_pool_hash_remove(pool);
 
     BUG_ON(castle_res_pool_hash_get(pool->id));
 
@@ -576,12 +584,15 @@ void castle_res_pool_destroy(c_res_pool_id_t pool_id)
     pool = castle_res_pool_hash_get(pool_id);
 
     if (atomic_dec_return(&pool->ref_count) == 0)
+    {
+        castle_res_pool_hash_remove(pool);
         __castle_res_pool_destroy(pool);
+    }
 
     castle_extent_transaction_end();
 }
 
-void __castle_res_pool_extent_attach(c_res_pool_t *pool, c_ext_t *ext)
+static void __castle_res_pool_extent_attach(c_res_pool_t *pool, c_ext_t *ext)
 {
     BUG_ON(!castle_extent_in_transaction());
 
@@ -609,7 +620,7 @@ void castle_res_pool_extent_attach(c_res_pool_id_t pool_id, c_ext_id_t ext_id)
     castle_extent_transaction_end();
 }
 
-void __castle_res_pool_extent_detach(c_ext_t *ext)
+static void __castle_res_pool_extent_detach(c_ext_t *ext)
 {
     c_res_pool_t *pool = ext->pool;
 
@@ -618,7 +629,10 @@ void __castle_res_pool_extent_detach(c_ext_t *ext)
     BUG_ON(!pool);
 
     if (atomic_dec_return(&pool->ref_count) == 0)
+    {
+        castle_res_pool_hash_remove(pool);
         __castle_res_pool_destroy(pool);
+    }
 
     ext->pool = NULL;
 }
@@ -3183,28 +3197,14 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
     ext->remap_seqno = 0;
 
     /* Try to reserve space on disk. */
-    if (alloc_size)
+    /* This is just a temporary pool, just to make allocation much simpler. This is not
+     * added to hash table and so can't be checkpointed. And the life time of this pool
+     * is just during extent_alloc(). */
+    if (alloc_size && (pool = _castle_res_pool_create(rda_type, alloc_size, ext)) == NULL)
     {
-        pool = castle_alloc(sizeof(c_res_pool_t));
-        if (!pool)
-            goto __hell;
-
-        /* This is just a temporary pool, just to make allocation much simpler. This is not
-         * added to hash table and so can't be checkpointed. And the life time of this pool
-         * is just during extent_alloc(). */
-        castle_res_pool_init(pool);
-
-        if (__castle_extent_space_reserve(rda_type, alloc_size, pool) < 0)
-        {
-            debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
-                             alloc_size, castle_rda_type_str[rda_type]);
-            castle_free(pool);
-            pool = NULL;
-
-            goto __low_space;
-        }
-
-        __castle_res_pool_extent_attach(pool, ext);
+        debug_res_pools("Failed to reserve space for extent allocation: %u, %s\n",
+                         alloc_size, castle_rda_type_str[rda_type]);
+        goto __low_space;
     }
 
     /* Block aligned chunk maps for each extent. */
@@ -3255,9 +3255,7 @@ static c_ext_id_t _castle_extent_alloc(c_rda_type_t     rda_type,
 
     /* Pool is just local, destroy it before returning. */
     __castle_res_pool_extent_detach(ext);
-    castle_res_pool_unreserve(pool);
-    castle_free(pool);
-    pool = NULL;
+    __castle_res_pool_destroy(pool);
 
 alloc_done:
     /* Successfully allocated space for extent. Create a mask for it. */
@@ -3288,8 +3286,7 @@ __hell:
     if (pool)
     {
         __castle_res_pool_extent_detach(ext);
-        castle_res_pool_unreserve(pool);
-        castle_free(pool);
+        __castle_res_pool_destroy(pool);
     }
 
     /* If we allocated from the meta extent pool, put it back ... */
