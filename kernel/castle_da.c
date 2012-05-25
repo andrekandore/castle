@@ -6115,8 +6115,7 @@ deser_done:
     }
 
     /* Set things up for tombstone discard (with or without tv_resolver) */
-    if (castle_da_merge_top_level_check(merge))
-        merge->is_top_level = 1;
+    merge->is_top_level = castle_da_merge_top_level_check(merge);
     do_gettimeofday(&merge->start_time);
 
     /* We need a DFS resolver if this is a level 2+ merge, AND we are timestamping, OR if this is
