@@ -1337,8 +1337,10 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->rb_root            = RB_ROOT;
     ext->dirtytree->flush_prio         = (uint8_t)-1;
     ext->dirtytree->nr_pages           = 0;
-    ext->dirtytree->unflushed_off      = 0;
-    ext->dirtytree->compr_unflushed_off= 0;
+    ext->dirtytree->flushed_off        = 0;
+    ext->dirtytree->compr_flushed_off  = 0;
+    //@TODO BM: make sure this returns the correct value
+    ext->dirtytree->compr_unit_size    = castle_compr_block_size_get(ext_id);
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size           = 0;
     ext->dirtytree->ext_type           = ext->ext_type;

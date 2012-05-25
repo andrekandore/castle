@@ -31,9 +31,11 @@ typedef struct castle_cache_extent_dirtytree {
                                                  higher priority.                               */
     int                 nr_pages;           /**< Sum of c2b->nr_pages for c2bs in tree.
                                                  Protected by lock.                             */
-    c_byte_off_t        unflushed_off;      /**< Offset before which has been flushed.          */
-    c_byte_off_t        compr_unflushed_off;/**< Offset before which has been flushed in
-                                                 compressed extent.                             */
+    c_byte_off_t        flushed_off;        /**< Exclusive offset before which flush I/O has
+                                                 been dispatched.                               */
+    c_byte_off_t        compr_flushed_off;  /**< Exclusive offset before which flush I/O has
+                                                 been dispatched in compressed extent.          */
+    c_byte_off_t        compr_unit_size;    /**< Compression unit size.                         */
 #ifdef CASTLE_PERF_DEBUG
     c_chk_cnt_t         ext_size;           /**< Size of extent when created (in chunks).       */
     c_ext_type_t        ext_type;           /**< Extent type when created.                      */
