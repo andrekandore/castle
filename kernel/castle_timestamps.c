@@ -34,8 +34,8 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
     BUG_ON(!dfs_resolver);
 
     /* We don't need a tv_resolver if we aren't timestamping and versioning */
-    BUG_ON(!castle_da_user_timestamping_check(merge->da));
-    BUG_ON(!castle_da_versioning_check(merge->da));
+    BUG_ON(!castle_da_user_timestamping_check(merge->da) &&
+            !castle_da_versioning_check(merge->da));
 
     /* No DFS resolver for merges below level 2; it's unnecessary and UNSAFE (see trac #4749) */
     BUG_ON(merge->level < 2);
