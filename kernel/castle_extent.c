@@ -2042,16 +2042,16 @@ void castle_extents_start(void)
 
 #define C_COMPR_BLK_SZ (64 * 1024)
 
-#define compr_blk_maps_per_page         (PAGE_SIZE / (2 * sizeof(c_byte_off_t)))
-#define compr_blks_per_chk              (C_CHK_SIZE / C_COMPR_BLK_SZ)
-#define compr_map_size(_compr_blks)     (1 + ((_compr_blks)-1) / compr_blk_maps_per_page)
+#define COMPR_BLK_MAPS_PER_PAGE         (PAGE_SIZE / (2 * sizeof(c_byte_off_t)))
+#define COMPR_BLKS_PER_CHK              (C_CHK_SIZE / C_COMPR_BLK_SZ)
+#define compr_map_size(_compr_blks)     (1 + ((_compr_blks)-1) / COMPR_BLK_MAPS_PER_PAGE)
 
 static int castle_extent_meta_ext_space_needed(c_ext_t *ext, unsigned long flags)
 {
     if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &flags))
         return map_size(ext->size, ext->k_factor);
 
-    return compr_map_size(ext->size / compr_blks_per_chk);
+    return compr_map_size(ext->size / COMPR_BLKS_PER_CHK);
 }
 
 //#define COMPACTION_DRY_RUN
