@@ -256,6 +256,7 @@ void castle_cache_prefetches_wait(void);
  * Misc.
  */
 #define c2b_buffer(_c2b)    ((_c2b)->buffer)
+#define c2b_end_off(_c2b)   ((_c2b)->cep.offset + ((_c2b)->nr_pages << PAGE_SHIFT) - 1) // inclusive
 
 int                        castle_stats_read               (void);
 

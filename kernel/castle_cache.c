@@ -1448,12 +1448,12 @@ void dirty_c2b(c2_block_t *c2b)
  * @also c2_dirtytree_remove()
  * @also I/O callback handlers (callers)
  */
-void clean_c2b(c2_block_t *c2b)
+void _clean_c2b(c2_block_t *c2b, int checklocked)
 {
     unsigned long old;
     int i, nr_c2ps;
 
-    BUG_ON(!c2b_locked(c2b));
+    BUG_ON(checklocked && !c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b) && (!c2b_remap(c2b)));
 
     /* Clean all c2ps. */
@@ -1491,6 +1491,11 @@ void clean_c2b(c2_block_t *c2b)
             if (old & (1ULL << (C2B_STATE_PARTITION_OFFSET + i)))
                 c2_partition_budget_dirty_update(i, -c2b->nr_pages);
     }
+}
+
+void clean_c2b(c2_block_t *c2b)
+{
+    _clean_c2b(c2b, 1 /*checklocked*/);
 }
 
 void update_c2b(c2_block_t *c2b)
@@ -5245,6 +5250,117 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_bat
 }
 
 /**
+ * Get compression unit-sized c2b starting at start_off, if one exists.
+ *
+ * A read-lock is taken on the c2b to be returned and all c2bs finishing in the
+ * specified range are marked as clean.
+ *
+ * @param   dirtytree   Dirtytree to select c2bs from
+ * @param   start_off   Starting offset for c2b to be returned
+ * @param   force       TODO    Force-get c2b even if pages do not exist at the end
+ */
+c2_block_t * __castle_cache_virtual_extent_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
+                                                          c_byte_off_t start_off,
+                                                          int force)
+{
+#define TRACK_C2BS      64      // @FIXME - 64KB/4KB = 16, overallocate by 4x
+    struct rb_node *parent;
+    c2_block_t *c2b = NULL, *ret_c2b = NULL;
+    c_byte_off_t end_off, seen_off;
+    c2_block_t *c2bs[TRACK_C2BS];
+    int c2bs_idx = 0;
+
+    /* Calculate inclusive end_off for compression unit c2b. */
+    BUG_ON(start_off % dirtytree->compr_unit_size);
+    end_off  = start_off + dirtytree->compr_unit_size - 1;
+    seen_off = start_off;
+
+    /* Verify c2bs with pages between start_off (inclusive) and end_off (inclusive)
+     * are immutable and all pages in the range are covered by at least one c2b. */
+    spin_lock_irq(&dirtytree->lock);
+    parent = rb_first(&dirtytree->rb_root);
+    while (parent)
+    {
+        c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
+
+        /* Skip c2bs are out of range. */
+        if (c2b_end_off(c2b) <= start_off)
+            continue;
+
+        /* Stop searching if c2b is mutable or starts beyond end_off. */
+        if (!c2b_immutable(c2b) || c2b->cep.offset > end_off)
+            break;
+
+        /* Update the offset we have seen up to. */
+        if (c2b_end_off(c2b) > seen_off)
+            seen_off = c2b_end_off(c2b);
+
+        /* If c2b ends in range, track it. */
+        if (c2b_end_off(c2b) <= end_off)
+        {
+            c2bs[c2bs_idx++] = c2b;
+            get_c2b(c2b);
+            BUG_ON(c2bs_idx >= TRACK_C2BS);
+        }
+
+        parent = rb_next(parent);
+    }
+    spin_unlock_irq(&dirtytree->lock);
+
+    BUG_ON(seen_off >= end_off && !c2b_immutable(c2b)); // TR lied to me
+
+    /* Generate compression unit c2b if we have a contiguous, immutable range or
+     * if we have been instructed to force-get a c2b, e.g. if we have reached
+     * the end of the extent. */
+    if (seen_off >= end_off || force)
+    {
+        c_ext_pos_t cep;
+
+        cep.ext_id = dirtytree->ext_id;
+        cep.offset = start_off;
+        ret_c2b = castle_cache_block_get(cep,
+                                         dirtytree->compr_unit_size >> PAGE_SHIFT,
+                                         MERGE_OUT);
+        BUG_ON(!c2b_uptodate(ret_c2b));
+        set_c2b_flushing(ret_c2b); // someone else may already be flushing
+        // @TODO set some c2b->state bits?
+
+        /* Because the c2bs are all immutable, only rebuild should ever hold
+         * write locks on the c2ps in ret_c2b.  Busy wait for them. */
+        while (!read_trylock_c2b(ret_c2b))
+            msleep(10);
+
+        /* Do funny things with those c2bs. */
+        for ( ; c2bs_idx > 0; c2bs_idx--)
+        {
+            c2b = c2bs[c2bs_idx];
+            put_c2b(c2b);
+            clean_c2b(c2b);
+        }
+    }
+
+    return ret_c2b;
+}
+
+USED static void __castle_cache_virtual_extent_flush(c2_ext_dirtytree_t *dirtytree,
+                                                c_byte_off_t        start_off,
+                                                c_byte_off_t        end_off,
+                                                int                 max_pgs,
+                                                c2b_end_io_t        end_io,
+                                                atomic_t           *in_flight_p,
+                                                int                *flushed_p,
+                                                int                 force)
+{
+    c2_block_t *c2b;
+
+    BUG_ON(1);
+
+    c2b = __castle_cache_virtual_extent_compr_unit_get(dirtytree,
+                                                       0 /*start_off*/,
+                                                       1 /*force*/);
+}
+
+/**
  * Submit async IO on max_pgs dirty pages from start of extent to end_off.
  *
  * @param dirtytree     [in]    Per-extent dirtytree to flush
@@ -5257,6 +5373,10 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_bat
  * @param waitlock      [in]    True if caller wants to block on c2b readlock,
  *                              otherwise use read_trylock()
  *
+ * All roads lead to Rome.  __castle_cache_compressed_extent_flush() and this
+ * function are the only two places that walk dirtytrees and disaptch I/O on the
+ * dirty c2bs they contain.
+ *
  * Caller must hold an explicit reference to the dirtytree otherwise in the
  * process of submitting IOs the IO completion handlers might free the tree.
  *
@@ -5267,6 +5387,7 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_bat
  * NOTE: While overlapping c2bs are permitted within the cache in practice they
  *       should not occur so are BUG_ON()ed.  Indeed, if they did it could lead
  *       to potential deadlocks when waitlock is set.  See #2237 for details.
+ *       @TODO this may happen for compressed extents
  *
  * @also castle_cache_extent_flush()
  */
@@ -5292,6 +5413,22 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     /* If max_pgs is not specified, set a huge limit. */
     if (max_pgs == 0)
         max_pgs = INT_MAX;
+
+#if 0
+    /* Use dedicated function if we are flushing a virtual extent. */
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+    {
+        __castle_cache_virtual_extent_flush(dirtytree,
+                                            start_off,
+                                            end_off,
+                                            max_pgs,
+                                            end_io,
+                                            in_flight_p,
+                                            flushed_p,
+                                            waitlock);
+        return;
+    }
+#endif
 
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
