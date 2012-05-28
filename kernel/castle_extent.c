@@ -265,8 +265,16 @@ static int                  rebuild_required(void);
  * restarted when it finishes it's current run to pick up and remap any extents that
  * have already been remapped to the (old) current_rebuild_seqno.
  */
-atomic_t                    current_rebuild_seqno;/* The current sequence number */
-static int                  rebuild_to_seqno;     /* The sequence number being rebuilt to */
+atomic_t                    current_rebuild_seqno;         /**< The current sequence number. */
+static int                  rebuild_to_seqno;              /**< The sequence number being    */
+                                                           /**< rebuilt to.                  */
+static int                  castle_immediate_rebuild = 1;  /**< Whether to start the rebuild */
+                                                           /**< immediately after detecting  */
+                                                           /**< a disk fault.                */
+module_param(castle_immediate_rebuild, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_immediate_rebuild, "If non-zero rebuild will be started immediately. "
+                                           "Otherwise CASTLE_CTRL_REBUILD_START ioctl is "
+                                           "required.");
 
 /* Persistent (via mstore) count of chunks remapped during rebuild run. */
 long                        castle_extents_chunks_remapped = 0;
@@ -6538,11 +6546,33 @@ out:
 /*
  * Kick the rebuild thread to start the rebuild process (e.g. when a slave dies or is evacuated).
  */
-void castle_extents_rebuild_wake(void)
+static void castle_extents_rebuild_start(void)
 {
     atomic_inc(&current_rebuild_seqno);
-    castle_events_slave_rebuild_notify();
     wake_up(&process_waitq);
+}
+
+/**
+ * Starts rebuild process, but only if user-controllable @see castle_immediate_rebuild parameter
+ * is set to true. Otherwise send an event, and await explicit request to rebuild
+ * (@see CASTLE_CTRL_REBUILD_START ctrl ioctl).
+ */
+void castle_extents_rebuild_conditional_start(void)
+{
+    /* Send an event to userspace to notify of a change in state (even if the rebuild
+       won't actually start immediately. */
+    if(castle_immediate_rebuild)
+        castle_extents_rebuild_start();
+    castle_events_slave_rebuild_notify();
+}
+
+/**
+ * Starts rebuild process immediately. Independently of @see castle_immediate_rebuild parameter.
+ */
+void castle_extents_rebuild_unconditional_start(void)
+{
+    castle_extents_rebuild_start();
+    castle_events_slave_rebuild_notify();
 }
 
 /*

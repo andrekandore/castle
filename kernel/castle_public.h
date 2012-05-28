@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 41 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 42 /* last updated by GM */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -309,6 +309,7 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_CREATE_WITH_OPTS         44
 #define CASTLE_CTRL_VERTREE_TDP_SET          45
 #define CASTLE_CTRL_STATE_QUERY              46
+#define CASTLE_CTRL_REBUILD_START            47
 
 
 
@@ -540,6 +541,11 @@ typedef struct castle_control_cmd_state_query {
     int             ret;            /* OUT */
 } cctrl_cmd_state_query_t;
 
+typedef struct castle_control_cmd_rebuild_start {
+    int             ret;            /* OUT */
+} cctrl_cmd_rebuild_start_t;
+
+
 typedef struct castle_control_ioctl {
     uint16_t cmd;
     union {
@@ -593,6 +599,7 @@ typedef struct castle_control_ioctl {
 
         cctrl_cmd_vertree_tdp_set_t     vertree_tdp_set;
         cctrl_cmd_state_query_t         state_query;
+        cctrl_cmd_rebuild_start_t       rebuild_start;
     };
 } cctrl_ioctl_t;
 
@@ -676,6 +683,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_TDP_SET, cctrl_ioctl_t),
     CASTLE_CTRL_STATE_QUERY_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_STATE_QUERY, cctrl_ioctl_t),
+    CASTLE_CTRL_REBUILD_START_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_REBUILD_START, cctrl_ioctl_t),
 };
 
 /*

@@ -831,8 +831,19 @@ void castle_control_slave_evacuate(uint32_t uuid, uint32_t force, int *ret)
         castle_printk(LOG_USERINFO, "Slave 0x%x [%s] has been marked as evacuating.\n",
                       slave->uuid, slave->bdev_name);
     }
-    castle_extents_rebuild_wake();
+    castle_extents_rebuild_unconditional_start();
     *ret = EXIT_SUCCESS;
+}
+
+/**
+ * Requests rebuild process to be performed (unconditionally).
+ *
+ * @param ret   Ptr to return variable, for now always set to 0.
+ */
+static void castle_control_rebuild_start(int *ret)
+{
+    castle_extents_rebuild_unconditional_start();
+    *ret = 0;
 }
 
 int castle_nice_value = -5;
@@ -1135,6 +1146,9 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             castle_control_slave_evacuate(ioctl.slave_evacuate.id,
                                           ioctl.slave_evacuate.force,
                                          &ioctl.slave_evacuate.ret);
+            break;
+        case CASTLE_CTRL_REBUILD_START:
+            castle_control_rebuild_start(&ioctl.rebuild_start.ret);
             break;
         case CASTLE_CTRL_SLAVE_SCAN:
             castle_control_slave_scan(ioctl.slave_scan.id, &ioctl.slave_scan.ret);

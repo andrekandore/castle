@@ -162,7 +162,9 @@ int                 castle_extents_init                     (void);
 void                castle_extents_fini                     (void);
 int                 castle_extents_process_init             (void);
 void                castle_extents_process_fini             (void);
-void                castle_extents_rebuild_wake             (void);
+void                castle_extents_rebuild_conditional_start(void);
+void                castle_extents_rebuild_unconditional_start
+                                                            (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
 void                castle_extent_micro_ext_update          (struct castle_slave *cs);
