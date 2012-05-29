@@ -6617,7 +6617,7 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
      * If fs init decided that we need a rebuild, then bumping current_rebuild_seqno will force all
      * extents to be checked.
      */
-    if (need_rebuild)
+    if (need_rebuild && castle_immediate_rebuild)
         atomic_inc(&current_rebuild_seqno);
 
     fs_sb = castle_fs_superblocks_get();
