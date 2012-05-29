@@ -2509,14 +2509,14 @@ static int _submit_c2b_decompress(int rw, c2_block_t *c2b, c_ext_id_t compr_ext_
  * extent and submit an appropriate request to that. Otherwise, simply pass through to
  * _submit_c2b_rda().
  */
-int _submit_c2b_compressed(int rw, c2_block_t *c2b, int *submitted_c2ps)
+static int _submit_c2b_compressed(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     c_ext_id_t compr_ext_id = castle_compr_compressed_ext_id_get(c2b->cep.ext_id);
 
     if (!EXT_ID_INVAL(compr_ext_id) && rw == READ)
         return _submit_c2b_decompress(rw, c2b, compr_ext_id, submitted_c2ps);
     else if (!EXT_ID_INVAL(compr_ext_id) && rw == WRITE)
-        BUG();                  /* LT should replace this */
+        BUG();                  /* we should never submit writes on virtual c2bs */
     else
         return _submit_c2b_rda(rw, c2b, submitted_c2ps);
 }
