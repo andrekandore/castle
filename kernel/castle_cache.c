@@ -26,6 +26,7 @@
 #include "castle_rebuild.h"
 #include "castle_mstore.h"
 #include "castle_systemtap.h"
+#include "lzo.h"
 
 #ifndef DEBUG
 #define debug(_f, ...)           ((void)0)
@@ -461,6 +462,15 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
 static atomic_t                castle_cache_flush_seq;
 
 struct task_struct            *castle_cache_evict_thread;
+
+static struct task_struct     *castle_cache_decompress_thread;
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_decompress_wq);
+static         DEFINE_SPINLOCK(castle_cache_decompress_lock);
+static               LIST_HEAD(castle_cache_decompress_list);
+static atomic_t                castle_cache_decompress_list_size;
+
+#define CASTLE_CACHE_DECOMPRESS_BUF_SIZE (256 * 1024)
+DEFINE_PER_CPU(unsigned char *, castle_cache_decompress_buf);
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
 static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pgs written to disk */
@@ -2490,6 +2500,27 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     return _submit_c2b_rda(rw, c2b, NULL);
 }
 
+static int _submit_c2b_decompress(int rw, c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps);
+
+/**
+ * Submit compressed c2b I/O.
+ *
+ * If the c2b belongs to a virtual extent, find the id of the corresponding compressed
+ * extent and submit an appropriate request to that. Otherwise, simply pass through to
+ * _submit_c2b_rda().
+ */
+int _submit_c2b_compressed(int rw, c2_block_t *c2b, int *submitted_c2ps)
+{
+    c_ext_id_t compr_ext_id = castle_compr_compressed_ext_id_get(c2b->cep.ext_id);
+
+    if (!EXT_ID_INVAL(compr_ext_id) && rw == READ)
+        return _submit_c2b_decompress(rw, c2b, compr_ext_id, submitted_c2ps);
+    else if (!EXT_ID_INVAL(compr_ext_id) && rw == WRITE)
+        BUG();                  /* LT should replace this */
+    else
+        return _submit_c2b_rda(rw, c2b, submitted_c2ps);
+}
+
 /**
  * Submit asynchronous c2b I/O.
  *
@@ -2519,7 +2550,7 @@ int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
     /* Set in-flight bit on the block. */
     set_c2b_in_flight(c2b);
 
-    return _submit_c2b_rda(rw, c2b, submitted_c2ps);
+    return _submit_c2b_compressed(rw, c2b, submitted_c2ps);
 }
 
 /**
@@ -2625,6 +2656,278 @@ static void castle_slaves_unplug(void)
     }
     rcu_read_unlock();
 }
+
+/*******************************************************************************
+ * Decompression.
+ */
+
+#define CASTLE_CACHE_USE_LZO 0
+
+/**
+ * Actually perform the decompression of a compressed c2b into a virtual c2b.
+ *
+ * @param   compr_c2b   The compressed c2b to use as the source of the decompression
+ * @param   virt_c2b    The virtual c2b to use as the destination of the decompression
+ * @param   async       Whether we went asynchronous
+ */
+static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *virt_c2b, int async)
+{
+    c_ext_pos_t compr_cep, virt_cep;
+    c_byte_off_t compr_size, compr_block_size;
+    c_byte_off_t virt_size, virt_base, virt_off;
+    size_t used;
+    unsigned char *compr_buf, *virt_buf;
+
+    compr_block_size = castle_compr_block_size_get(compr_c2b->cep.ext_id);
+    virt_cep  = virt_c2b->cep;
+    virt_size = virt_c2b->nr_pages * PAGE_SIZE;
+    virt_off  = virt_cep.offset;
+    virt_base = virt_off & ~(compr_block_size - 1);
+    virt_buf  = virt_c2b->buffer;
+
+    while (virt_size > 0)
+    {
+        /* get map for the next compressed block */
+        virt_cep.offset = virt_base;
+        compr_size = castle_compr_map_get(virt_cep, &compr_cep);
+        BUG_ON(compr_cep.ext_id != compr_c2b->cep.ext_id);
+        BUG_ON(compr_cep.offset < compr_c2b->cep.offset ||
+               compr_cep.offset + compr_size > compr_c2b->cep.offset + compr_c2b->nr_pages * PAGE_SIZE);
+#if CASTLE_CACHE_USE_LZO
+#else
+        BUG_ON(compr_size != compr_block_size);
+#endif
+        compr_buf = (unsigned char *) compr_c2b->buffer + (compr_cep.offset - compr_c2b->cep.offset);
+
+        /* decompress the block */
+        used = min(virt_size, compr_block_size - (virt_off - virt_base));
+        if (virt_base == virt_off && virt_size >= compr_block_size)
+        {
+#if CASTLE_CACHE_USE_LZO
+            size_t decompressed = compr_block_size;
+            if (lzo1x_decompress_safe(compr_buf, compr_size, virt_buf, &decompressed) < 0 ||
+                decompressed != compr_block_size)
+                BUG();
+#else
+            memcpy(virt_buf, compr_buf, compr_size);
+#endif
+        }
+        else
+        {
+            unsigned char *tmp_buf = get_cpu_var(castle_cache_decompress_buf);
+#if CASTLE_CACHE_USE_LZO
+            size_t decompressed = CASTLE_CACHE_DECOMPRESS_BUF_SIZE;
+            if (lzo1x_decompress_safe(compr_buf, compr_size, tmp_buf, &decompressed) < 0 ||
+                decompressed != compr_block_size)
+                BUG();
+#else
+            BUG_ON(compr_size > CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
+            memcpy(tmp_buf, compr_buf, compr_size);
+#endif
+            memcpy(virt_buf, tmp_buf + (virt_off - virt_base), used);
+            put_cpu_var(castle_cache_decompress_buf);
+        }
+
+        /* update accounting information */
+        virt_size -= used;
+        virt_base += used + (virt_off - virt_base);
+        virt_off  += used;
+        virt_buf  += used;
+    }
+
+    put_c2b(compr_c2b);
+    virt_c2b->end_io(virt_c2b, async);
+}
+
+/**
+ * The decompression thread function.
+ *
+ * In a loop, wait for c2bs to appear in the decompression list. When that happens, remove
+ * them from the list and then decompress them one by one.
+ */
+static int castle_cache_decompress(void *unused)
+{
+    LIST_HEAD(to_decompress);
+    struct list_head *entry, *tmp;
+    c2_block_t *compr_c2b, *virt_c2b;
+    int should_stop = 0;
+
+    for (;;) {
+        wait_event(castle_cache_decompress_wq,
+                   unlikely((should_stop = kthread_should_stop())) ||
+                   atomic_read(&castle_cache_decompress_list_size) > 0);
+
+        if (unlikely(should_stop))
+        {
+            BUG_ON(atomic_read(&castle_cache_decompress_list_size) > 0);
+            break;
+        }
+
+        /* grab the contents of the decompression list */
+        spin_lock_irq(&castle_cache_decompress_lock);
+        list_splice_init(&castle_cache_decompress_list, &to_decompress);
+        atomic_set(&castle_cache_decompress_list_size, 0);
+        spin_unlock_irq(&castle_cache_decompress_lock);
+
+        list_for_each_safe(entry, tmp, &to_decompress)
+        {
+            compr_c2b = list_entry(entry, c2_block_t, compress);
+            list_del(&compr_c2b->compress);
+            virt_c2b = compr_c2b->private;
+            castle_cache_decompression_do(compr_c2b, virt_c2b, 1 /* async */);
+        }
+    }
+
+    return EXIT_SUCCESS;
+}
+
+/**
+ * Handle the end of I/O for compressed cache blocks.
+ *
+ * @param   compr_c2b   The compressed block on which I/O was performed
+ * @param   async       Whether we went asynchronous
+ *
+ * If the I/O was performed synchronously, directly call into the actual decompression
+ * code; otherwise, pass the c2b to the decompression thread.
+ */
+static void decompress_c2b_endio(c2_block_t *compr_c2b, int async)
+{
+    c2_block_t *virt_c2b = compr_c2b->private;
+    unsigned long flags;
+
+    /* We don't need the write lock anymore, and we still have the reference. */
+    write_unlock_c2b(compr_c2b);
+
+    if (async)
+    {
+        /* add c2b to the decompression queue and notify the thread */
+        spin_lock_irqsave(&castle_cache_decompress_lock, flags);
+        list_add_tail(&compr_c2b->compress, &castle_cache_decompress_list);
+        atomic_inc(&castle_cache_decompress_list_size);
+        spin_unlock_irqrestore(&castle_cache_decompress_lock, flags);
+        wake_up(&castle_cache_decompress_wq);
+    }
+    else castle_cache_decompression_do(compr_c2b, virt_c2b, 0 /* async */);
+}
+
+/**
+ * Submit compressed c2b I/O.
+ *
+ * @param   rw              [in]    READ or WRITE
+ * @param   c2b             [in]    Block to perform I/O on
+ * @param   compr_ext_id    [in]    Id of the corresponding compressed extent
+ * @param   submitted_c2ps  [out]   Number of c2ps we issued I/O on
+ *
+ * Given a c2b belonging to a virtual extent, construct a c2b for the corresponding
+ * compressed extent and submit that for I/O.
+ */
+static int _submit_c2b_decompress(int rw, c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps)
+{
+    c_ext_pos_t virt_cep = c2b->cep, compr_cep;
+    c_byte_off_t virt_size = c2b->nr_pages * PAGE_SIZE, compr_size;
+    c_byte_off_t virt_base, virt_off, compr_base, compr_off;
+    c_byte_off_t compr_block_size = castle_compr_block_size_get(compr_ext_id);
+    c2_block_t *compr_c2b;
+
+    /* get extent mapping for the start of the c2b */
+    virt_off = virt_cep.offset;
+    virt_base = virt_off & ~(compr_block_size - 1); /* align to compressed block boundary */
+    virt_cep.offset = virt_base;
+    compr_size = castle_compr_map_get(virt_cep, &compr_cep);
+    BUG_ON(compr_cep.ext_id != compr_ext_id);
+    compr_off = compr_cep.offset;
+    compr_base = compr_off & ~(PAGE_SIZE - 1); /* align to page boundary */
+
+    /* get extent mapping for the end of the c2b, if necessary */
+    if (virt_size + (virt_off - virt_base) > compr_block_size)
+    {
+        /* We need to be careful here not to ask for a mapping beyond the end of the
+         * extent. */
+        virt_cep.offset = roundup(virt_off + virt_size - compr_block_size, compr_block_size);
+        compr_size = castle_compr_map_get(virt_cep, &compr_cep);
+        BUG_ON(compr_cep.ext_id != compr_ext_id);
+    }
+    /* Note that compr_size and compr_cep here might come from the *original*
+     * invocation of castle_compr_map_get(). */
+    compr_size += compr_cep.offset - compr_base;
+    compr_size = roundup(compr_size, PAGE_SIZE);
+
+    /* construct the compressed c2b */
+    compr_cep.offset = compr_base;
+    compr_c2b = castle_cache_block_get(compr_cep, compr_size / PAGE_SIZE, USER /* TODO@LT */);
+
+    /* schedule I/O on the compressed c2b, if necessary */
+    if (c2b_uptodate(compr_c2b))
+        goto endio;
+    write_lock_c2b(compr_c2b);
+    if (c2b_uptodate(compr_c2b)) /* check again, in case we raced with someone */
+        goto unlock;
+
+    compr_c2b->end_io = decompress_c2b_endio;
+    compr_c2b->private = c2b;
+    return _submit_c2b(READ, compr_c2b, submitted_c2ps);
+
+unlock:
+    write_unlock_c2b(compr_c2b);
+endio:
+    castle_cache_decompression_do(compr_c2b, c2b, 0 /* async */);
+    return 0;
+}
+
+/**
+ * Stop the decompression thread and free the per-cpu decompression buffers.
+ */
+static void castle_cache_decompress_fini(void)
+{
+    unsigned char **decompress_buf_ptr;
+    int i;
+
+    kthread_stop(castle_cache_decompress_thread);
+
+    for (i = 0; i < NR_CPUS; ++i)
+    {
+        decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
+        if (*decompress_buf_ptr)
+            castle_free(*decompress_buf_ptr);
+    }
+}
+
+/**
+ * Allocate the per-cpu decompression buffers and start the decompression thread.
+ */
+static int castle_cache_decompress_init(void)
+{
+    unsigned char **decompress_buf_ptr;
+    int i, ret = 0;
+
+    atomic_set(&castle_cache_decompress_list_size, 0);
+
+    for (i = 0; i < NR_CPUS; ++i)
+    {
+        if (cpu_possible(i))
+        {
+            decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
+            *decompress_buf_ptr = castle_alloc(CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
+            if (!*decompress_buf_ptr)
+            {
+                castle_printk(LOG_INIT, "Could not allocate per-cpu decompression buffers.\n");
+                ret = -ENOMEM;
+                goto err;
+            }
+        }
+    }
+
+    castle_cache_decompress_thread = kthread_run(castle_cache_decompress, NULL, "castle_decompress");
+    return 0;
+
+err:
+    castle_cache_decompress_fini();
+    return ret;
+}
+
+/*******************************************************************************
+ * castle_cache_page and castle_cache_block management.
+ */
 
 static inline unsigned long castle_cache_hash_idx(c_ext_pos_t cep, int nr_buckets)
 {
@@ -6894,10 +7197,11 @@ int castle_cache_init(void)
                 "Minimum %d MB required.\n",
                 CASTLE_CACHE_MIN_HARDPIN_SIZE);
 
-    if((ret = castle_cache_hashes_init()))    goto err_out;
-    if((ret = castle_cache_freelists_init())) goto err_out;
-    if((ret = castle_vmap_fast_map_init()))   goto err_out;
-    if((ret = castle_cache_threads_init()))   goto err_out;
+    if ((ret = castle_cache_hashes_init()))     goto err_out;
+    if ((ret = castle_cache_freelists_init()))  goto err_out;
+    if ((ret = castle_vmap_fast_map_init()))    goto err_out;
+    if ((ret = castle_cache_decompress_init())) goto err_out;
+    if ((ret = castle_cache_threads_init()))    goto err_out;
 
     /* Initialise per-cpu vmap mutexes */
     for(cpu_iter = 0; cpu_iter < NR_CPUS; cpu_iter++) {
@@ -6960,6 +7264,7 @@ void castle_cache_fini(void)
     castle_cache_debug_fini();
     castle_cache_prefetch_fini();
     castle_cache_threads_fini();
+    castle_cache_decompress_fini();
     castle_cache_hashes_fini();
     castle_vmap_fast_map_fini();
     castle_cache_freelists_fini();

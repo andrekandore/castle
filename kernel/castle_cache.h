@@ -58,6 +58,7 @@ typedef struct castle_cache_block {
         struct list_head       reserve;         /**< Position on castle_cache_block_reservelist.  */
         struct list_head       evict;           /**< Position on castle_cache_block_evictlist.    */
     };
+    struct list_head           compress;        /**< Position on the (de)compression queue.       */
     struct rb_node             rb_dirtytree;    /**< Per-extent dirtytree RB-node.                */
     c2_ext_dirtytree_t        *dirtytree;       /**< Dirtytree c2b is a member of.                */
 
