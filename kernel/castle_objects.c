@@ -918,12 +918,10 @@ int castle_object_replace(struct castle_object_replace *replace,
                           int tombstone)
 {
     struct castle_btree_type *btree;
-    //struct castle_double_array *da = attachment->col.da;
     void *key;
     c_bio_t *c_bio;
     c_bvec_t *c_bvec;
     int ret;
-    //size_t dest_len = 1024;
 
     if(replace->has_user_timestamp)
         debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
