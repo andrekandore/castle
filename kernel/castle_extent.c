@@ -63,6 +63,8 @@
 #define debug_resize(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
+#define C_COMPR_BLK_SZ (64 * 1024)
+
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
 
@@ -1339,16 +1341,14 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     INIT_LIST_HEAD(&ext->dirtytree->list);
     spin_lock_init(&ext->dirtytree->lock);
     ext->dirtytree->ext_id             = ext_id;
-    //@TODO BM: to make this happen, wherever necessary
-//    ext->dirtytree->compr_ext_id       = castle_compr_compressed_ext_id_get(ext_id);
+    ext->dirtytree->compr_ext_id       = INVAL_EXT_ID;
     ext->dirtytree->ref_cnt            = ATOMIC(1);
     ext->dirtytree->rb_root            = RB_ROOT;
     ext->dirtytree->flush_prio         = (uint8_t)-1;
     ext->dirtytree->nr_pages           = 0;
     ext->dirtytree->flushed_off        = 0;
     ext->dirtytree->compr_flushed_off  = 0;
-    //@TODO BM: make sure this returns the correct value
-    ext->dirtytree->compr_unit_size    = castle_compr_block_size_get(ext_id);
+    ext->dirtytree->compr_unit_size    = C_COMPR_BLK_SZ;
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size           = 0;
     ext->dirtytree->ext_type           = ext->ext_type;
@@ -2047,8 +2047,6 @@ void castle_extents_start(void)
 
 #define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
 #define map_size(_ext_chks, _k_factor)  (1 + (_ext_chks-1) / map_chks_per_page(_k_factor))
-
-#define C_COMPR_BLK_SZ (64 * 1024)
 
 #define COMPR_BLK_MAPS_PER_PAGE         (PAGE_SIZE / (2 * sizeof(c_byte_off_t)))
 #define COMPR_BLKS_PER_CHK              (C_CHK_SIZE / C_COMPR_BLK_SZ)
@@ -3149,8 +3147,8 @@ c_ext_id_t castle_extent_alloc(c_rda_type_t             rda_type,
         set_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags);
 
         /* Link these two extents. */
-        comp_ext->linked_ext_id = virt_ext->ext_id;
-        virt_ext->linked_ext_id = comp_ext->ext_id;
+        comp_ext->dirtytree->compr_ext_id = comp_ext->linked_ext_id = virt_ext->ext_id;
+        virt_ext->dirtytree->compr_ext_id = virt_ext->linked_ext_id = comp_ext->ext_id;
 
         /* Thats easy!! we are done. */
     }
