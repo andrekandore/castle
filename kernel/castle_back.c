@@ -2309,7 +2309,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         buf_con->cur_kv_off -= val_len;
         kv_hdr->val_off      = buf_con->cur_kv_off;
         if (CVT_INLINE(*val))
-            memcpy(buf_con->buf + buf_con->cur_kv_off, val->val_p, val_len);
+            memcpy(buf_con->buf + buf_con->cur_kv_off, CVT_INLINE_VAL_PTR(*val), val_len);
         else
         {
             castle_back_buffer_ool_memcpy(buf_con->buf + buf_con->cur_kv_off, val);
