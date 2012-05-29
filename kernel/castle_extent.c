@@ -2057,7 +2057,7 @@ static int castle_extent_meta_ext_space_needed(c_ext_t *ext, unsigned long flags
     if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &flags))
         return map_size(ext->size, ext->k_factor);
 
-    return compr_map_size(ext->size / COMPR_BLKS_PER_CHK);
+    return compr_map_size(ext->size * COMPR_BLKS_PER_CHK);
 }
 
 //#define COMPACTION_DRY_RUN
@@ -3641,6 +3641,55 @@ int castle_extent_exists(c_ext_id_t ext_id)
     return 0;
 }
 
+/**
+ * Compression extent API implementation.
+ */
+
+struct castle_compr_map {
+    c_byte_off_t comp_ext_offset;
+    uint32_t     blk_size;
+};
+
+static inline c_ext_pos_t castle_compr_map_cep_get(c_ext_pos_t  map_start,
+                                                   uint32_t     blk_idx)
+{
+    map_start.offset += PAGE_SIZE * (blk_idx / COMPR_BLK_MAPS_PER_PAGE);
+    map_start.offset += (2 * sizeof(c_byte_off_t)) * (blk_idx % COMPR_BLK_MAPS_PER_PAGE);
+
+    return map_start;
+}
+
+static c2_block_t* castle_compr_map_c2b_get(c_ext_t *virt_ext, c_byte_off_t offset, int rw,
+                                            uint32_t *map_idx_p)
+{
+    uint32_t idx;
+    c_ext_pos_t map_cep;
+    c2_block_t *map_c2b;
+
+    /* Compression block index from the start of extent. */
+    idx = offset / C_COMPR_BLK_SZ;
+
+    /* Get compression map cep for the block. */
+    map_cep = castle_compr_map_cep_get(virt_ext->maps_cep, idx);
+
+    /* Index in the current map page. */
+    *map_idx_p = idx % COMPR_BLK_MAPS_PER_PAGE;
+
+    castle_printk(LOG_UNLIMITED, "%llu -> %u\n", offset, idx);
+
+    /* Get c2b for the map page. */
+    map_cep.offset = MASK_BLK_OFFSET(map_cep.offset);
+
+    map_c2b = castle_cache_block_get(map_cep, 1, USER);
+
+    /* Read the c2b from disk. */
+    if (rw == READ || *map_idx_p)
+        BUG_ON(castle_cache_block_sync_read(map_c2b));
+
+    return map_c2b;
+}
+
+
 int castle_compr_type_get(c_ext_id_t ext_id)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
@@ -3682,23 +3731,57 @@ c_byte_off_t castle_compr_block_size_get(c_ext_id_t ext_id)
     return C_COMPR_BLK_SZ;
 }
 
-c_byte_off_t castle_compr_map_get(c_ext_pos_t cep, c_ext_pos_t *comp_ext_cep)
+c_byte_off_t castle_compr_map_get(c_ext_pos_t virt_cep, c_ext_pos_t *comp_cep)
 {
-    c_ext_t *ext = castle_extents_hash_get(cep.ext_id);
+    c_ext_t *virt_ext = castle_extents_hash_get(virt_cep.ext_id);
+    struct castle_compr_map *map_buf;
+    c2_block_t *map_c2b;
+    c_byte_off_t blk_sz;
+    uint32_t idx;
 
-    BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags));
+    BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags));
+    BUG_ON(virt_cep.offset & (C_COMPR_BLK_SZ-1));
 
-    /* Offset should be block aligned. */
-    BUG_ON(cep.offset & C_COMPR_BLK_SZ);
+    map_c2b = castle_compr_map_c2b_get(virt_ext, virt_cep.offset, READ, &idx);
 
-    comp_ext_cep->ext_id = ext->linked_ext_id;
-    comp_ext_cep->offset = cep.offset;
+    read_lock_c2b(map_c2b);
 
-    return C_COMPR_BLK_SZ;
+    map_buf = c2b_buffer(map_c2b);
+    comp_cep->ext_id = virt_ext->linked_ext_id;
+    comp_cep->offset = map_buf[idx].comp_ext_offset;
+    blk_sz = map_buf[idx].blk_size;
+
+    read_unlock_c2b(map_c2b);
+    put_c2b(map_c2b);
+
+    return blk_sz;
 }
 
 void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off_t comp_blk_bytes)
 {
+    c_ext_t *virt_ext = castle_extents_hash_get(virt_cep.ext_id);
+    c_ext_t *comp_ext = castle_extents_hash_get(comp_cep.ext_id);
+    struct castle_compr_map *map_buf;
+    c2_block_t *map_c2b;
+    uint32_t idx;
+
+    /* Sanity checks. */
+    BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags));
+    BUG_ON(!test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &comp_ext->flags));
+    BUG_ON(comp_blk_bytes > C_COMPR_BLK_SZ);
+
+    map_c2b = castle_compr_map_c2b_get(virt_ext, virt_cep.offset, WRITE, &idx);
+    write_lock_c2b(map_c2b);
+    if (!idx)
+        update_c2b(map_c2b);
+
+    map_buf = c2b_buffer(map_c2b);
+    map_buf[idx].comp_ext_offset = comp_cep.offset;
+    map_buf[idx].blk_size = comp_blk_bytes;
+
+    write_unlock_c2b(map_c2b);
+    put_c2b(map_c2b);
+
     return;
 }
 
