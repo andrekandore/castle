@@ -91,8 +91,8 @@
         (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         (_ext)->ext_type    = (_me)->ext_type;                              \
         (_ext)->da_id       = (_me)->da_id;                                 \
-        (_ext)->linked_ext_id= (_me)->linked_ext_id;                        \
         (_ext)->flags       |= (_me)->flags;                                \
+        (_ext)->dirtytree->compr_ext_id = (_ext)->linked_ext_id= (_me)->linked_ext_id; \
         (_ext)->dirtytree->ext_size = (_me)->size;                          \
         (_ext)->dirtytree->ext_type = (_me)->ext_type;
 #else
@@ -105,7 +105,7 @@
         (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
         (_ext)->ext_type    = (_me)->ext_type;                              \
         (_ext)->flags      |= (_me)->flags;                                 \
-        (_ext)->linked_ext_id= (_me)->linked_ext_id;                        \
+        (_ext)->dirtytree->compr_ext_id = (_ext)->linked_ext_id= (_me)->linked_ext_id; \
         (_ext)->da_id       = (_me)->da_id;
 #endif
 
