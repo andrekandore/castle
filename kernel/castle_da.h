@@ -53,6 +53,7 @@ struct castle_da_merge {
         struct castle_double_array   *da;
         struct castle_component_tree *tree;
         struct castle_btree_type     *btree;
+        struct castle_da_merge       *merge;
 
         struct castle_immut_tree_level {
             /* Node we are currently generating, and book-keeping variables about the node. */
@@ -73,7 +74,6 @@ struct castle_da_merge {
         void                         *last_key;          /**< Last key added to out tree, depth
                                                               0. */
         c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
-        void                         *private;
         int                           checkpointable;
 #ifdef CASTLE_DEBUG
         uint8_t                       is_recursion;

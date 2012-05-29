@@ -168,6 +168,7 @@ static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
 static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int tvr_new_key);
+static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge);
 static void castle_da_merge_marshall(struct castle_da_merge *merge,
                                      c_da_merge_marshall_set_t partial_marshall);
 /* out_tree_check checks only output tree state */
@@ -4595,6 +4596,13 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     if (tree_constr->node_complete)
         tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
 
+    if ((depth == 0) &&
+        !castle_da_versioning_check(tree_constr->da) &&
+        tree_constr->merge &&
+        MERGE_CHECKPOINTABLE(tree_constr->merge))
+    {
+        castle_da_versionless_merge_serialise(tree_constr->merge);
+    }
 
     put_c2b(node_c2b);
 
@@ -4608,7 +4616,7 @@ static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct 
                                              int                                 depth,
                                              int                                 completing)
 {
-    struct castle_da_merge *merge = tree_constr->private;
+    struct castle_da_merge *merge = tree_constr->merge;
     struct castle_btree_node *node = c2b_bnode(node_c2b);
     void *key;
 
@@ -4648,6 +4656,17 @@ static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *
         {
             debug("%s:: tree %d completing level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
+
+            if (!castle_da_versioning_check(tree_constr->da))
+            {
+                /* This tree is not being versioned, so force the current node
+                   end as a valid end. */
+                struct castle_btree_node *node;
+                node = c2b_bnode(level->node_c2b);
+                BUG_ON(node->used < 1);
+                level->valid_end_idx = node->used - 1;
+            }
+
             castle_immut_tree_node_complete(tree_constr, i, 0 /* Not yet completing tree.  */);
             debug("%s:: tree %d completed level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
@@ -5621,7 +5640,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
     }
 
     /* No tv_resolver; rely on merge->is_new_key for serialisation control. */
-    if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver)
+    if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver && castle_da_versioning_check(merge->da))
         castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* whatever... */);
 
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
@@ -6248,7 +6267,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
                                                     struct castle_double_array     *da,
                                                     int                             checkpointable,
                                                     c_immut_tree_node_complete_cb_t node_complete_cb,
-                                                    void                           *private)
+                                                    struct castle_da_merge         *merge)
 {
     struct castle_immut_tree_construct *tree_constr;
     int i;
@@ -6269,12 +6288,12 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
     tree_constr->da                 = da;
     tree_constr->tree               = NULL;
     tree_constr->btree              = btree;
+    tree_constr->merge              = merge;
     tree_constr->is_new_key         = 1;
     tree_constr->last_key           = NULL;
     tree_constr->last_leaf_node_c2b = NULL;
     tree_constr->leafs_on_ssds      = 0;
     tree_constr->internals_on_ssds  = 0;
-    tree_constr->private            = private;
     tree_constr->checkpointable     = checkpointable;
 #ifdef CASTLE_DEBUG
     tree_constr->is_recursion       = 0;
@@ -6610,15 +6629,16 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     int level;
     c_merge_serdes_state_t live_state;
     c_merge_serdes_state_t checkpointable_state;
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_component_tree *out_tree;
 
     BUG_ON(!merge);
     BUG_ON(!merge->da);
 
-    da=merge->da;
-    level=merge->level;
+    da       = merge->da;
+    level    = merge->level;
+    out_tree = merge->out_tree_constr->tree;
+
     BUG_ON(level > MAX_DA_LEVEL);
-    /* assert that we are not serialising merges on lower levels */
     BUG_ON((level < MIN_DA_SERDES_LEVEL));
     BUG_ON(!out_tree);
 
@@ -6787,6 +6807,72 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     /* all states should have been covered above */
     castle_printk(LOG_ERROR, "%s::should not have gotten here, with merge %p\n", __FUNCTION__, merge);
     BUG();
+}
+
+/**
+ * A simplified alternative to castle_da_merge_serialise(); this works for unversioned workloads.
+ *
+ * @input merge structure
+ * @also castle_da_merge_serialise
+ **/
+static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
+{
+    struct castle_double_array *da;
+    int level;
+    struct castle_component_tree *out_tree;
+    c_merge_serdes_state_t live_state;
+    c_merge_serdes_state_t checkpointable_state;
+
+    BUG_ON(!merge);
+    BUG_ON(!merge->da);
+
+    da       = merge->da;
+    level    = merge->level;
+    out_tree = merge->out_tree_constr->tree;
+
+    BUG_ON(level > MAX_DA_LEVEL);
+    BUG_ON((level < MIN_DA_SERDES_LEVEL));
+    BUG_ON(!out_tree);
+
+    checkpointable_state = atomic_read(&merge->serdes.checkpointable.state);
+    live_state = atomic_read(&merge->serdes.live.state);
+    debug("%s::[merge id %u] live: %u, checkpointable: %u\n",
+        __FUNCTION__, merge->id, live_state, checkpointable_state);
+
+    if (atomic_read(&out_tree->tree_depth) < 2)
+    {
+        debug("%s::[merge %u, %p] too small to bother serialising yet.\n",
+            __FUNCTION__, merge->id, merge);
+        BUG_ON(live_state           != NULL_DAM_SERDES ); /* Shouldn't be any SERDES state yet */
+        BUG_ON(checkpointable_state != NULL_DAM_SERDES ); /* ditto */
+        return;
+    }
+
+    if( likely(checkpointable_state == VALID_AND_FRESH_DAM_SERDES) )
+    {
+        /* This is usually the most common case, and is basically a noop; waiting for checkpoint to
+           write checkpointable state before making a new state snapshot. */
+
+        BUG_ON(live_state != VALID_AND_FRESH_DAM_SERDES);
+        debug("%s::[merge %u, %p] existing SERDES snapshot not yet checkpointed.\n",
+            __FUNCTION__, merge->id, merge);
+        return;
+    }
+    else
+    {
+        castle_printk(LOG_DEBUG, "%s::[merge %u, %p] making new SERDES snapshot.\n",
+                __FUNCTION__, merge->id, merge);
+        CASTLE_TRANSACTION_BEGIN;
+        castle_da_merge_marshall(merge, DAM_MARSHALL_ALL);
+        CASTLE_TRANSACTION_END;
+
+        /* mark serialisation as checkpointable, and no longer updatable */
+        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
+
+        /* Set up a new package for checkpoint */
+        castle_da_merge_mstore_package_deep_copy(&merge->serdes.checkpointable, &merge->serdes.live);
+    }
+
 }
 
 /**
@@ -7110,6 +7196,10 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
             void        *dummy_k_unpack;
             c_ver_t      dummy_v;
             c_val_tup_t  dummy_cvt;
+
+            /* For a non-versioned DA, we only checkpoint on new node boundaries, which means we
+               would never expect to recover an in-progress leaf btree node. */
+            BUG_ON(!castle_da_versioning_check(da) && (i == 0));
 
             castle_printk(LOG_DEBUG, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
@@ -12820,7 +12910,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                             da,
                                             0,
                                             NULL,       /* node_complete callback.  */
-                                            NULL);      /* private info.            */
+                                            NULL);      /* not a merge.             */
 
     if (!constr)
         goto err_out;
