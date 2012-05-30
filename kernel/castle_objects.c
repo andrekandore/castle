@@ -368,6 +368,20 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 
         castle_object_replace_data_copy(replace, data_c2b_buffer, copy_length,
                                         last_copy ? 0 : 1);
+        if(last_copy)
+        {
+            /* Zero-pad till the end of the page boundary */
+            int mod_cp = copy_length % C_BLK_SIZE;
+            if(mod_cp)
+            {
+                castle_printk(LOG_DEBUG, "%s::zero padding %u bytes.\n",
+                    __FUNCTION__, (C_BLK_SIZE - mod_cp));
+                memset(data_c2b_buffer + copy_length, 0, (C_BLK_SIZE - mod_cp));
+            }
+        }
+        else
+            BUG_ON(copy_length % C_BLK_SIZE); /* we assume that only the last copy may not be
+                                                 block aligned. */
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;
@@ -381,7 +395,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         {
             c2_block_t *new_data_c2b;
             c_ext_pos_t new_data_cep;
-            debug("Run out of buffer space, allocating a new one.\n");
+            castle_printk(LOG_DEBUG, "Run out of buffer space, allocating a new one.\n");
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length);
             if (EXT_POS_COMP(new_data_cep, data_c2b->cep) <= 0)
             {

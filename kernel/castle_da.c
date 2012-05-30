@@ -4014,7 +4014,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 {
     c_ext_pos_t old_cep, new_cep;
     c_val_tup_t new_cvt;
-    int total_blocks, blocks, i;
+    int total_blocks, total_blocks_remaining, blocks, i;
     c2_block_t *s_c2b, *c_c2b;
     c_byte_off_t ext_space_needed;
 
@@ -4050,8 +4050,8 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     /* Allocate space for the new copy. */
     total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
     ext_space_needed = total_blocks * C_BLK_SIZE;
-    debug("%s::[da %d level %d] new object consuming %d blocks (%llu bytes)\n",
-        __FUNCTION__, merge->da->id, merge->level, total_blocks, ext_space_needed);
+    debug("%s::[merge id %u] new object consuming %d blocks (%llu bytes)\n",
+        __FUNCTION__, merge->id, total_blocks, ext_space_needed);
 
     BUG_ON(castle_ext_freespace_get(&merge->out_tree_constr->tree->data_ext_free,
                                      ext_space_needed,
@@ -4063,28 +4063,29 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     new_cvt.cep = new_cep;
 
     /* Do the actual copy. */
-    debug("Copying "cep_fmt_str" to "cep_fmt_str_nl,
-            cep2str(old_cep), cep2str(new_cep));
+    debug("%s::[merge id %u] Copying "cep_fmt_str" to "cep_fmt_str_nl,
+            __FUNCTION__, merge->id, cep2str(old_cep), cep2str(new_cep));
 
-    while (total_blocks > 0)
+    total_blocks_remaining = total_blocks;
+    while (total_blocks_remaining > 0)
     {
         int chk_off, pgs_to_end;
 
-        /* Chunk-align blocks if total_blocks is large enough to make it worthwhile. */
+        /* Chunk-align blocks if total_blocks_remaining is large enough to make it worthwhile. */
         chk_off = CHUNK_OFFSET(old_cep.offset);
         if (chk_off)
             pgs_to_end = (C_CHK_SIZE - chk_off) >> PAGE_SHIFT;
 
         /* Be careful about subtraction, if it goes negative, and is compared to
            BLKS_PER_CHK the test is likely not to work correctly. */
-        if (chk_off && (total_blocks >= 2*BLKS_PER_CHK + pgs_to_end))
+        if (chk_off && (total_blocks_remaining >= 2*BLKS_PER_CHK + pgs_to_end))
             /* Align for a minimum of 2 full blocks (1 can be inefficient) */
             blocks = pgs_to_end;
-        else if (total_blocks > BLKS_PER_CHK)
+        else if (total_blocks_remaining > BLKS_PER_CHK)
             blocks = BLKS_PER_CHK;
         else
-            blocks = total_blocks;
-        total_blocks -= blocks;
+            blocks = total_blocks_remaining;
+        total_blocks_remaining -= blocks;
 
         s_c2b = castle_cache_block_get(old_cep, blocks, MERGE_IN);
         c_c2b = castle_cache_block_get(new_cep, blocks, MERGE_OUT);
@@ -4095,6 +4096,18 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
         dirty_c2b(c_c2b);
+
+        /* Assert that the padded region is zero filled -- this is super inefficient */
+        // TODO@tr disable this code after a successful test run.
+        if (total_blocks_remaining == 0)
+        {
+            unsigned int i;
+            unsigned int end_of_val_offset =
+                (blocks*PAGE_SIZE) - ( (total_blocks*PAGE_SIZE) - old_cvt.length );
+            for (i = end_of_val_offset; i < blocks*PAGE_SIZE; i++)
+                BUG_ON( (char)(*((char*)(c2b_buffer(c_c2b))+i)) != 0 );
+        }
+
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(s_c2b);
         put_c2b(c_c2b);
