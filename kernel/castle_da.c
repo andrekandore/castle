@@ -2333,43 +2333,52 @@ static void _castle_da_rq_iter_init(c_da_rq_iter_t *iter)
         proxy_ct = &iter->cts_proxy->cts[i];
         ct_iter  = &iter->ct_iters[nr_iters];
 
+
+        /* If infinite RQ is requested, set the iterator keys to min/max,
+           so that the key redirection analysis below all work correctly.
+           Then reset them again. */
         if (iter->get_all)
         {
-            ct_start_key = btree->min_key;
-            ct_end_key = btree->max_key;
+            iter->start_key = btree->min_key;
+            iter->end_key   = btree->max_key;
         }
-        else
+
+        switch (proxy_ct->state)
         {
-            switch (proxy_ct->state)
-            {
-                case NO_REDIR:
-                    /* No redirection, use requested start and end keys. */
-                    ct_start_key    = iter->start_key;
-                    ct_end_key      = iter->end_key;
-                    break;
-                case REDIR_INTREE:
-                    /* Input tree, start at key_next(partition key), or at start_key
-                     * whichever greater.
-                     * Prior keys (if queried for) are handled by the output tree. */
-                    if(btree->key_compare(iter->start_key, proxy_ct->pk_next) >= 0)
-                        ct_start_key = iter->start_key;
-                    else
-                        ct_start_key = proxy_ct->pk_next;
-                    ct_end_key       = iter->end_key;
-                    break;
-                case REDIR_OUTTREE:
-                    /* Output tree, end at partition key or at end key, whichever
-                     * smaller.
-                     * Later keys are handled by the input trees. */
-                    ct_start_key    = iter->start_key;
-                    if(btree->key_compare(iter->end_key, proxy_ct->pk) >= 0)
-                        ct_end_key  = proxy_ct->pk;
-                    else
-                        ct_end_key  = iter->end_key;
-                    break;
-                default:
-                    BUG();
-            }
+            case NO_REDIR:
+                /* No redirection, use requested start and end keys. */
+                ct_start_key    = iter->start_key;
+                ct_end_key      = iter->end_key;
+                break;
+            case REDIR_INTREE:
+                /* Input tree, start at key_next(partition key), or at start_key
+                 * whichever greater.
+                 * Prior keys (if queried for) are handled by the output tree. */
+                if(btree->key_compare(iter->start_key, proxy_ct->pk_next) >= 0)
+                    ct_start_key = iter->start_key;
+                else
+                    ct_start_key = proxy_ct->pk_next;
+                ct_end_key       = iter->end_key;
+                break;
+            case REDIR_OUTTREE:
+                /* Output tree, end at partition key or at end key, whichever
+                 * smaller.
+                 * Later keys are handled by the input trees. */
+                ct_start_key    = iter->start_key;
+                if(btree->key_compare(iter->end_key, proxy_ct->pk) >= 0)
+                    ct_end_key  = proxy_ct->pk;
+                else
+                    ct_end_key  = iter->end_key;
+                break;
+            default:
+                BUG();
+        }
+
+        /* Reset the iterator keys back again. ct_start_key/ct_end_key are now set. */
+        if (iter->get_all)
+        {
+            iter->start_key = NULL;
+            iter->end_key   = NULL;
         }
 
         /* Initialise CT iterator. */
