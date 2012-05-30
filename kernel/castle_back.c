@@ -2073,15 +2073,16 @@ void castle_buffer_kvp_free(c_buf_user_kv_hdr_t *user_hdr)
 }
 
 /**
+ * IMPORTANT: This function is implemented (textualy identical) in fs.hg & libcastle.hg.
+ *            Sync any changes in both repos.
+ *
  * Get key value pair from buffer.
  *
  * @param   buf_con     Pointer to buffer consumer structure
  * @param   kv_index    Get kv_index^th key from buffer
  * @param   user_hdr    Return structure
  *
- * This is the kernel re-implementation of the same libcastle function.
- *
- * NOTE: Consumer must call castle_buffer_kvp_free() on success.
+ * NOTE: Consumer must call castle_buffer_kvp_free() on success (kernel only).
  *
  * @return -EINVAL  Buffer sanity checking failed
  * @return  0       Success
@@ -2106,8 +2107,10 @@ int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
     key_len = user_hdr->key->length + 4;
     if (kv_hdr.key_off + key_len > buf_con->buf_len)
         return -EINVAL;
+#ifdef __KERNEL__
     if ((err = _castle_back_key_copy_get(user_hdr->key, key_len, &user_hdr->key)))
         return err;
+#endif
 
     /* Sanity check value in buffer and set val pointer or collection_id. */
     if (kv_hdr.val_type == CASTLE_VALUE_TYPE_INVALID)
@@ -2122,11 +2125,13 @@ int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
             err = -EINVAL;
             goto err;
         }
+#ifdef __KERNEL__
         if (kv_hdr.val_len > MEDIUM_OBJECT_LIMIT)
         {
             err = -EINVAL;
             goto err;
         }
+#endif
         user_hdr->val = buf_con->buf + kv_hdr.val_off;
     }
     else if (kv_hdr.val_type == CASTLE_VALUE_TYPE_OUT_OF_LINE)
@@ -2147,15 +2152,18 @@ int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
     return 0;
 
 err:
+#ifdef __KERNEL__
     castle_buffer_kvp_free(user_hdr);
+#endif
 
     return err;
 }
 
 /**
- * Initialise buffer consumer and return number of key and value pairs.
+ * IMPORTANT: This function is implemented (textualy identical) in fs.hg & libcastle.hg.
+ *            Sync any changes in both repos.
  *
- * This is the kernel re-implementation of the same libcastle function.
+ * Initialise buffer consumer and return number of key and value pairs.
  */
 int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
                                 void *buf,
