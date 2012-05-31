@@ -2736,6 +2736,7 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
     }
 
     put_c2b(compr_c2b);
+    update_c2b(virt_c2b);
     virt_c2b->end_io(virt_c2b, async);
 }
 
