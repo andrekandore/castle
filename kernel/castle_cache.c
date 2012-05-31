@@ -4230,7 +4230,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             if (ext_size &&
                 ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
             {
-                castle_printk(LOG_DEBUG, "Couldn't create cache page of size %d at cep: "cep_fmt_str
+                castle_printk(LOG_ERROR, "Couldn't create cache page of size %d at cep: "cep_fmt_str
                        "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
                 WARN_ON(1);
                 msleep(10000);
