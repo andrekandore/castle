@@ -4110,6 +4110,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(s_c2b);
+        set_c2b_immutable(c_c2b);
         put_c2b(c_c2b);
         put_c2b_and_demote(s_c2b);
         old_cep.offset += blocks * PAGE_SIZE;
@@ -4617,6 +4618,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
         castle_da_versionless_merge_serialise(tree_constr->merge);
     }
 
+    set_c2b_immutable(node_c2b);
     put_c2b(node_c2b);
 
 #ifdef CASTLE_DEBUG
