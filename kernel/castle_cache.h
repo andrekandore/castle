@@ -197,6 +197,7 @@ void set_c2b_in_flight      (c2_block_t *c2b);
 void set_c2b_eio            (c2_block_t *c2b);
 void clear_c2b_eio          (c2_block_t *c2b);
 int  c2b_eio                (c2_block_t *c2b);
+void set_c2b_immutable      (c2_block_t *c2b);
 
 /**********************************************************************************************
  * Refcounts.
