@@ -53,6 +53,7 @@ struct castle_da_merge {
         struct castle_double_array   *da;
         struct castle_component_tree *tree;
         struct castle_btree_type     *btree;
+        struct castle_da_merge       *merge;
 
         struct castle_immut_tree_level {
             /* Node we are currently generating, and book-keeping variables about the node. */
@@ -73,7 +74,6 @@ struct castle_da_merge {
         void                         *last_key;          /**< Last key added to out tree, depth
                                                               0. */
         c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
-        void                         *private;
         int                           checkpointable;
 #ifdef CASTLE_DEBUG
         uint8_t                       is_recursion;
@@ -176,6 +176,11 @@ struct castle_da_merge {
                                             current key stream in _castle_da_entry_add; used to set
                                             out_tree->max_versions_per_key. */
 
+    /* Stuff for tombstone discard. */
+    int is_top_level;
+    struct timeval start_time;
+    castle_user_timestamp_t min_u_ts_excluded_cts;
+
 };
 
 extern struct workqueue_struct *castle_da_wqs[NR_CASTLE_DA_WQS];
@@ -208,10 +213,17 @@ int  castle_double_array_request_cpus  (void);
 
 struct castle_btree_type
     *castle_double_array_btree_type_get(struct castle_attachment *att);
+
+/* Doubling Array creation time options retrieval */
 uint8_t
     castle_da_user_timestamping_check(struct castle_double_array *da);
 uint8_t
     castle_attachment_user_timestamping_check(struct castle_attachment *att);
+uint8_t
+    castle_da_versioning_check(struct castle_double_array *da);
+uint8_t
+    castle_attachment_versioning_check(struct castle_attachment *att);
+
 c_chk_cnt_t
      castle_double_array_size_get (struct castle_double_array *da);
 void castle_double_array_queue    (c_bvec_t *c_bvec);

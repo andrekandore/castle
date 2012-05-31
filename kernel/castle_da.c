@@ -168,6 +168,7 @@ static void castle_da_reserve(struct castle_double_array *da, c_bvec_t *c_bvec);
 static void castle_da_get(struct castle_double_array *da);
 static void castle_da_put(struct castle_double_array *da);
 static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_tvr, int tvr_new_key);
+static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge);
 static void castle_da_merge_marshall(struct castle_da_merge *merge,
                                      c_da_merge_marshall_set_t partial_marshall);
 /* out_tree_check checks only output tree state */
@@ -3337,10 +3338,10 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
 {
     struct castle_double_array *da = lfs->da;
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
-    c_chk_cnt_t phy_ext_size;
+    unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED;
 
     if (growable)
-        castle_printk(LOG_UNLIMITED, "%s::growable\n", __FUNCTION__);
+        growable_ext_flags |= CASTLE_EXT_FLAG_GROWABLE;
 
     /* da_lfs_ct functions are being used only by merge code. */
     BUG_ON(lfs->rwct);
@@ -3384,7 +3385,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
                                                    da->id,
                                                    EXT_T_INTERNAL_NODES,
-                                                   lfs->internal_ext.size, 1);
+                                                   lfs->internal_ext.size,
+                                                   CASTLE_EXT_FLAG_MUTEX_LOCKED);
 
     if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
     {
@@ -3394,7 +3396,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
         lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                        da->id,
                                                        EXT_T_INTERNAL_NODES,
-                                                       lfs->internal_ext.size, 1);
+                                                       lfs->internal_ext.size,
+                                                       CASTLE_EXT_FLAG_MUTEX_LOCKED);
         if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
@@ -3408,15 +3411,11 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
          * ATTEMPT to allocate leaf node SSD extent. */
         if(castle_use_ssd_leaf_nodes)
         {
-            /* If the extent is growable don't allocate any space on disk, for now. */
-            phy_ext_size = growable ? 0: lfs->tree_ext.size;
-
-            lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_ssd_rda_lvl(),
-                                                              da->id,
-                                                              EXT_T_LEAF_NODES,
-                                                              lfs->tree_ext.size,
-                                                              phy_ext_size,
-                                                              1);
+            lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
+                                                       da->id,
+                                                       EXT_T_LEAF_NODES,
+                                                       lfs->tree_ext.size,
+                                                       growable_ext_flags);
             castle_printk(LOG_DEBUG, "%s:: ssd extent %d\n", __FUNCTION__,
                                      lfs->tree_ext.ext_id);
         }
@@ -3425,19 +3424,15 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     lfs->leafs_on_ssds = 1;
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
     {
-        /* If the extent is growable don't allocate any space on disk, for now. */
-        phy_ext_size = growable ? 0: lfs->tree_ext.size;
-
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
         lfs->leafs_on_ssds = 0;
 
-        lfs->tree_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
-                                                          da->id,
-                                                          EXT_T_LEAF_NODES,
-                                                          lfs->tree_ext.size,
-                                                          phy_ext_size,
-                                                          1); /*in_tran*/
+        lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                                   da->id,
+                                                   EXT_T_LEAF_NODES,
+                                                   lfs->tree_ext.size,
+                                                   growable_ext_flags);
         castle_printk(LOG_DEBUG, "%s:: tree extent %d\n", __FUNCTION__,
                                  lfs->tree_ext.ext_id);
 
@@ -3456,15 +3451,11 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     /* Allocate an extent for medium objects of merged tree for the size equal to
      * sum of both the trees. */
 
-    /* If the extent is growable don't allocate any space on disk, for now. */
-    phy_ext_size = growable ? 0: lfs->data_ext.size;
-
-    lfs->data_ext.ext_id = castle_extent_alloc_sparse(castle_get_rda_lvl(),
-                                                      da->id,
-                                                      EXT_T_MEDIUM_OBJECTS,
-                                                      lfs->data_ext.size,
-                                                      phy_ext_size,
-                                                      1);
+    lfs->data_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                               da->id,
+                                               EXT_T_MEDIUM_OBJECTS,
+                                               lfs->data_ext.size,
+                                               growable_ext_flags);
 
     castle_printk(LOG_DEBUG, "%s:: data extent %d\n", __FUNCTION__,
                              lfs->data_ext.ext_id);
@@ -3498,31 +3489,29 @@ skip_data_ext:
     return 0;
 
 no_space:
-    /* Register callback with extents. */
-    BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
-                                          lfs_callback,
-                                          lfs_data));
-
-    /* If the allocation is not a reallocation, update victim count. */
-    if (lfs_callback && !is_realloc)
-        castle_da_lfs_victim_count_inc(da);
-
     /* Take a copy of ext IDs. */
     internal_ext_id = lfs->internal_ext.ext_id;
     tree_ext_id = lfs->tree_ext.ext_id;
     BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
 
-    /* If there is no callback, no need to kep sizes in this LFS structure. */
-    if (!lfs_callback)
-    {
-        castle_da_lfs_ct_reset(lfs);
-    }
-    else
+    if (lfs_callback)
     {
         /* Reset ext ids. */
         lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
         lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
+
+        /* Register callback with extents. */
+        BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
+                                              lfs_callback,
+                                              lfs_data));
+
+        /* If the allocation is not a reallocation, update victim count. */
+        if (!is_realloc)
+            castle_da_lfs_victim_count_inc(da);
     }
+    /* If there is no callback, no need to keep sizes in this LFS structure. */
+    else
+        castle_da_lfs_ct_reset(lfs);
 
     /* End extent transaction. */
     castle_extent_transaction_end();
@@ -4054,7 +4043,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
 {
     c_ext_pos_t old_cep, new_cep;
     c_val_tup_t new_cvt;
-    int total_blocks, blocks, i;
+    int total_blocks, total_blocks_remaining, blocks, i;
     c2_block_t *s_c2b, *c_c2b;
     c_byte_off_t ext_space_needed;
 
@@ -4090,8 +4079,8 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     /* Allocate space for the new copy. */
     total_blocks = (old_cvt.length - 1) / C_BLK_SIZE + 1;
     ext_space_needed = total_blocks * C_BLK_SIZE;
-    debug("%s::[da %d level %d] new object consuming %d blocks (%llu bytes)\n",
-        __FUNCTION__, merge->da->id, merge->level, total_blocks, ext_space_needed);
+    debug("%s::[merge id %u] new object consuming %d blocks (%llu bytes)\n",
+        __FUNCTION__, merge->id, total_blocks, ext_space_needed);
 
     BUG_ON(castle_ext_freespace_get(&merge->out_tree_constr->tree->data_ext_free,
                                      ext_space_needed,
@@ -4103,28 +4092,29 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
     new_cvt.cep = new_cep;
 
     /* Do the actual copy. */
-    debug("Copying "cep_fmt_str" to "cep_fmt_str_nl,
-            cep2str(old_cep), cep2str(new_cep));
+    debug("%s::[merge id %u] Copying "cep_fmt_str" to "cep_fmt_str_nl,
+            __FUNCTION__, merge->id, cep2str(old_cep), cep2str(new_cep));
 
-    while (total_blocks > 0)
+    total_blocks_remaining = total_blocks;
+    while (total_blocks_remaining > 0)
     {
         int chk_off, pgs_to_end;
 
-        /* Chunk-align blocks if total_blocks is large enough to make it worthwhile. */
+        /* Chunk-align blocks if total_blocks_remaining is large enough to make it worthwhile. */
         chk_off = CHUNK_OFFSET(old_cep.offset);
         if (chk_off)
             pgs_to_end = (C_CHK_SIZE - chk_off) >> PAGE_SHIFT;
 
         /* Be careful about subtraction, if it goes negative, and is compared to
            BLKS_PER_CHK the test is likely not to work correctly. */
-        if (chk_off && (total_blocks >= 2*BLKS_PER_CHK + pgs_to_end))
+        if (chk_off && (total_blocks_remaining >= 2*BLKS_PER_CHK + pgs_to_end))
             /* Align for a minimum of 2 full blocks (1 can be inefficient) */
             blocks = pgs_to_end;
-        else if (total_blocks > BLKS_PER_CHK)
+        else if (total_blocks_remaining > BLKS_PER_CHK)
             blocks = BLKS_PER_CHK;
         else
-            blocks = total_blocks;
-        total_blocks -= blocks;
+            blocks = total_blocks_remaining;
+        total_blocks_remaining -= blocks;
 
         s_c2b = castle_cache_block_get(old_cep, blocks, MERGE_IN);
         c_c2b = castle_cache_block_get(new_cep, blocks, MERGE_OUT);
@@ -4135,6 +4125,18 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
         dirty_c2b(c_c2b);
+
+        /* Assert that the padded region is zero filled -- this is super inefficient */
+        // TODO@tr disable this code after a successful test run.
+        if (total_blocks_remaining == 0)
+        {
+            unsigned int i;
+            unsigned int end_of_val_offset =
+                (blocks*PAGE_SIZE) - ( (total_blocks*PAGE_SIZE) - old_cvt.length );
+            for (i = end_of_val_offset; i < blocks*PAGE_SIZE; i++)
+                BUG_ON( (char)(*((char*)(c2b_buffer(c_c2b))+i)) != 0 );
+        }
+
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(s_c2b);
         put_c2b(c_c2b);
@@ -4636,6 +4638,13 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     if (tree_constr->node_complete)
         tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
 
+    if ((depth == 0) &&
+        !castle_da_versioning_check(tree_constr->da) &&
+        tree_constr->merge &&
+        MERGE_CHECKPOINTABLE(tree_constr->merge))
+    {
+        castle_da_versionless_merge_serialise(tree_constr->merge);
+    }
 
     put_c2b(node_c2b);
 
@@ -4649,7 +4658,7 @@ static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct 
                                              int                                 depth,
                                              int                                 completing)
 {
-    struct castle_da_merge *merge = tree_constr->private;
+    struct castle_da_merge *merge = tree_constr->merge;
     struct castle_btree_node *node = c2b_bnode(node_c2b);
     void *key;
 
@@ -4689,6 +4698,17 @@ static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *
         {
             debug("%s:: tree %d completing level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
+
+            if (!castle_da_versioning_check(tree_constr->da))
+            {
+                /* This tree is not being versioned, so force the current node
+                   end as a valid end. */
+                struct castle_btree_node *node;
+                node = c2b_bnode(level->node_c2b);
+                BUG_ON(node->used < 1);
+                level->valid_end_idx = node->used - 1;
+            }
+
             castle_immut_tree_node_complete(tree_constr, i, 0 /* Not yet completing tree.  */);
             debug("%s:: tree %d completed level %d\n",
                     __FUNCTION__, tree_constr->tree->seq, i);
@@ -5562,6 +5582,55 @@ static void castle_merge_sleep_return(struct castle_da_merge *merge)
     }
 }
 
+
+/**
+ * A simplified approach to tomstone discard; one that is applicable to versionless workloads.
+ *
+ * @return 1 if tombstone is discardable, else 0
+ *
+ * @also castle_timestamped_tombstone_discardable_check
+ **/
+static int castle_da_tombstone_discardable_check(struct castle_da_merge *merge, c_val_tup_t cvt)
+{
+    uint64_t tombstone_realtime;
+
+    BUG_ON(!CVT_TOMBSTONE(cvt));
+
+    /* Requirement: this tombstone's REAL timestamp is > now()-T_d */
+    tombstone_realtime = cvt.tombstone_timestamp;
+    debug("%s::found a tombstone with wallclock ts %llu.\n",
+        __FUNCTION__, tombstone_realtime);
+    if (merge->start_time.tv_sec < tombstone_realtime)
+    {
+        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted??? System clock may be messed up.\n");
+        return 0;
+    }
+
+    if( !( (merge->start_time.tv_sec - tombstone_realtime) >
+                atomic64_read(&merge->da->tombstone_discard_threshold_time_s)) )
+    {
+        debug("%s::merge id %u, cannot discard tombstone (req 1b)\n", __FUNCTION__, merge->id);
+        return 0;
+    }
+
+    if (castle_da_user_timestamping_check(merge->da))
+    {
+        castle_user_timestamp_t u_ts;
+        u_ts = cvt.user_timestamp;
+
+        /* Requirement: the user timestamp of the tombstone is <= the min user timestamp
+           on every tree not involved with this merge. */
+        if( u_ts > merge->min_u_ts_excluded_cts )
+        {
+            debug("%s::merge id %u, cannot discard tombstone (req 2)\n", __FUNCTION__, merge->id);
+            return 0;
+        }
+    }
+
+    return 1; /* This tombstone is discardable. */
+
+}
+
 static int castle_da_entry_do(struct castle_da_merge *merge,
                               void *key,
                               c_val_tup_t cvt,
@@ -5598,8 +5667,22 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         return EXIT_SUCCESS;
     }
 
+    /* Tombstone discardable? (no tv_resolver) */
+    if (CVT_TOMBSTONE(cvt) &&
+        !castle_da_versioning_check(merge->da) &&
+        merge->is_top_level &&
+        castle_da_tombstone_discardable_check(merge, cvt))
+    {
+        atomic64_inc(&merge->da->stats.tombstone_discard.tombstone_discards);
+        castle_version_stats_entry_discard(version,
+                                           cvt,
+                                           CVS_TIMESTAMP_DISCARD,
+                                           &merge->version_states);
+        return EXIT_SUCCESS;
+    }
+
     /* No tv_resolver; rely on merge->is_new_key for serialisation control. */
-    if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver)
+    if(MERGE_CHECKPOINTABLE(merge) && !merge->tv_resolver && castle_da_versioning_check(merge->da))
         castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* whatever... */);
 
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
@@ -6092,13 +6175,17 @@ deser_done:
         castle_da_get(da);
     }
 
+    /* Set things up for tombstone discard (with or without tv_resolver) */
+    merge->is_top_level = castle_da_merge_top_level_check(merge);
+    do_gettimeofday(&merge->start_time);
+
     /* We need a DFS resolver if this is a level 2+ merge, AND we are timestamping, OR if this is
        the top-level merge and we need to discard non-queriable tombstones. */
-    if (merge->level >1)
+    if (merge->level >1 && castle_da_versioning_check(merge->da))
     {
         if (castle_da_user_timestamping_check(merge->da))
             dfs_resolver_functions |= DFS_RESOLVE_TIMESTAMPS;
-        if (castle_da_merge_top_level_check(merge))
+        if (merge->is_top_level)
             dfs_resolver_functions |= DFS_RESOLVE_TOMBSTONES;
     }
     if(dfs_resolver_functions != DFS_RESOLVE_NOTHING)
@@ -6186,6 +6273,8 @@ deser_done:
 
     if (merge->tv_resolver)
         castle_dfs_resolver_construct_complete(merge->tv_resolver);
+    else
+        merge->min_u_ts_excluded_cts = castle_da_min_ts_cts_exclude_this_merge_get(merge);
 
     if (merge->level != 1)
     {
@@ -6220,7 +6309,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
                                                     struct castle_double_array     *da,
                                                     int                             checkpointable,
                                                     c_immut_tree_node_complete_cb_t node_complete_cb,
-                                                    void                           *private)
+                                                    struct castle_da_merge         *merge)
 {
     struct castle_immut_tree_construct *tree_constr;
     int i;
@@ -6241,12 +6330,12 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
     tree_constr->da                 = da;
     tree_constr->tree               = NULL;
     tree_constr->btree              = btree;
+    tree_constr->merge              = merge;
     tree_constr->is_new_key         = 1;
     tree_constr->last_key           = NULL;
     tree_constr->last_leaf_node_c2b = NULL;
     tree_constr->leafs_on_ssds      = 0;
     tree_constr->internals_on_ssds  = 0;
-    tree_constr->private            = private;
     tree_constr->checkpointable     = checkpointable;
 #ifdef CASTLE_DEBUG
     tree_constr->is_recursion       = 0;
@@ -6582,15 +6671,16 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     int level;
     c_merge_serdes_state_t live_state;
     c_merge_serdes_state_t checkpointable_state;
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_component_tree *out_tree;
 
     BUG_ON(!merge);
     BUG_ON(!merge->da);
 
-    da=merge->da;
-    level=merge->level;
+    da       = merge->da;
+    level    = merge->level;
+    out_tree = merge->out_tree_constr->tree;
+
     BUG_ON(level > MAX_DA_LEVEL);
-    /* assert that we are not serialising merges on lower levels */
     BUG_ON((level < MIN_DA_SERDES_LEVEL));
     BUG_ON(!out_tree);
 
@@ -6759,6 +6849,72 @@ static void castle_da_merge_serialise(struct castle_da_merge *merge, int using_t
     /* all states should have been covered above */
     castle_printk(LOG_ERROR, "%s::should not have gotten here, with merge %p\n", __FUNCTION__, merge);
     BUG();
+}
+
+/**
+ * A simplified alternative to castle_da_merge_serialise(); this works for unversioned workloads.
+ *
+ * @input merge structure
+ * @also castle_da_merge_serialise
+ **/
+static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
+{
+    struct castle_double_array *da;
+    int level;
+    struct castle_component_tree *out_tree;
+    c_merge_serdes_state_t live_state;
+    c_merge_serdes_state_t checkpointable_state;
+
+    BUG_ON(!merge);
+    BUG_ON(!merge->da);
+
+    da       = merge->da;
+    level    = merge->level;
+    out_tree = merge->out_tree_constr->tree;
+
+    BUG_ON(level > MAX_DA_LEVEL);
+    BUG_ON((level < MIN_DA_SERDES_LEVEL));
+    BUG_ON(!out_tree);
+
+    checkpointable_state = atomic_read(&merge->serdes.checkpointable.state);
+    live_state = atomic_read(&merge->serdes.live.state);
+    debug("%s::[merge id %u] live: %u, checkpointable: %u\n",
+        __FUNCTION__, merge->id, live_state, checkpointable_state);
+
+    if (atomic_read(&out_tree->tree_depth) < 2)
+    {
+        debug("%s::[merge %u, %p] too small to bother serialising yet.\n",
+            __FUNCTION__, merge->id, merge);
+        BUG_ON(live_state           != NULL_DAM_SERDES ); /* Shouldn't be any SERDES state yet */
+        BUG_ON(checkpointable_state != NULL_DAM_SERDES ); /* ditto */
+        return;
+    }
+
+    if( likely(checkpointable_state == VALID_AND_FRESH_DAM_SERDES) )
+    {
+        /* This is usually the most common case, and is basically a noop; waiting for checkpoint to
+           write checkpointable state before making a new state snapshot. */
+
+        BUG_ON(live_state != VALID_AND_FRESH_DAM_SERDES);
+        debug("%s::[merge %u, %p] existing SERDES snapshot not yet checkpointed.\n",
+            __FUNCTION__, merge->id, merge);
+        return;
+    }
+    else
+    {
+        castle_printk(LOG_DEBUG, "%s::[merge %u, %p] making new SERDES snapshot.\n",
+                __FUNCTION__, merge->id, merge);
+        CASTLE_TRANSACTION_BEGIN;
+        castle_da_merge_marshall(merge, DAM_MARSHALL_ALL);
+        CASTLE_TRANSACTION_END;
+
+        /* mark serialisation as checkpointable, and no longer updatable */
+        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
+
+        /* Set up a new package for checkpoint */
+        castle_da_merge_mstore_package_deep_copy(&merge->serdes.checkpointable, &merge->serdes.live);
+    }
+
 }
 
 /**
@@ -7082,6 +7238,10 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
             void        *dummy_k_unpack;
             c_ver_t      dummy_v;
             c_val_tup_t  dummy_cvt;
+
+            /* For a non-versioned DA, we only checkpoint on new node boundaries, which means we
+               would never expect to recover an in-progress leaf btree node. */
+            BUG_ON(!castle_da_versioning_check(da) && (i == 0));
 
             castle_printk(LOG_DEBUG, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
@@ -11646,6 +11806,18 @@ uint8_t castle_attachment_user_timestamping_check(struct castle_attachment *att)
 {
     return castle_da_user_timestamping_check(att->col.da);
 }
+/**
+ * Return the versioning flag associated with a particular DA.
+ */
+uint8_t castle_da_versioning_check(struct castle_double_array *da)
+{
+    BUG_ON(!da);
+    return (!(da->creation_opts & CASTLE_DA_OPTS_NO_VERSIONING));
+}
+uint8_t castle_attachment_versioning_check(struct castle_attachment *att)
+{
+    return castle_da_versioning_check(att->col.da);
+}
 
 /**
  * Submit request to DA, write IOs are queued if inserts are disabled.
@@ -12780,7 +12952,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                             da,
                                             0,
                                             NULL,       /* node_complete callback.  */
-                                            NULL);      /* private info.            */
+                                            NULL);      /* not a merge.             */
 
     if (!constr)
         goto err_out;
@@ -12899,8 +13071,6 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
     if (is_new_key < 0)
     {
         castle_printk(LOG_ERROR, "Stream-in keys should be in increasing order.\n");
-        constr->btree->key_print(LOG_DEBUG, constr->last_key);
-        constr->btree->key_print(LOG_DEBUG, key);
         return -EINVAL;
     }
 

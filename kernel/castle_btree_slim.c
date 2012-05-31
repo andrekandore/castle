@@ -565,8 +565,9 @@ static int castle_slim_entry_get(struct castle_btree_node *node, int idx,
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
                     timestamp = leaf_entry_timestamp_get(&entry_end);
                 BUG_ON(TYPE_NODE(entry->type));
-                BUG_ON(TYPE_TOMBSTONE(entry->type) && val->length != 0);
+                BUG_ON(TYPE_TOMBSTONE(entry->type) && val->length != sizeof(uint64_t));
                 BUG_ON(val->length > MAX_INLINE_VAL_SIZE);
+
                 *cvt = convert_to_cvt(entry->type, val->length, INVAL_EXT_POS, val->data, timestamp);
             }
         }
@@ -814,13 +815,20 @@ static void castle_slim_entry_construct(struct castle_btree_node *node,
         }
         else
         {
+            void *val_ptr;
             struct slim_inline_val *val =
                 (struct slim_inline_val *) ((char *) &entry->key + key_size);
+
             BUG_ON(TYPE_NODE(cvt.type));
-            BUG_ON(TYPE_TOMBSTONE(cvt.type) && cvt.length != 0);
+            BUG_ON(TYPE_TOMBSTONE(cvt.type) && cvt.length != sizeof(uint64_t));
             BUG_ON(cvt.length > MAX_INLINE_VAL_SIZE);
-            if (!TYPE_TOMBSTONE(cvt.type))
-                memmove(val->data, CVT_INLINE_VAL_PTR(cvt), cvt.length);
+
+            if(TYPE_TOMBSTONE(cvt.type))
+                val_ptr = CVT_TOMBSTONE_TS_PTR(cvt);
+            else
+                val_ptr = CVT_INLINE_VAL_PTR(cvt);
+
+            memmove(val->data, val_ptr, cvt.length);
             val->length = cvt.length;
             entry_end = LEAF_ENTRY_INLINE_VAL_END(val);
         }

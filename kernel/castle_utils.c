@@ -907,8 +907,9 @@ c_val_tup_t convert_to_cvt(uint8_t type,
     }
     else if (CVT_TOMBSTONE(cvt))
     {
-        cvt.length = 0;
-        cvt.cep    = INVAL_EXT_POS;
+        BUG_ON(length != sizeof(uint64_t));
+        BUG_ON(!inline_ptr);
+        cvt.tombstone_timestamp = *(uint64_t *)inline_ptr; /* Wallclock timestamp, used for tombstone discard */
     }
     else if (CVT_INLINE(cvt))
     {

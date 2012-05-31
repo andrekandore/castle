@@ -365,6 +365,20 @@ static int castle_object_data_write(struct castle_object_replace *replace)
 
         castle_object_replace_data_copy(replace, data_c2b_buffer, copy_length,
                                         last_copy ? 0 : 1);
+        if(last_copy)
+        {
+            /* Zero-pad till the end of the page boundary */
+            int mod_cp = copy_length % C_BLK_SIZE;
+            if(mod_cp)
+            {
+                castle_printk(LOG_DEBUG, "%s::zero padding %u bytes.\n",
+                    __FUNCTION__, (C_BLK_SIZE - mod_cp));
+                memset(data_c2b_buffer + copy_length, 0, (C_BLK_SIZE - mod_cp));
+            }
+        }
+        else
+            BUG_ON(copy_length % C_BLK_SIZE); /* we assume that only the last copy may not be
+                                                 block aligned. */
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;
@@ -378,7 +392,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         {
             c2_block_t *new_data_c2b;
             c_ext_pos_t new_data_cep;
-            debug("Run out of buffer space, allocating a new one.\n");
+            castle_printk(LOG_DEBUG, "Run out of buffer space, allocating a new one.\n");
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length);
             if (EXT_POS_COMP(new_data_cep, data_c2b->cep) <= 0)
             {
@@ -636,7 +650,7 @@ static int castle_object_replace_cvt_get(c_bvec_t    *c_bvec,
     BUG_ON(c_bvec_data_dir(c_bvec) != WRITE);
     /* Some sanity checks on the prev_cvt. */
     BUG_ON(!CVT_INVALID(prev_cvt) && !CVT_LEAF_VAL(prev_cvt));
-    BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != 0));
+    BUG_ON(CVT_TOMBSTONE(prev_cvt) && (prev_cvt.length != sizeof(uint64_t)));
 
     /* Check if this insert should be disabled immediately because of it's timestamp vs
        other entries in the T0. */
@@ -749,8 +763,12 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     /* Deal with tombstones first. */
     if(tombstone)
     {
-        CVT_TOMBSTONE_INIT(replace->cvt);
         /* No need to allocate any memory/extent space for tombstones. */
+        struct timeval now;
+        STATIC_BUG_ON(sizeof(uint64_t) != sizeof((((struct timeval *)(0))->tv_sec)));
+        do_gettimeofday(&now);
+        CVT_TOMBSTONE_INIT(replace->cvt, (uint64_t)now.tv_sec);
+        debug("%s::inserted tombstone at time %llu\n", __FUNCTION__, now.tv_sec);
         return 0;
     }
 
@@ -826,7 +844,8 @@ static int castle_object_replace_space_reserve(struct castle_object_replace *rep
     cep.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                      c_bvec->tree->da->id,
                                      EXT_T_LARGE_OBJECT,
-                                     nr_chunks, 0);  /* Not in transaction. */
+                                     nr_chunks,
+                                     CASTLE_EXT_FLAGS_NONE);  /* Not in transaction. */
 
     if(EXT_ID_INVAL(cep.ext_id))
     {
@@ -910,12 +929,10 @@ int castle_object_replace(struct castle_object_replace *replace,
                           int tombstone)
 {
     struct castle_btree_type *btree;
-    //struct castle_double_array *da = attachment->col.da;
     void *key;
     c_bio_t *c_bio;
     c_bvec_t *c_bvec;
     int ret;
-    //size_t dest_len = 1024;
 
     if(replace->has_user_timestamp)
         debug("%s::user provided timestamp %llu\n", __FUNCTION__, replace->user_timestamp);
@@ -1447,7 +1464,7 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
             get->reply_start(get,
                              0,
                              cvt.length,
-                             CVT_TOMBSTONE_VAL_PTR(cvt),
+                             CVT_TOMBSTONE_TS_PTR(cvt),
                              cvt.length);
         }
         else

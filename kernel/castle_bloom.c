@@ -130,7 +130,7 @@ int castle_bloom_create(castle_bloom_t *bf,
                                      da_id,
                                      EXT_T_BLOOM_FILTER,
                                      size / C_CHK_SIZE,
-                                     0);
+                                     CASTLE_EXT_FLAGS_NONE);
     if (!EXT_ID_INVAL(bf->ext_id))
         /* Successfully allocated SSD extent. */
         bf->block_size_pages = BLOOM_BLOCK_SIZE_SSD_PAGES;
@@ -141,7 +141,7 @@ int castle_bloom_create(castle_bloom_t *bf,
                                          da_id,
                                          EXT_T_BLOOM_FILTER,
                                          size / C_CHK_SIZE,
-                                         0);
+                                         CASTLE_EXT_FLAGS_NONE);
         if (!EXT_ID_INVAL(bf->ext_id))
             /* Successfully allocated HDD extent. */
             bf->block_size_pages = BLOOM_BLOCK_SIZE_HDD_PAGES;
@@ -347,7 +347,7 @@ static void castle_bloom_add_index_key(castle_bloom_t *bf, void *key, c_baik_typ
 
     /* Bloom filters don't store values, just keys. Since btree code requires values,
        store tombstones. */
-    CVT_TOMBSTONE_INIT(cvt);
+    CVT_TOMBSTONE_INIT(cvt, 0);
 
     if(mode == BAIK_REPLACE_LAST_KEY)
     {

@@ -470,7 +470,9 @@ struct castle_elist_entry {
     /*         60 */ c_ext_mask_range_t prev_mask;  /**< Freespace held by the extent, compare
                                                          this with current valid mask and free extra
                                                          space on reboot. */
-    /*         68 */ uint8_t         _unused[60];
+    /*         68 */ uint64_t        flags;
+    /*         76 */ uint64_t        linked_ext_id;
+    /*         84 */ uint8_t         _unused[44];
     /*        128 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_elist_entry) != 128);
@@ -576,6 +578,7 @@ struct castle_value_tuple {
     /*          8 */     c_ext_pos_t   cep;
     /*          8 */     uint8_t      *val_p;
     /*          8 */     int64_t       counter;
+    /*          8 */     uint64_t      tombstone_timestamp; /* this is realtime, not usertime */
     /*         24 */ };
     /*         24 */ castle_user_timestamp_t user_timestamp;
     /*         32 */
@@ -680,11 +683,11 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
    (_cvt).length = _length;                                                   \
    (_cvt).cep    = _cep;                                                      \
 }
-#define CVT_TOMBSTONE_INIT(_cvt)                                              \
+#define CVT_TOMBSTONE_INIT(_cvt, _rts)                                        \
 {                                                                             \
-   (_cvt).type   = CVT_TYPE_TOMBSTONE;                                        \
-   (_cvt).length = 0;                                                         \
-   (_cvt).cep    = INVAL_EXT_POS;                                             \
+   (_cvt).type                = CVT_TYPE_TOMBSTONE;                           \
+   (_cvt).length              = sizeof(uint64_t);                             \
+   (_cvt).tombstone_timestamp = (_rts);                                       \
 }
 #define CVT_INLINE_INIT(_cvt, _length, _ptr)                                  \
 {                                                                             \
@@ -799,11 +802,11 @@ STATIC_BUG_ON(sizeof(struct castle_value_tuple) != 32);
         _ptr = (_cvt).val_p;                                                  \
     _ptr;                                                                     \
 })
-#define CVT_TOMBSTONE_VAL_PTR(_cvt)                                           \
+#define CVT_TOMBSTONE_TS_PTR(_cvt)                                            \
 ({                                                                            \
     void *_ptr;                                                               \
     BUG_ON(!CVT_TOMBSTONE(_cvt));                                             \
-    _ptr = (_cvt).val_p;                                                      \
+    _ptr = &(_cvt).tombstone_timestamp;                                       \
     _ptr;                                                                     \
 })
 #define CVT_INLINE_FREE(_cvt)                                                 \

@@ -19,6 +19,25 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 #define CASTLE_EXT_ALIVE_BIT            (0)
 #define CASTLE_EXT_REBUILD_BIT          (1) /* Extent rebuild started. Use shadow maps only. */
 
+#define CASTLE_EXT_GROWABLE_BIT         (2)
+#define CASTLE_EXT_FLAG_GROWABLE        (1UL << 2)
+
+#define CASTLE_EXT_MUTEX_LOCKED_BIT     (3)
+#define CASTLE_EXT_FLAG_MUTEX_LOCKED    (1UL << 3)
+
+#define CASTLE_EXT_COMPR_COMPRESSED_BIT (4)
+#define CASTLE_EXT_FLAG_COMPR_COMPRESSED (1UL << 4)
+
+#define CASTLE_EXT_COMPR_VIRTUAL_BIT    (5)
+#define CASTLE_EXT_FLAG_COMPR_VIRTUAL   (1UL << 5)
+
+#define CASTLE_EXT_FLAGS_NONE           (0UL)
+
+#define CASTLE_EXT_ON_DISK_FLAGS_MASK           \
+        (CASTLE_EXT_FLAG_COMPR_COMPRESSED |     \
+         CASTLE_EXT_FLAG_COMPR_VIRTUAL)
+
+
 typedef struct castle_extent {
     c_ext_id_t          ext_id;         /* Unique extent ID                             */
     c_chk_cnt_t         size;           /* Number of chunks                             */
@@ -26,6 +45,7 @@ typedef struct castle_extent {
     uint32_t            k_factor;       /* K factor in K-RDA                            */
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     unsigned long       flags;          /* Bit Flags.                                   */
+    c_ext_id_t          linked_ext_id;  /* Extent that is coupled with this extent.     */
     struct list_head    hash_list;
     struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
     struct list_head    verify_list;    /* Used for testing.                            */
@@ -65,14 +85,7 @@ c_ext_id_t          castle_extent_alloc                     (c_rda_type_t       
                                                              c_da_t                 da_id,
                                                              c_ext_type_t           ext_type,
                                                              c_chk_cnt_t            chk_cnt,
-                                                             int                    in_tran);
-
-c_ext_id_t          castle_extent_alloc_sparse              (c_rda_type_t           rda_type,
-                                                             c_da_t                 da_id,
-                                                             c_ext_type_t           ext_type,
-                                                             c_chk_cnt_t            ext_size,
-                                                             c_chk_cnt_t            alloc_size,
-                                                             int                    in_tran);
+                                                             unsigned long          flags);
 
 int                 castle_extent_grow                      (c_ext_id_t             ext_id,
                                                              c_chk_cnt_t            count);
@@ -115,6 +128,7 @@ int                 castle_extent_link                      (c_ext_id_t     ext_
 int                 castle_extent_unlink                    (c_ext_id_t     ext_id);
 uint32_t            castle_extent_kfactor_get               (c_ext_id_t     ext_id);
 c_chk_cnt_t         castle_extent_size_get                  (c_ext_id_t     ext_id);
+
 /* Sets @chunks to all physical chunks holding the logical chunks from offset */
 uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_id,
                                                              c_chk_t        offset,
@@ -148,7 +162,9 @@ int                 castle_extents_init                     (void);
 void                castle_extents_fini                     (void);
 int                 castle_extents_process_init             (void);
 void                castle_extents_process_fini             (void);
-void                castle_extents_rebuild_wake             (void);
+void                castle_extents_rebuild_conditional_start(void);
+void                castle_extents_rebuild_unconditional_start
+                                                            (void);
 void                castle_extents_rebuild_startup_check    (int need_rebuild);
 int                 castle_extents_slave_scan               (uint32_t uuid);
 void                castle_extent_micro_ext_update          (struct castle_slave *cs);
@@ -186,6 +202,49 @@ int                 castle_extent_min_rda_lvl_get            (void);
 int                 castle_extent_lfs_callback_add           (int                  in_trans,
                                                               c_ext_event_callback_t callback,
                                                               void                  *data);
+
+/* Compressed extents API. */
+
+enum {
+    C_COMPR_COMPRESSED,     /**< On-disk compressed extent.         */
+    C_COMPR_VIRTUAL,        /**< Virtual decompressed extent.       */
+    C_COMPR_NORMAL          /**< Normal extent. No compression.     */
+};
+int                 castle_compr_type_get                    (c_ext_id_t     ext_id);
+
+/**
+ * @return  compressed_ext_id   if the extent is virtual extent.
+ * @return  INVAL_EXT_ID        oterwise
+ */
+c_ext_id_t          castle_compr_compressed_ext_id_get       (c_ext_id_t     ext_id);
+
+/**
+ * @return  virtual_ext_id      if the extent is compressed extent.
+ * @return  INVAL_EXT_ID        oterwise
+ */
+c_ext_id_t          castle_compr_virtual_ext_id_get          (c_ext_id_t     ext_id);
+
+c_byte_off_t        castle_compr_block_size_get              (c_ext_id_t     ext_id);
+
+/**
+ * @param [in]  cep of virtual extent.
+ * @param [out] corresponding cep in compressed extent for the given virtual extent.
+ *
+ * @return Size of the compressed block.
+ *
+ * Note: virt_cep.offset should be aligned to compression block size.
+ */
+c_byte_off_t        castle_compr_map_get                     (c_ext_pos_t    virt_cep,
+                                                              c_ext_pos_t   *comp_cep);
+
+/**
+ * @param [in]  cep of virtual extent.
+ * @param [in]  cep of compressed extent.
+ * @param [in]  Size of the compressed output block size.
+ */
+void                castle_compr_map_set                     (c_ext_pos_t    virt_cep,
+                                                              c_ext_pos_t    comp_cep,
+                                                              c_byte_off_t   comp_blk_bytes);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
