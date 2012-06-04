@@ -7041,14 +7041,12 @@ static int castle_extents_garbage_collector(void *unused)
         msleep(1000);
 
     do {
-        int ignore;
         struct list_head *tmp, *pos;
 
         /* Wait for some one to schedule a mask to free or thread to stop. */
-        __wait_event_interruptible(castle_ext_mask_gc_wq,
-                                   (kthread_should_stop() ||
-                                            atomic_read(&castle_extents_gc_q_size)),
-                                   ignore);
+        wait_event_interruptible(castle_ext_mask_gc_wq,
+                                 kthread_should_stop() ||
+                                 atomic_read(&castle_extents_gc_q_size));
 
         /* If the file system is exiting break the loop. */
         if (kthread_should_stop())
