@@ -2754,9 +2754,9 @@ static int castle_cache_decompress(void *unused)
     int should_stop = 0;
 
     for (;;) {
-        wait_event(castle_cache_decompress_wq,
-                   unlikely((should_stop = kthread_should_stop())) ||
-                   atomic_read(&castle_cache_decompress_list_size) > 0);
+        wait_event_interruptible(castle_cache_decompress_wq,
+                                 unlikely((should_stop = kthread_should_stop())) ||
+                                 atomic_read(&castle_cache_decompress_list_size) > 0);
 
         if (unlikely(should_stop))
         {
