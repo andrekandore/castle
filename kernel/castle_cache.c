@@ -4236,8 +4236,6 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             {
                 castle_printk(LOG_ERROR, "Couldn't create cache page of size %d at cep: "cep_fmt_str
                        "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
-                WARN_ON(1);
-                msleep(10000);
                 BUG();
             }
         }
