@@ -164,6 +164,9 @@ C2B_TAS_FNS(evictlist, evictlist)
 C2B_FNS(clock, clock)
 C2B_TAS_FNS(clock, clock)
 
+extern c_ext_free_t            mstore_ext_free;
+
+
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
          integer multiples of c2bs. Otherwise this could happen:
@@ -7054,7 +7057,10 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_checkpoint_version_inc();
 
-        castle_printk(LOG_USERINFO, "***** Completed checkpoint of version: %u *****\n", version);
+        castle_printk(LOG_USERINFO,
+            "***** Completed checkpoint of version: %u (%lu chunks used) *****\n",
+            version, USED_CHUNK(atomic64_read(&mstore_ext_free.used)));
+
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
     } while (!castle_last_checkpoint_ongoing);
     /* Clean exit, return success. */

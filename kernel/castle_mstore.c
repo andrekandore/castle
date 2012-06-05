@@ -13,7 +13,7 @@
                                                  __FILE__, __LINE__ , __func__, ##_a))
 #endif
 
-static c_ext_free_t            mstore_ext_free;
+c_ext_free_t            mstore_ext_free;
 static atomic_t                mstores_ref_cnt = ATOMIC_INIT(0);
 
 /* TO BE DELETED. */
