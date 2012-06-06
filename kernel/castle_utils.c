@@ -19,6 +19,14 @@ static int castle_printk_cons_level = LOG_PERF;
 module_param(castle_printk_cons_level, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_printk_cons_level, "Minimum level before castle_printk()s hit the console");
 
+/* The following parameter is useful in combination with /etc/syslog.conf:
+ *
+ * kern.debug           /var/log/castle.log
+ */
+static int castle_printk_kern_debug = 0;
+module_param(castle_printk_kern_debug, uint, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_printk_kern_debug, "Should all messages get printk(<LOG_DEBUG> ...)?");
+
 /*
  * WARNING: This has been moved here from castle.h because it's fairly complicated and
  * increases object code size a lot if it's inline. If we switch to a simpler
@@ -623,7 +631,7 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
     trace_CASTLE_PRINTK(level, tmp_buf);
 
     /* Only print warnings, errors and testing messages to the console. */
-    if (level >= castle_printk_cons_level)
+    if (unlikely(level >= castle_printk_cons_level))
     {
         /* and then only printk() if we're within the ratelimit. */
         if (!castle_fs_inited
@@ -631,6 +639,8 @@ void castle_printk(c_printk_level_t level, const char *fmt, ...)
                 || castle_printk_ratelimit(level))
             printk("%s", tmp_buf);
     }
+    if (unlikely(castle_printk_kern_debug))
+        printk("%s%s", KERN_DEBUG, tmp_buf);
 }
 
 /**
