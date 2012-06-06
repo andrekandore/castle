@@ -5167,7 +5167,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
 
     BUG_ON(!merge);
 
-    if (merge->level != 1)
+    if (merge->level != 1 && err)
     {
         castle_printk(LOG_WARN, "Completing merge with err: %d\n", err);
         for (i=0; i<merge->nr_trees; i++)
