@@ -3691,6 +3691,11 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
 
                     /* Copy buffer value into medium object extent. */
                     val_ptr = kv_hdr.val;
+
+                    /* Init the cvt _before_ inserting the value, since this will modify
+                       mobj_ext_cep. */
+                    CVT_MEDIUM_OBJECT_INIT(cvt, kv_hdr.val_len, mobj_ext_cep);
+
                     while (total_blocks > 0)
                     {
                         int blocks;
@@ -3710,8 +3715,6 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                         mobj_ext_cep.offset += step;
                         val_ptr += step;
                     }
-
-                    CVT_MEDIUM_OBJECT_INIT(cvt, kv_hdr.val_len, mobj_ext_cep);
                 }
                 break;
             case CASTLE_VALUE_TYPE_COUNTER:
