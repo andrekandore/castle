@@ -663,7 +663,7 @@ static int c2b_accessed_dec(c2_block_t *c2b)
 /**
  * Assign a specific value to the c2b access count.
  */
-static int c2b_accessed_assign(c2_block_t *c2b, int val)
+int c2b_accessed_assign(c2_block_t *c2b, int val)
 {
     unsigned long old, new;
     struct c2b_state *p_old, *p_new;
@@ -685,7 +685,7 @@ static int c2b_accessed_assign(c2_block_t *c2b, int val)
 /**
  * Return the value of the c2b access count.
  */
-inline static int c2b_accessed(c2_block_t *c2b)
+inline int c2b_accessed(c2_block_t *c2b)
 {
     return c2b->state.accessed;
 }

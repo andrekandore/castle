@@ -301,6 +301,11 @@ int                        castle_cache_size_get           (void);
 int                        castle_cache_block_destroy      (c2_block_t *c2b);
 void                       castle_cache_dirtytree_demote   (c2_ext_dirtytree_t *dirtytree);
 /**********************************************************************************************
+ * Explicit cache priority management.
+ */
+int c2b_accessed_assign(c2_block_t *c2b, int val);
+int c2b_accessed(c2_block_t *c2b);
+/**********************************************************************************************
  * Cache init/fini.
  */
 int  castle_cache_init(void);

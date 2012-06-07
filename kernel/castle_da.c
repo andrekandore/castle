@@ -4095,6 +4095,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         write_lock_c2b(c_c2b);
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
+        c2b_accessed_assign(c_c2b, c2b_accessed(s_c2b));
         dirty_c2b(c_c2b);
 
         /* Assert that the padded region is zero filled -- this is super inefficient */
