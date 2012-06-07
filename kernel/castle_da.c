@@ -4098,8 +4098,8 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         c2b_accessed_assign(c_c2b, c2b_accessed(s_c2b));
         dirty_c2b(c_c2b);
 
+#ifdef CASTLE_DEBUG
         /* Assert that the padded region is zero filled -- this is super inefficient */
-        // TODO@tr disable this code after a successful test run.
         if (total_blocks_remaining == 0)
         {
             unsigned int i;
@@ -4108,6 +4108,7 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
             for (i = end_of_val_offset; i < blocks*PAGE_SIZE; i++)
                 BUG_ON( (char)(*((char*)(c2b_buffer(c_c2b))+i)) != 0 );
         }
+#endif
 
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(s_c2b);
