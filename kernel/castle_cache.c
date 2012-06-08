@@ -164,6 +164,9 @@ C2B_TAS_FNS(evictlist, evictlist)
 C2B_FNS(clock, clock)
 C2B_TAS_FNS(clock, clock)
 
+extern c_ext_free_t            mstore_ext_free;
+
+
 /* c2p encapsulates multiple memory pages (in order to reduce overheads).
    NOTE: In order for this to work, c2bs must necessarily be allocated in
          integer multiples of c2bs. Otherwise this could happen:
@@ -660,7 +663,7 @@ static int c2b_accessed_dec(c2_block_t *c2b)
 /**
  * Assign a specific value to the c2b access count.
  */
-static int c2b_accessed_assign(c2_block_t *c2b, int val)
+int c2b_accessed_assign(c2_block_t *c2b, int val)
 {
     unsigned long old, new;
     struct c2b_state *p_old, *p_new;
@@ -682,7 +685,7 @@ static int c2b_accessed_assign(c2_block_t *c2b, int val)
 /**
  * Return the value of the c2b access count.
  */
-inline static int c2b_accessed(c2_block_t *c2b)
+inline int c2b_accessed(c2_block_t *c2b)
 {
     return c2b->state.accessed;
 }
@@ -2736,6 +2739,7 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
     }
 
     put_c2b(compr_c2b);
+    update_c2b(virt_c2b);
     virt_c2b->end_io(virt_c2b, async);
 }
 
@@ -2753,9 +2757,9 @@ static int castle_cache_decompress(void *unused)
     int should_stop = 0;
 
     for (;;) {
-        wait_event(castle_cache_decompress_wq,
-                   unlikely((should_stop = kthread_should_stop())) ||
-                   atomic_read(&castle_cache_decompress_list_size) > 0);
+        wait_event_interruptible(castle_cache_decompress_wq,
+                                 unlikely((should_stop = kthread_should_stop())) ||
+                                 atomic_read(&castle_cache_decompress_list_size) > 0);
 
         if (unlikely(should_stop))
         {
@@ -4230,10 +4234,8 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             if (ext_size &&
                 ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
             {
-                castle_printk(LOG_DEBUG, "Couldn't create cache page of size %d at cep: "cep_fmt_str
+                castle_printk(LOG_ERROR, "Couldn't create cache page of size %d at cep: "cep_fmt_str
                        "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
-                WARN_ON(1);
-                msleep(10000);
                 BUG();
             }
         }
@@ -7053,7 +7055,10 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_checkpoint_version_inc();
 
-        castle_printk(LOG_USERINFO, "***** Completed checkpoint of version: %u *****\n", version);
+        castle_printk(LOG_USERINFO,
+            "***** Completed checkpoint of version: %u (%lu chunks used) *****\n",
+            version, USED_CHUNK(atomic64_read(&mstore_ext_free.used)));
+
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
     } while (!castle_last_checkpoint_ongoing);
     /* Clean exit, return success. */

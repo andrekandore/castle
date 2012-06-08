@@ -376,9 +376,6 @@ static int castle_object_data_write(struct castle_object_replace *replace)
                 memset(data_c2b_buffer + copy_length, 0, (C_BLK_SIZE - mod_cp));
             }
         }
-        else
-            BUG_ON(copy_length % C_BLK_SIZE); /* we assume that only the last copy may not be
-                                                 block aligned. */
 
         data_length     -= copy_length;
         data_c2b_offset += copy_length;

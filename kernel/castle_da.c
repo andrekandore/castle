@@ -4124,10 +4124,11 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
         write_lock_c2b(c_c2b);
         update_c2b(c_c2b);
         memcpy(c2b_buffer(c_c2b), c2b_buffer(s_c2b), blocks * PAGE_SIZE);
+        c2b_accessed_assign(c_c2b, c2b_accessed(s_c2b));
         dirty_c2b(c_c2b);
 
+#ifdef CASTLE_DEBUG
         /* Assert that the padded region is zero filled -- this is super inefficient */
-        // TODO@tr disable this code after a successful test run.
         if (total_blocks_remaining == 0)
         {
             unsigned int i;
@@ -4136,9 +4137,11 @@ static c_val_tup_t castle_da_medium_obj_copy(struct castle_da_merge *merge,
             for (i = end_of_val_offset; i < blocks*PAGE_SIZE; i++)
                 BUG_ON( (char)(*((char*)(c2b_buffer(c_c2b))+i)) != 0 );
         }
+#endif
 
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(s_c2b);
+        set_c2b_immutable(c_c2b);
         put_c2b(c_c2b);
         put_c2b_and_demote(s_c2b);
         old_cep.offset += blocks * PAGE_SIZE;
@@ -4646,6 +4649,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
         castle_da_versionless_merge_serialise(tree_constr->merge);
     }
 
+    set_c2b_immutable(node_c2b);
     put_c2b(node_c2b);
 
 #ifdef CASTLE_DEBUG
@@ -4744,37 +4748,47 @@ static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_c
     debug("Root for that tree is: " cep_fmt_str_nl, cep2str(out_tree->root_node));
     BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
 
-    /* truncate remaining blank chunks in output tree... */
-    if (tree_constr->checkpointable)
+    /* truncate remaining blank chunks in output tree if there is at least one unused chunk */
+    if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
     {
-        /* ... if there is at least one unused chunk */
-        if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
-        {
-            castle_printk(LOG_DEBUG, "%s::[da %d] truncating tree ext %u beyond chunk %u,"
-                    " after %llu bytes used and %llu bytes allocated (grown)\n",
-                    __FUNCTION__,
-                    tree_constr->da->id,
-                    out_tree->tree_ext_free.ext_id,
-                    USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)),
-                    atomic64_read(&out_tree->tree_ext_free.used),
-                    out_tree->tree_ext_free.ext_size);
-            castle_extent_truncate(out_tree->tree_ext_free.ext_id,
-                                   USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)));
-        }
+        castle_printk(LOG_DEBUG, "%s::[da %d] truncating tree ext %u beyond chunk %u,"
+                " after %llu bytes used and %llu bytes allocated (grown)\n",
+                __FUNCTION__,
+                tree_constr->da->id,
+                out_tree->tree_ext_free.ext_id,
+                USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)),
+                atomic64_read(&out_tree->tree_ext_free.used),
+                out_tree->tree_ext_free.ext_size);
+        castle_extent_truncate(out_tree->tree_ext_free.ext_id,
+                               USED_CHUNK(atomic64_read(&out_tree->tree_ext_free.used)));
+    }
 
-        if (castle_ext_freespace_available(&out_tree->data_ext_free) > C_CHK_SIZE)
-        {
-            castle_printk(LOG_DEBUG, "%s::[da %d] truncating data ext %u beyond chunk %u,"
-                    " after %llu bytes used and %llu bytes allocated (grown)\n",
-                    __FUNCTION__,
-                    tree_constr->da->id,
-                    out_tree->data_ext_free.ext_id,
-                    USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)),
-                    atomic64_read(&out_tree->data_ext_free.used),
-                    out_tree->data_ext_free.ext_size);
-            castle_extent_truncate(out_tree->data_ext_free.ext_id,
-                                   USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)));
-        }
+    if (castle_ext_freespace_available(&out_tree->internal_ext_free) > C_CHK_SIZE)
+    {
+        castle_printk(LOG_DEBUG, "%s::[da %d] truncating internal ext %u beyond chunk %u,"
+                " after %llu bytes used and %llu bytes allocated (grown)\n",
+                __FUNCTION__,
+                tree_constr->da->id,
+                out_tree->internal_ext_free.ext_id,
+                USED_CHUNK(atomic64_read(&out_tree->internal_ext_free.used)),
+                atomic64_read(&out_tree->internal_ext_free.used),
+                out_tree->internal_ext_free.ext_size);
+        castle_extent_truncate(out_tree->internal_ext_free.ext_id,
+                               USED_CHUNK(atomic64_read(&out_tree->internal_ext_free.used)));
+    }
+
+    if (castle_ext_freespace_available(&out_tree->data_ext_free) > C_CHK_SIZE)
+    {
+        castle_printk(LOG_DEBUG, "%s::[da %d] truncating data ext %u beyond chunk %u,"
+                " after %llu bytes used and %llu bytes allocated (grown)\n",
+                __FUNCTION__,
+                tree_constr->da->id,
+                out_tree->data_ext_free.ext_id,
+                USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)),
+                atomic64_read(&out_tree->data_ext_free.used),
+                out_tree->data_ext_free.ext_size);
+        castle_extent_truncate(out_tree->data_ext_free.ext_id,
+                               USED_CHUNK(atomic64_read(&out_tree->data_ext_free.used)));
     }
 
     BUG_ON(tree_constr->da != out_tree->da);
@@ -5184,7 +5198,7 @@ static void castle_da_merge_dealloc(struct castle_da_merge *merge, int err, int 
 
     BUG_ON(!merge);
 
-    if (merge->level != 1)
+    if (merge->level != 1 && err)
     {
         castle_printk(LOG_WARN, "Completing merge with err: %d\n", err);
         for (i=0; i<merge->nr_trees; i++)

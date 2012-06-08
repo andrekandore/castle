@@ -1755,6 +1755,7 @@ static int castle_extent_mstore_ext_create(void)
     struct   castle_extents_superblock *castle_extents_sb;
     c_ext_id_t ext_id;
     int      k_factor = (castle_rda_spec_get(RDA_2))->k_factor;
+    c_chk_cnt_t ext_size;
 
     BUG_ON(!castle_extent_in_transaction());
 
@@ -1764,9 +1765,11 @@ static int castle_extent_mstore_ext_create(void)
         i++;
     rcu_read_unlock();
 
+    ext_size = MSTORE_SPACE_SIZE * i / k_factor;
+
     ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
-                                  MSTORE_SPACE_SIZE * i / k_factor,
+                                  ext_size,
                                   MSTORE_EXT_ID,
                                   CASTLE_EXT_FLAGS_NONE);
     if (ext_id != MSTORE_EXT_ID)
@@ -1774,11 +1777,12 @@ static int castle_extent_mstore_ext_create(void)
 
     ext_id = _castle_extent_alloc(RDA_2, 0,
                                   EXT_T_META_DATA,
-                                  MSTORE_SPACE_SIZE * i / k_factor,
+                                  ext_size,
                                   MSTORE_EXT_ID+1,
                                   CASTLE_EXT_FLAGS_NONE);
     if (ext_id != MSTORE_EXT_ID+1)
         return -ENOSPC;
+    castle_printk(LOG_INIT, "%s::allocated %lu chunks for mstore\n", __FUNCTION__, ext_size);
 
     castle_extents_sb = castle_extents_super_block_get();
 
@@ -7041,14 +7045,12 @@ static int castle_extents_garbage_collector(void *unused)
         msleep(1000);
 
     do {
-        int ignore;
         struct list_head *tmp, *pos;
 
         /* Wait for some one to schedule a mask to free or thread to stop. */
-        __wait_event_interruptible(castle_ext_mask_gc_wq,
-                                   (kthread_should_stop() ||
-                                            atomic_read(&castle_extents_gc_q_size)),
-                                   ignore);
+        wait_event_interruptible(castle_ext_mask_gc_wq,
+                                 kthread_should_stop() ||
+                                 atomic_read(&castle_extents_gc_q_size));
 
         /* If the file system is exiting break the loop. */
         if (kthread_should_stop())

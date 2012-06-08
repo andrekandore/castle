@@ -197,6 +197,7 @@ void set_c2b_in_flight      (c2_block_t *c2b);
 void set_c2b_eio            (c2_block_t *c2b);
 void clear_c2b_eio          (c2_block_t *c2b);
 int  c2b_eio                (c2_block_t *c2b);
+void set_c2b_immutable      (c2_block_t *c2b);
 
 /**********************************************************************************************
  * Refcounts.
@@ -299,6 +300,11 @@ void                       castle_cache_stats_print        (int verbose);
 int                        castle_cache_size_get           (void);
 int                        castle_cache_block_destroy      (c2_block_t *c2b);
 void                       castle_cache_dirtytree_demote   (c2_ext_dirtytree_t *dirtytree);
+/**********************************************************************************************
+ * Explicit cache priority management.
+ */
+int c2b_accessed_assign(c2_block_t *c2b, int val);
+int c2b_accessed(c2_block_t *c2b);
 /**********************************************************************************************
  * Cache init/fini.
  */
