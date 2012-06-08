@@ -324,6 +324,7 @@ STATIC_BUG_ON(sizeof(struct castle_extent_position) != 16);
 #define EXT_POS_INVAL(_off)         ((_off).ext_id == INVAL_EXT_ID)
 #define EXT_POS_EQUAL(_off1, _off2) (((_off1).ext_id == (_off2).ext_id) && \
                                       ((_off1).offset == (_off2).offset))
+#define CEP(_ext_id, _off)          ((c_ext_pos_t) {_ext_id, _off})
 /**
  * Compare cep1 against cep2.
  *
