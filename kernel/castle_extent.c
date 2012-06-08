@@ -1940,6 +1940,30 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     return 0;
 }
 
+static int castle_extent_compress(c_ext_t *ext, void *unused)
+{
+    c_ext_mask_id_t mask_id;
+
+    /* Nothing to do for non-compressed extents. */
+    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
+        return 0;
+
+    /* If failed to get reference, ignore. */
+    mask_id = castle_extent_get(ext->ext_id);
+    if (MASK_ID_INVAL(mask_id))
+        return 0;
+
+    /* Schedule extent for flush. Note: We just care about compression. */
+    castle_cache_extent_flush_schedule(ext->ext_id, 0, 0);
+
+    castle_extent_put(mask_id);
+
+    return 0;
+}
+
+extern struct list_head castle_cache_flush_list;
+void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratelimit);
+
 int castle_extents_writeback(void)
 {
     struct castle_extents_superblock *ext_sblk;
@@ -1952,6 +1976,19 @@ int castle_extents_writeback(void)
      * system work queue. */
     if (castle_last_checkpoint_ongoing)
     {
+        struct list_head flush_list;
+
+        /* Ask for all the extents to be compressed. */
+        //castle_cache_extents_compress();
+        castle_extent_transaction_start();
+        __castle_extents_hash_iterate(castle_extent_compress, NULL);
+        castle_extent_transaction_end();
+
+        list_replace(&castle_cache_flush_list, &flush_list);
+        INIT_LIST_HEAD(&castle_cache_flush_list);
+
+        castle_cache_extents_flush(&flush_list, 0);
+
         /* Waits for all the outstanding virtual shrink/truncate masks to promote to
          * compressed extent. */
         while (atomic_read(&castle_extent_stale_virtual_masks))
