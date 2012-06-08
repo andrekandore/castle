@@ -9916,6 +9916,15 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
 
         /* Recover partially complete output CT */
         out_tree = castle_da_ct_unmarshall(&merge->serdes.live.merge_state->out_tree);
+
+        /* Update out_tree extents compression points. */
+        castle_compr_ext_offset_set(out_tree->internal_ext_free.ext_id,
+                                    atomic64_read(&out_tree->internal_ext_free.used));
+        castle_compr_ext_offset_set(out_tree->tree_ext_free.ext_id,
+                                    atomic64_read(&out_tree->tree_ext_free.used));
+        castle_compr_ext_offset_set(out_tree->data_ext_free.ext_id,
+                                    atomic64_read(&out_tree->data_ext_free.used));
+
         merge->out_tree_constr->tree = out_tree;
         BUG_ON(!out_tree);
         BUG_ON(da_id != out_tree->da->id);

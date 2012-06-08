@@ -473,7 +473,8 @@ struct castle_elist_entry {
                                                          space on reboot. */
     /*         68 */ uint64_t        flags;
     /*         76 */ uint64_t        linked_ext_id;
-    /*         84 */ uint8_t         _unused[44];
+    /*         84 */ uint64_t        next_comp_byte;
+    /*         92 */ uint8_t         _unused[36];
     /*        128 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_elist_entry) != 128);

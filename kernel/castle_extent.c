@@ -94,45 +94,48 @@
  * is just a helper function. */
 #ifdef CASTLE_PERF_DEBUG
 #define CONVERT_MENTRY_TO_EXTENT(_ext, _me)                                 \
-        (_ext)->ext_id      = (_me)->ext_id;                                \
-        (_ext)->size        = (_me)->size;                                  \
-        (_ext)->type        = (_me)->type;                                  \
-        (_ext)->k_factor    = (_me)->k_factor;                              \
-        (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
-        (_ext)->ext_type    = (_me)->ext_type;                              \
-        (_ext)->da_id       = (_me)->da_id;                                 \
-        (_ext)->flags       |= (_me)->flags;                                \
-        (_ext)->dirtytree->compr_ext_id = (_ext)->linked_ext_id= (_me)->linked_ext_id; \
-        (_ext)->dirtytree->ext_size = (_me)->size;                          \
-        (_ext)->dirtytree->ext_type = (_me)->ext_type;
+        (_ext)->ext_id                  = (_me)->ext_id;                    \
+        (_ext)->size                    = (_me)->size;                      \
+        (_ext)->type                    = (_me)->type;                      \
+        (_ext)->k_factor                = (_me)->k_factor;                  \
+        (_ext)->maps_cep                = (_me)->maps_cep;                  \
+        (_ext)->curr_rebuild_seqno      = (_me)->curr_rebuild_seqno;        \
+        (_ext)->ext_type                = (_me)->ext_type;                  \
+        (_ext)->da_id                   = (_me)->da_id;                     \
+        (_ext)->flags                  |= (_me)->flags;                     \
+        (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
+        (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;             \
+        (_ext)->dirtytree->ext_size     = (_me)->size;                      \
+        (_ext)->dirtytree->ext_type     = (_me)->ext_type;
 #else
 #define CONVERT_MENTRY_TO_EXTENT(_ext, _me)                                 \
-        (_ext)->ext_id      = (_me)->ext_id;                                \
-        (_ext)->size        = (_me)->size;                                  \
-        (_ext)->type        = (_me)->type;                                  \
-        (_ext)->k_factor    = (_me)->k_factor;                              \
-        (_ext)->maps_cep    = (_me)->maps_cep;                              \
-        (_ext)->curr_rebuild_seqno = (_me)->curr_rebuild_seqno;             \
-        (_ext)->ext_type    = (_me)->ext_type;                              \
-        (_ext)->flags      |= (_me)->flags;                                 \
-        (_ext)->dirtytree->compr_ext_id = (_ext)->linked_ext_id= (_me)->linked_ext_id; \
-        (_ext)->da_id       = (_me)->da_id;
+        (_ext)->ext_id                  = (_me)->ext_id;                    \
+        (_ext)->size                    = (_me)->size;                      \
+        (_ext)->type                    = (_me)->type;                      \
+        (_ext)->k_factor                = (_me)->k_factor;                  \
+        (_ext)->maps_cep                = (_me)->maps_cep;                  \
+        (_ext)->curr_rebuild_seqno      = (_me)->curr_rebuild_seqno;        \
+        (_ext)->ext_type                = (_me)->ext_type;                  \
+        (_ext)->da_id                   = (_me)->da_id;                     \
+        (_ext)->flags                  |= (_me)->flags;                     \
+        (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
+        (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;
 #endif
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
-        (_me)->ext_id       = (_ext)->ext_id;                               \
-        (_me)->size         = (_ext)->size;                                 \
-        (_me)->type         = (_ext)->type;                                 \
-        (_me)->k_factor     = (_ext)->k_factor;                             \
-        (_me)->maps_cep     = (_ext)->maps_cep;                             \
-        (_me)->curr_rebuild_seqno = (_ext)->curr_rebuild_seqno;             \
-        (_me)->ext_type     = (_ext)->ext_type;                             \
-        (_me)->cur_mask     = GET_LATEST_MASK(_ext)->range;                 \
-        (_me)->prev_mask    = (_ext)->global_mask;                          \
-        (_me)->flags        = ((_ext)->flags & CASTLE_EXT_ON_DISK_FLAGS_MASK); \
-        (_me)->linked_ext_id= (_ext)->linked_ext_id;                        \
-        (_me)->da_id        = (_ext)->da_id;
+        (_me)->ext_id                   = (_ext)->ext_id;                   \
+        (_me)->size                     = (_ext)->size;                     \
+        (_me)->type                     = (_ext)->type;                     \
+        (_me)->k_factor                 = (_ext)->k_factor;                 \
+        (_me)->maps_cep                 = (_ext)->maps_cep;                 \
+        (_me)->curr_rebuild_seqno       = (_ext)->curr_rebuild_seqno;       \
+        (_me)->ext_type                 = (_ext)->ext_type;                 \
+        (_me)->da_id                    = (_ext)->da_id;                    \
+        (_me)->cur_mask                 = GET_LATEST_MASK(_ext)->range;     \
+        (_me)->prev_mask                = (_ext)->global_mask;              \
+        (_me)->flags                    = ((_ext)->flags & CASTLE_EXT_ON_DISK_FLAGS_MASK); \
+        (_me)->next_comp_byte           = atomic64_read(&(_ext)->next_comp_byte);          \
+        (_me)->linked_ext_id            = (_ext)->linked_ext_id;
 
 #define FAULT_CODE EXTENT_FAULT
 
@@ -2107,6 +2110,8 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     castle_extents_hash_add(ext);
 
+    castle_compr_ext_offset_set(ext->ext_id, mstore_entry->next_comp_byte);
+
     /* Need special handling for virtual extents. */
     if (test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
     {
@@ -3955,33 +3960,67 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
     return;
 }
 
-#if 0
-/* Set the last byte offset in virtual extent that is compressed and we care about. */
-void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t compr_offset)
+/**
+ * Called during desrialisation phase of FS, to let extents code know the number of used
+ * bytes in extent. i.e. all bytes upto this are compressed onto disk, so they got valid
+ * compression maps.
+ *
+ * @param [in]    virt_ext_id - ID of the extent that we want to set last valid byte.
+ * @param [in]    used_bytes - Number of valid bytes in this extent. Everything upto
+ *                             (used_bytes - 1) compressed onto disk.
+ */
+void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes)
 {
     c_ext_t *virt_ext = castle_extents_hash_get(virt_ext_id);
-    c_ext_t *comp_ext = castle_extents_hash_get(virt_ext->linked_ext_id);
-    c_byte_off_t comp_blk_size;
+    c_byte_off_t comp_blk_size, compr_offset;
     c_ext_pos_t comp_cep;
 
-    castle_extent_transaction_start();
+    /* Extent doesn't exist. */
+    if (virt_ext == NULL)
+        return;
+
+    /* Not a virtual extent!! */
+    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags))
+        return;
+
+    /* Extent has no valid data, yet. */
+    if (used_bytes == 0)
+    {
+        atomic64_set(&virt_ext->next_comp_byte, 0);
+        atomic64_set(&virt_ext->compr_saved_bytes, 0);
+        return;
+    }
+
+    /* Get inclusive offset. */
+    compr_offset = used_bytes - 1;
 
     /* Sanity checks to make sure this offset is in live extent mask range. */
     BUG_ON(virt_ext->global_mask.end <= compr_offset / C_CHK_SIZE);
     BUG_ON(virt_ext->global_mask.start > compr_offset / C_CHK_SIZE);
 
-    /* Get the starting of compression block. */
+    /* Set next_comp_byte for virt_ext. */
+    atomic64_set(&virt_ext->next_comp_byte, roundup(used_bytes, C_COMPR_BLK_SZ));
+
+    /* Get the starting of block. */
     compr_offset -= (compr_offset % C_COMPR_BLK_SZ);
 
+    /* Get compression map for this block. */
     comp_blk_size = castle_compr_map_get(CEP(virt_ext->ext_id, compr_offset),
                                          &comp_cep);
 
-    comp_ext->next_comp_byte = roundup(comp_cep.offset + comp_blk_size, C_BLK_SIZE);
-    virt_ext->next_comp_byte = compr_offset + C_COMPR_BLK_SZ;
+    /* Set dirty tree offsets. */
+#if 0
+    mutex_lock(&virt_ext->dirtytree->compr_mutex);
+    virt_ext->dirtytree->virt_compressed_off = roundup(used_bytes, C_COMPR_BLK_SZ);
+    virt_ext->dirtytree->compr_compressed_off = roundup(comp_cep.offset + comp_blk_size,
+                                                        C_BLK_SIZE);
+    mutex_unlock(&virt_ext->dirtytree->compr_mutex);
 
-    castle_extent_transaction_end();
-}
+    /* Set extent offsets. */
+    atomic64_set(&virt_ext->compr_saved_bytes,
+          virt_ext->dirtytree->virt_compressed_off - virt_ext->dirtytree->compr_compressed_off);
 #endif
+}
 
 static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)
 {
@@ -4677,9 +4716,11 @@ int castle_extent_unlink(c_ext_id_t ext_id)
     if (atomic_dec_return(&ext->link_cnt) == 0)
     {
         debug_ext_ref("%s::extent %lld\n", __FUNCTION__, ext_id);
+#if 0
         /* All merges and request would have completed before setting castle_last_checkpoint_ongoing.
          * There shouldn't be any free()/unlink() after that. */
         BUG_ON(castle_last_checkpoint_ongoing);
+#endif
 
         /* Increment the count of scheduled extents for deletion. Last checkpoint, consequently,
          * castle_exit waits for all outstanding dead extents to get destroyed. */

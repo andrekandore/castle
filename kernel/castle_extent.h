@@ -249,7 +249,7 @@ void                castle_compr_map_set                     (c_ext_pos_t    vir
                                                               c_byte_off_t   comp_blk_bytes);
 
 void                castle_compr_ext_offset_set              (c_ext_id_t     ext_id,
-                                                              c_byte_off_t   compr_offset);
+                                                              c_byte_off_t   used_btyes);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
