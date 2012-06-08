@@ -309,12 +309,12 @@ long                        castle_extents_chunks_remapped = 0;
 static int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
                                  int remap_idx);
 
-static atomic_t             castle_extents_dead_count = ATOMIC(0);
+static atomic_t             castle_extents_ref_count = ATOMIC(1);
 
 /* Number of virtual masks, that are not yet ready to be promoted. */
 static atomic_t             castle_extent_stale_virtual_masks = ATOMIC(0);
 
-struct task_struct         *extents_gc_thread;
+struct task_struct         *extents_gc_thread = NULL;
 
 static struct kmem_cache   *castle_partial_schks_cache = NULL;
 
@@ -329,6 +329,9 @@ static struct timer_list castle_virt_masks_check_timer;
 
 static void castle_virt_masks_check_timer_fire(unsigned long first)
 {
+    /* Don't want the module to exit while the work is scheduled. */
+    BUG_ON(atomic_inc_return(&castle_extents_ref_count) == 1);
+
     /* Timeout any existing DA CTs proxy structures. */
     schedule_work(&castle_virt_masks_check_work);
 
@@ -1474,35 +1477,20 @@ int castle_extents_init(void)
 {
     debug("Initing castle extents\n");
 
-    /* Initialise extents garbage collector. */
-    extents_gc_thread = kthread_run(castle_extents_garbage_collector, NULL,
-                                    "castle-extents-gc");
-    if (IS_ERR(extents_gc_thread))
-    {
-        castle_printk(LOG_INIT, "Could not start garbage collector thread for extents\n");
-        goto err_out;
-    }
-
     /* Initialise hash table for extents. */
     castle_extents_hash = castle_extents_hash_alloc();
     if (!castle_extents_hash)
     {
         castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
-        kthread_stop(extents_gc_thread);
-
         goto err_out;
     }
     castle_extents_hash_init();
-
-    castle_virt_masks_check_timer_fire(1);
 
     /* Initialise hash table for extent masks. */
     castle_extent_mask_hash = castle_extent_mask_hash_alloc();
     if (!castle_extent_mask_hash)
     {
         castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
-        kthread_stop(extents_gc_thread);
-
         goto err_out;
     }
     castle_extent_mask_hash_init();
@@ -1512,8 +1500,6 @@ int castle_extents_init(void)
     if (!castle_res_pool_hash)
     {
         castle_printk(LOG_INIT, "Could not allocate extents hash.\n");
-        kthread_stop(extents_gc_thread);
-
         goto err_out;
     }
     castle_res_pool_hash_init();
@@ -1945,27 +1931,41 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
 
 static int castle_extent_compress(c_ext_t *ext, void *unused)
 {
-    c_ext_mask_id_t mask_id;
-
     /* Nothing to do for non-compressed extents. */
     if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
-        return 0;
-
-    /* If failed to get reference, ignore. */
-    mask_id = castle_extent_get(ext->ext_id);
-    if (MASK_ID_INVAL(mask_id))
         return 0;
 
     /* Schedule extent for flush. Note: We just care about compression. */
     castle_cache_extent_flush_schedule(ext->ext_id, 0, 0);
 
-    castle_extent_put(mask_id);
-
     return 0;
 }
 
-extern struct list_head castle_cache_flush_list;
-void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratelimit);
+/** TODO@BM/LT: this is a hack, fix it */
+static void castle_extents_compress(void)
+{
+    extern struct list_head castle_cache_flush_list;
+    void castle_cache_extents_flush(struct list_head *flush_list, unsigned int ratelimit);
+    struct list_head flush_list;
+
+    __castle_extents_hash_iterate(castle_extent_compress, NULL);
+
+    list_replace(&castle_cache_flush_list, &flush_list);
+    INIT_LIST_HEAD(&castle_cache_flush_list);
+
+    castle_cache_extents_flush(&flush_list, 0);
+}
+
+static int castle_extent_stable_check(c_ext_t *ext, void *unused)
+{
+    /* Extent shouldn't be dead. */
+    BUG_ON(atomic_read(&ext->link_cnt) == 0);
+
+    while (!list_is_singular(&ext->mask_list))
+        msleep_interruptible(1000);
+
+    return 0;
+}
 
 int castle_extents_writeback(void)
 {
@@ -1975,30 +1975,45 @@ int castle_extents_writeback(void)
     if (!extent_init_done)
         return 0;
 
-    /* Don't exit with outstanding dead extents. They are scheduled to get freed on
-     * system work queue. */
+    /**
+     * Start last checkpoint of extents only when the extents state is stable..
+     *
+     *      1. All dead extents are destroyed.
+     *      2. All extents have only one valid/live mask.
+     *      3. All virtual extent masks are promoted to comrpessed extents.
+     */
     if (castle_last_checkpoint_ongoing)
     {
-        struct list_head flush_list;
+        /* Stop the timer that schedules virtual mask processing. It is possible that we still
+         * need processing, but we do it manually. */
+        del_singleshot_timer_sync(&castle_virt_masks_check_timer);
+
+        /* Release live reference on extents - make the way for last checkpoint. */
+        atomic_dec(&castle_extents_ref_count);
+
+        /* Wait for all references to be released. */
+        while (atomic_read(&castle_extents_ref_count))
+            msleep_interruptible(1000);
+
+        /* --- Extents wouldn't be destroyed any more. Extents Hash is immutable --- */
 
         /* Ask for all the extents to be compressed. */
-        //castle_cache_extents_compress();
-        castle_extent_transaction_start();
-        __castle_extents_hash_iterate(castle_extent_compress, NULL);
-        castle_extent_transaction_end();
+        castle_extents_compress();
 
-        list_replace(&castle_cache_flush_list, &flush_list);
-        INIT_LIST_HEAD(&castle_cache_flush_list);
+        /* All the compression is done. Look for any outstanding virtual masks that need to
+         * be promoted to compressed extent. */
+        atomic_inc(&castle_extents_ref_count);
+        castle_extents_virt_masks_check(NULL);
 
-        castle_cache_extents_flush(&flush_list, 0);
+        /* Wait for all extents to become stable i.e. expire all old extents and
+         * should have only one mask per extent. */
+        __castle_extents_hash_iterate(castle_extent_stable_check, NULL);
 
-        /* Waits for all the outstanding virtual shrink/truncate masks to promote to
-         * compressed extent. */
-        while (atomic_read(&castle_extent_stale_virtual_masks))
-            msleep_interruptible(1000);
+        /* --- Masks wouldn't be destroyed any more. Mask Hash is immutable --- */
 
-        while (atomic_read(&castle_extents_gc_q_size) || atomic_read(&castle_extents_dead_count))
-            msleep_interruptible(1000);
+        BUG_ON(atomic_read(&castle_extent_stale_virtual_masks));
+        BUG_ON(atomic_read(&castle_extents_gc_q_size));
+        BUG_ON(atomic_read(&castle_extents_ref_count));
     }
 
     castle_extents_mstore = castle_mstore_init(MSTORE_EXTENTS);
@@ -2188,6 +2203,18 @@ out:
 void castle_extents_start(void)
 {
     extents_allocable = 1;
+
+    /* Initialise extents garbage collector. */
+    extents_gc_thread = kthread_run(castle_extents_garbage_collector, NULL,
+                                    "castle-extents-gc");
+    if (IS_ERR(extents_gc_thread))
+    {
+        castle_printk(LOG_INIT, "Could not start garbage collector thread for extents\n");
+        BUG();
+    }
+
+    /* Start the self-schedulable timer to check for virtual masks intermittantly. */
+    castle_virt_masks_check_timer_fire(1);
 }
 
 #define map_chks_per_page(_k_factor)    (PAGE_SIZE / (_k_factor * sizeof(c_disk_chk_t)))
@@ -2805,17 +2832,14 @@ error_out:
 
 void castle_extents_fini(void)
 {
-    /* Stop the Garbage collector thread. */
-    kthread_stop(extents_gc_thread);
+    if (extents_gc_thread)
+        kthread_stop(extents_gc_thread);
 
     /* Make sure cache flushed all dirty pages */
     /* Iterate over extents hash with exclusive access. Indeed, we don't need a
      * lock here as this happens in the module end. */
     if (castle_extents_hash)
-    {
-        del_singleshot_timer_sync(&castle_virt_masks_check_timer);
         castle_extents_hash_iterate_exclusive(castle_extent_hash_remove, NULL);
-    }
 
     castle_check_free(castle_extents_hash);
     castle_check_free(castle_extent_mask_hash);
@@ -3695,8 +3719,9 @@ static void castle_extent_resource_release(void *data)
 
     castle_extents_sb->nr_exts--;
 
-    /* Decrement the dead count. Module can't exit with outstanding dead extents.  */
-    atomic_dec(&castle_extents_dead_count);
+    /* Release the reference on extents. Now, it is safe to do the last checkpoint and
+     * then exit. */
+    atomic_dec(&castle_extents_ref_count);
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
@@ -4416,7 +4441,7 @@ void castle_extent_mask_put(c_ext_mask_id_t mask_id)
             /* Add to the free list, it would get destroyed later by the GC thread. */
             list_add_tail(&pos_mask->hash_list, &castle_ext_mask_free_list);
 
-            atomic_inc_return(&castle_extents_gc_q_size);
+            atomic_inc(&castle_extents_gc_q_size);
         }
 
         /* Wakeup the garbage collector. */
@@ -4722,9 +4747,9 @@ int castle_extent_unlink(c_ext_id_t ext_id)
         BUG_ON(castle_last_checkpoint_ongoing);
 #endif
 
-        /* Increment the count of scheduled extents for deletion. Last checkpoint, consequently,
-         * castle_exit waits for all outstanding dead extents to get destroyed. */
-        atomic_inc(&castle_extents_dead_count);
+        /* Take a reference on extents. Without this, it is possible to do the last checkpoint
+         * on extents and exit with this extent remaining dead. */
+        BUG_ON(atomic_inc_return(&castle_extents_ref_count) == 1);
     }
 
     /* There should be at least one mask. */
@@ -7273,10 +7298,6 @@ static int castle_extents_garbage_collector(void *unused)
 
     castle_printk(LOG_INIT, "Starting Extents garbage collector thread: %p\n", &gc_list);
 
-    /* Wait for all the extents to get initialized. */
-    while((extent_init_done != 2) && !kthread_should_stop())
-        msleep(1000);
-
     do {
         struct list_head *tmp, *pos;
 
@@ -7320,7 +7341,7 @@ static int castle_extents_garbage_collector(void *unused)
             /* Removes mask from extent and also free-up any resources occupied by it. */
             BUG_ON(castle_extent_mask_destroy(mask) < 0);
 
-            atomic_dec_return(&castle_extents_gc_q_size);
+            atomic_dec(&castle_extents_gc_q_size);
         }
 
         castle_extent_transaction_end();
@@ -7528,6 +7549,8 @@ static void castle_extents_virt_masks_check(void *unused)
     castle_extents_hash_iterate(castle_extent_virt_masks_check, NULL);
 
     castle_extent_transaction_end();
+
+    atomic_dec(&castle_extents_ref_count);
 }
 
 static void _castle_extent_shrink(c_ext_t *ext, c_chk_cnt_t chunk)
