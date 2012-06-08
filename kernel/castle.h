@@ -1831,6 +1831,9 @@ struct castle_da_rq_iterator
 
     struct castle_double_array *da;
     c_ver_t                     version;
+    int                         get_all;            /**< Get all keys, if set                   */
+                                                    /**< start/end_key, start/end_stripped      */
+                                                    /**< are all invaild.                       */
     void                       *start_key;
     void                       *end_key;
     void                       *start_stripped;     /**< Stripped start key.                    */
@@ -2165,6 +2168,7 @@ struct castle_object_iterator
     c_da_t                              da_id;
     c_ver_t                             version;
     struct castle_btree_type           *btree;
+    int                                 get_all;
     void                               *start_key;
     void                               *end_key;
     uint8_t                             flags;

@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 42 /* last updated by GM */
+#define CASTLE_PROTOCOL_VERSION 43 /* last updated by GM */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -990,31 +990,120 @@ enum {
     CASTLE_RESPONSE_FLAG_TOMBSTONE        = (1 << 0),  /**< Value is a tombstone.                 */
 };
 
-/* Value types used in struct castle_iter_val. */
+/**
+ * Value types for val_type in c_buf_user_kv_hdr_t, c_buf_kv_hdr_t.
+ *
+ * Please keep these in a sensible order.
+ */
 enum {
     CASTLE_VALUE_TYPE_INVALID         = 0,
+    /* Following types can be considered "inline" */
     CASTLE_VALUE_TYPE_INLINE          = 1,
-    CASTLE_VALUE_TYPE_OUT_OF_LINE     = 2,
-    CASTLE_VALUE_TYPE_COUNTER         = 3,
-    CASTLE_VALUE_TYPE_COUNTER_DELTA   = 4,
-    CASTLE_VALUE_TYPE_TOMBSTONE       = 5
+    CASTLE_VALUE_TYPE_COUNTER         = 2,
+    CASTLE_VALUE_TYPE_COUNTER_DELTA   = 3,
+    CASTLE_VALUE_TYPE_TOMBSTONE       = 4,
+    /* Following types can be considered "out of line" */
+    CASTLE_VALUE_TYPE_OUT_OF_LINE     = 10
 };
 
-struct castle_iter_val {
-    uint64_t               length;
-    uint8_t                type;
+/**
+ * Userland header for consuming Castle key-value pairs.
+ *
+ * @also castle_buffer_kvp_get()
+ */
+typedef struct castle_buffer_user_key_value_header {
+    c_vl_bkey_t            *key;
+    uint8_t                 val_type;
+    uint64_t                val_len;
     union {
-        uint8_t           *val;
-        c_collection_id_t  collection_id;
+        void               *val;
+        c_collection_id_t   collection_id;
     };
-};
+    castle_user_timestamp_t user_timestamp;
+} c_buf_user_kv_hdr_t;
 
-struct castle_key_value_list {
-    struct castle_key_value_list *next;
-    c_vl_bkey_t                  *key;
-    struct castle_iter_val       *val;
-    castle_user_timestamp_t       user_timestamp;
-};
+/**
+ * Header for Castle key-value pair in buffer.
+ */
+typedef struct castle_buffer_key_value_header {
+    /* align:   8 */
+    /* offset:  0 */ uint32_t                key_off;       /**< Absolute offset of c_vl_bkey_t in buffer.  */
+    /*          4 */ union {
+                        uint32_t             val_off;       /**< Absolute offset of value in buffer.        */
+                        c_collection_id_t    collection_id; /**< Collection ID key belongs to.              */
+    };
+    /*          8 */ castle_user_timestamp_t user_timestamp;/**< User timestamp associated with key.        */
+    /*         16 */ uint64_t                val_len;       /**< Length of value.                           */
+    /*         24 */ uint8_t                 val_type;      /**< Value type.                                */
+    /*         25 */ uint8_t                 _unused[7];
+    /*         32 */
+} PACKED c_buf_kv_hdr_t;
+
+/**
+ * Status values for status in c_buf_hdr_t.
+ */
+typedef enum {
+    CASTLE_BUFFER_STATUS_COMPLETE = 0,              /**< Final buffer, no more data to return.  */
+    CASTLE_BUFFER_STATUS_HAS_MORE,                  /**< More data to return in subsequent buf. */
+    CASTLE_BUFFER_STATUS_ERROR,                     /**< Error occurred (overflows, etc.)       */
+    /* Note: Status values are stored in a uint8_t.  Don't overflow. */
+} c_buf_status_t;
+
+/**
+ * Flag bits for flags in c_buf_hdr_t.
+ */
+typedef enum {
+    CASTLE_BUFFER_FLAG_HAS_OOL          = (1 << 0), /**< Buffer contains non-inline values.     */
+    /* Note: Flags are stored in a uin8_t.  Don't overflow. */
+} c_buf_flags_t;
+
+#define CASTLE_BUFFER_VERSION   1
+
+/**
+ * Header for Castle key-value buffers, for iters and stream in/out.
+ */
+typedef struct castle_buffer_header {
+    /* align:   8 */
+    /*          0 */ uint32_t       index_off;      /**< Offset of the first index element.     */
+    /*          4 */ uint16_t       nr_entries;     /**< Number of entries in the buffer.       */
+    /*          6 */ uint8_t        flags;          /**< Flags specified to this buffer.        */
+    /*          7 */ uint8_t        status;         /**< Status of this buffer.                 */
+    /*          8 */ uint8_t        version;        /**< Buffer version.                        */
+    /*          9 */ uint8_t        _unused[7];
+    /*          16 */
+} PACKED c_buf_hdr_t;
+
+/**
+ * Token for adding items to a Castle key-value buffer.
+ */
+typedef struct castle_buffer_constructor {
+    uint8_t         flags;
+    uint16_t        nr_entries;
+
+    void           *buf;
+    c_buf_hdr_t    *buf_hdr;
+
+    uint32_t        buf_len;
+    uint32_t        buf_rem;
+
+    uint32_t        cur_hdr_off;
+    uint32_t        cur_kv_off;
+} c_buf_constructor_t;
+
+/**
+ * Token for consuming items from a Castle key-value buffer.
+ */
+typedef struct castle_buffer_consumer {
+    void           *buf;
+
+    uint32_t        buf_len;            /**< Total length of buf.               */
+
+    c_buf_hdr_t    *buf_hdr;
+    c_buf_kv_hdr_t *kv_hdrs;
+
+    uint32_t        cur_hdr_off;
+    uint32_t        cur_kv_off;
+} c_buf_consumer_t;
 
 
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)

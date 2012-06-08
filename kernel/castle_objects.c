@@ -95,7 +95,10 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
         castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
-        next_key = iter->btree->key_hc_next(k, iter->start_key, iter->end_key);
+        if (iter->get_all)
+            next_key = k;
+        else
+            next_key = iter->btree->key_hc_next(k, iter->start_key, iter->end_key);
 
         if (next_key != k)      /* key is outside the hypercube */
         {
@@ -214,7 +217,7 @@ void _castle_objects_rq_iter_init(void *private)
 static void castle_objects_rq_iter_init(castle_object_iterator_t *iter,
                                         castle_object_iter_init_cb_t init_cb)
 {
-    BUG_ON(!iter->start_key || !iter->end_key);
+    BUG_ON(!iter->get_all && (!iter->start_key || !iter->end_key));
     BUG_ON(!init_cb);
 
     iter->err = 0;
@@ -228,17 +231,11 @@ static void castle_objects_rq_iter_init(castle_object_iterator_t *iter,
     iter->da_rq_iter.err = -EINVAL;
     iter->last_next_key = NULL;
     iter->completed     = 0;
-#ifdef DEBUG
-    castle_printk(LOG_DEBUG, "====================== RQ start keys =======================\n");
-    iter->btree->key_print(iter->start_key);
-    castle_printk(LOG_DEBUG, "======================= RQ end keys ========================\n");
-    iter->btree->key_print(iter->end_key);
-    castle_printk(LOG_DEBUG, "============================================================\n");
-#endif
 
     castle_da_rq_iter_init(&iter->da_rq_iter,
                            iter->version,
                            iter->da_id,
+                           iter->get_all,
                            iter->start_key,
                            iter->end_key,
                            iter->seq_id,
@@ -1007,103 +1004,6 @@ err0:
 }
 EXPORT_SYMBOL(castle_object_replace);
 
-int castle_object_batch_in_stream(struct  castle_attachment *attachment,
-                                  struct  castle_immut_tree_construct *da_stream,
-                                  char   *batch_buf,
-                                  size_t  batch_buf_size)
-{
-    struct castle_btree_type *btree;
-    void *key, *raw_key;
-    int err;
-    c_instream_batch_proc proc;
-    c_stream_val_tup_t scvt;
-
-    /* Sanity checks. */
-    BUG_ON(!attachment);
-    btree = castle_double_array_btree_type_get(attachment);
-
-    castle_instream_batch_proc_construct(&proc, batch_buf, batch_buf_size);
-    while(!(err = castle_instream_batch_proc_next(&proc, &raw_key, &scvt)))
-    {
-        key = btree->key_pack(raw_key, NULL, NULL);
-        if (!key)
-            return -ENOMEM;
-
-#if 0
-        castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
-        btree->key_print(LOG_DEVEL, key);
-#endif
-
-        if (!scvt.cvt_complete)
-        {
-            int total_blocks;
-            c_byte_off_t ext_space_needed;
-            c_ext_pos_t new_cep;
-            char * val_ptr;
-
-            /* Must be a medium object CVT that needs data to be copied into
-               the data extent... */
-            BUG_ON(!CVT_MEDIUM_OBJECT(scvt.cvt));
-
-            /* Should have a valid data extent. */
-            BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
-
-            /* Allocate space for the new copy. */
-            total_blocks = (scvt.cvt.length - 1) / C_BLK_SIZE + 1;
-            ext_space_needed = total_blocks * C_BLK_SIZE;
-
-            castle_printk(LOG_DEBUG, "%s::total_blocks = %u, ext_space_needed = %lu\n",
-                total_blocks, ext_space_needed);
-
-            BUG_ON(castle_ext_freespace_get(&da_stream->tree->data_ext_free,
-                        ext_space_needed,
-                        0,
-                        &new_cep) < 0);
-            val_ptr = scvt.cvt.val_p;
-            CVT_MEDIUM_OBJECT_INIT(scvt.cvt, scvt.cvt.length, new_cep);
-            while (total_blocks > 0)
-            {
-                int blocks;
-                c2_block_t *c_c2b;
-                int step = total_blocks * PAGE_SIZE;
-
-                blocks = total_blocks;
-                total_blocks -= blocks;
-
-                c_c2b = castle_cache_block_get(new_cep, blocks, MERGE_OUT);
-                write_lock_c2b(c_c2b);
-                update_c2b(c_c2b);
-                memcpy(c2b_buffer(c_c2b), val_ptr, step);
-                dirty_c2b(c_c2b);
-                write_unlock_c2b(c_c2b);
-                put_c2b(c_c2b);
-                new_cep.offset += step;
-                val_ptr += step;
-            }
-
-            scvt.cvt_complete = 1;
-        }
-
-        BUG_ON(!scvt.cvt_complete);
-        err = castle_da_in_stream_entry_add(da_stream,
-                    key,
-                    attachment->version,
-                    scvt.cvt);
-        castle_free(key);
-
-        if (err)
-            break;
-    }
-    if(err != ENOSR)
-    {
-        castle_printk(LOG_ERROR, "%s::stream-in %p encountered error %u during batch buffer processing.\n",
-                __FUNCTION__, da_stream, err);
-        return err;
-    }
-    castle_instream_batch_proc_destroy(&proc);
-    return 0;
-}
-
 void castle_object_slice_get_end_io(void *obj_iter, int err);
 
 /**
@@ -1122,8 +1022,11 @@ void _castle_object_iter_init(castle_object_iterator_t *iterator)
 
     if (err)
     {
-        iterator->btree->key_dealloc(iterator->end_key);
-        iterator->btree->key_dealloc(iterator->start_key);
+        if (!iterator->get_all)
+        {
+            iterator->btree->key_dealloc(iterator->end_key);
+            iterator->btree->key_dealloc(iterator->start_key);
+        }
         castle_free(iterator);
     }
     else
@@ -1135,39 +1038,10 @@ void _castle_object_iter_init(castle_object_iterator_t *iterator)
     start_cb(start_private, err);
 }
 
-/**
- * Initialise a range query.
- *
- * @param   seq_id      Unique ID for tracing purposes
- * @param   start_cb    Callback in the event we go asynchronous
- * @param   private     Caller-provided data passed to start_cb()
- *
- * If we are able to allocate all necessary structures and caller-provided keys
- * are valid we call into castle_objects_rq_iter_init() which handles the
- * initialisation of the DA range query iterator - the initialisation has now
- * gone asynchronous and the caller should wait for their callback to fire,
- * this happens from our own callback, _castle_object_iter_init().
- *
- * @return  0       Initialisation went asynchronous
- * @return -EINVAL  Invalid start and/or end key
- * @return -ENOMEM  Failed to allocate memory for initialisation
- *
- * @also castle_objects_rq_iter_init()
- * @also _castle_object_iter_init()
- */
-int castle_object_iter_init(struct castle_attachment *attachment,
-                             c_vl_bkey_t *start_key,
-                             c_vl_bkey_t *end_key,
-                             castle_object_iterator_t **iter,
-                             int seq_id,
-                             uint8_t flags,
-                             castle_object_iter_start_cb_t start_cb,
-                             void *private)
+static int castle_object_iter_keys_validate(c_vl_bkey_t *start_key,
+                                            c_vl_bkey_t *end_key)
 {
-    castle_object_iterator_t *iterator;
-    int i, ret;
-
-    BUG_ON(!start_cb || !private);
+    int i;
 
     /* Checks on keys. */
     if (start_key->nr_dims != end_key->nr_dims)
@@ -1188,6 +1062,49 @@ int castle_object_iter_init(struct castle_attachment *attachment,
             !(castle_object_btree_key_dim_flags_get(end_key, i) & KEY_DIMENSION_PLUS_INFINITY_FLAG))
             return -EINVAL;
 
+    return 0;
+}
+
+
+/**
+ * Initialise a range query.
+ *
+ * @param   get_all     If true, keys are not valid, and the iterator will return all keys
+ * @param   seq_id      Unique ID for tracing purposes
+ * @param   start_cb    Callback in the event we go asynchronous
+ * @param   private     Caller-provided data passed to start_cb()
+ *
+ * If we are able to allocate all necessary structures and caller-provided keys
+ * are valid we call into castle_objects_rq_iter_init() which handles the
+ * initialisation of the DA range query iterator - the initialisation has now
+ * gone asynchronous and the caller should wait for their callback to fire,
+ * this happens from our own callback, _castle_object_iter_init().
+ *
+ * @return  0       Initialisation went asynchronous
+ * @return -EINVAL  Invalid start and/or end key
+ * @return -ENOMEM  Failed to allocate memory for initialisation
+ *
+ * @also castle_objects_rq_iter_init()
+ * @also _castle_object_iter_init()
+ */
+int castle_object_iter_init(struct castle_attachment *attachment,
+                            int get_all,
+                            c_vl_bkey_t *start_key,
+                            c_vl_bkey_t *end_key,
+                            castle_object_iterator_t **iter,
+                            int seq_id,
+                            uint8_t flags,
+                            castle_object_iter_start_cb_t start_cb,
+                            void *private)
+{
+    castle_object_iterator_t *iterator;
+    int ret;
+
+    BUG_ON(!start_cb || !private);
+
+    if (!get_all && (ret = castle_object_iter_keys_validate(start_key, end_key)))
+        return ret;
+
     iterator = castle_zalloc(sizeof(castle_object_iterator_t));
     if (!iterator)
         return -ENOMEM;
@@ -1196,12 +1113,17 @@ int castle_object_iter_init(struct castle_attachment *attachment,
     /* Create the packed keys out of the backend keys. */
     ret = -ENOMEM;
     iterator->btree = castle_double_array_btree_type_get(attachment);
-    iterator->start_key = iterator->btree->key_pack(start_key, NULL, NULL);
-    if (!iterator->start_key)
-        goto err0;
-    iterator->end_key = iterator->btree->key_pack(end_key, NULL, NULL);
-    if (!iterator->end_key)
-        goto err1;
+
+    iterator->get_all = get_all;
+    if (!get_all)
+    {
+        iterator->start_key = iterator->btree->key_pack(start_key, NULL, NULL);
+        if (!iterator->start_key)
+            goto err0;
+        iterator->end_key = iterator->btree->key_pack(end_key, NULL, NULL);
+        if (!iterator->end_key)
+            goto err1;
+    }
 
     /* Initialise the rest of the iterator */
     iterator->seq_id        = seq_id;
@@ -1282,8 +1204,11 @@ int castle_object_iter_finish(castle_object_iterator_t *iterator, int err)
 
     castle_objects_rq_iter_cancel(iterator);
     debug_rq("Freeing iterators & buffers.\n");
-    iterator->btree->key_dealloc(iterator->end_key);
-    iterator->btree->key_dealloc(iterator->start_key);
+    if (!iterator->get_all)
+    {
+       iterator->btree->key_dealloc(iterator->end_key);
+       iterator->btree->key_dealloc(iterator->start_key);
+    }
     castle_free(iterator);
 
     return 0;

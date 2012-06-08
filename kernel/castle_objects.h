@@ -17,6 +17,7 @@ int          castle_object_get               (struct castle_object_get *get,
                                               struct castle_attachment *attachment,
                                               int cpu_index);
 int          castle_object_iter_init         (struct castle_attachment *attachment,
+                                              int get_all,
                                               c_vl_bkey_t *start_key,
                                               c_vl_bkey_t *end_key,
                                               castle_object_iterator_t **iter,

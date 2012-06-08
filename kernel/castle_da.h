@@ -198,6 +198,7 @@ void castle_da_next_ct_read    (c_bvec_t *c_bvec);
 void castle_da_rq_iter_init    (c_da_rq_iter_t *iter,
                                 c_ver_t version,
                                 c_da_t da_id,
+                                int get_all,
                                 void *start_key,
                                 void *end_key,
                                 int seq_id,
