@@ -480,7 +480,7 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pg
 
 struct timer_list              castle_cache_stats_timer;
 
-static               LIST_HEAD(castle_cache_flush_list);
+LIST_HEAD(castle_cache_flush_list);
 
 static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
 
