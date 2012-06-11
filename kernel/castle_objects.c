@@ -11,7 +11,6 @@
 #include "castle_objects.h"
 #include "castle_extent.h"
 #include "castle_systemtap.h"
-#include "castle_instream.h"
 
 //#define DEBUG
 #ifndef DEBUG
