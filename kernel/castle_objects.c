@@ -94,7 +94,7 @@ static int castle_objects_rq_iter_prep_next(castle_object_iterator_t *iter)
 
         /* Nothing cached, but there is something in the da_rq_iter.
            Check if that's within the rq hypercube */
-        castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt);
+        castle_da_rq_iter.next(&iter->da_rq_iter, &k, &v, &cvt, NULL);
         if (iter->get_all)
             next_key = k;
         else
@@ -1177,7 +1177,7 @@ int castle_object_iter_next(castle_object_iterator_t *iterator,
         {
             /* Iterator ready to return another value. */
             debug_rq("Getting an entry for the range query.\n");
-            castle_objects_rq_iter.next(iterator, &k, &v, &val);
+            castle_objects_rq_iter.next(iterator, &k, &v, &val, NULL);
             debug_rq("Got an entry for the range query.\n");
 
             if (!k || !(key = iterator->btree->key_unpack(k, NULL, NULL)))

@@ -1583,10 +1583,11 @@ typedef int  (*castle_iterator_prep_next_t)(void *iter);
           0 -  if the buffer is empty */
 typedef int  (*castle_iterator_has_next_t)(void *iter);
 /* next - gets called only if buffer is not empty */
-typedef void (*castle_iterator_next_t)    (void        *iter,
-                                           void       **key_p,
-                                           c_ver_t     *version_p,
-                                           c_val_tup_t *cvt_p);
+typedef void (*castle_iterator_next_t)    (void          *iter,
+                                           void         **key_p,
+                                           c_ver_t       *version_p,
+                                           c_val_tup_t   *cvt_p,
+                                           unsigned int  *source_prio);
 /* skip - set the low level iterator to skip to the key, but don't run lower
  *        level iterator. It shouldn't block */
 typedef void (*castle_iterator_skip_t)    (void *iter,
@@ -1779,6 +1780,7 @@ typedef struct castle_merged_iterator {
             c_ver_t                  v;
             c_val_tup_t              cvt;
             castle_user_timestamp_t  u_ts;
+            int                      source_priority;
         } cached_entry;
         struct list_head             same_kv_head;
         union {

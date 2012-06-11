@@ -771,10 +771,11 @@ static int castle_ct_immut_iter_prep_next(c_immut_iter_t *iter)
     return 1;
 }
 
-static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
-                                      void **key_p,
-                                      c_ver_t *version_p,
-                                      c_val_tup_t *cvt_p)
+static void castle_ct_immut_iter_next(c_immut_iter_t  *iter,
+                                      void           **key_p,
+                                      c_ver_t         *version_p,
+                                      c_val_tup_t     *cvt_p,
+                                      unsigned int    *source_priority)
 {
     struct castle_da_merge *merge = iter->merge;
     int disabled;
@@ -788,6 +789,8 @@ static void castle_ct_immut_iter_next(c_immut_iter_t *iter,
                                       key_p,
                                       version_p,
                                       cvt_p);
+    if (source_priority)
+        *source_priority = c2b_accessed(iter->curr_c2b);
     /* curr_idx should have been set to a non-leaf pointer */
     BUG_ON(disabled);
     iter->cached_idx = iter->curr_idx;
@@ -1024,10 +1027,11 @@ static void castle_ct_modlist_iter_item_get(c_modlist_iter_t *iter,
  * @also castle_ct_modlist_iter_fill()
  * @also castle_ct_modlist_iter_mergesort()
  */
-static void castle_ct_modlist_iter_next(c_modlist_iter_t *iter,
-                                        void **key_p,
-                                        c_ver_t *version_p,
-                                        c_val_tup_t *cvt_p)
+static void castle_ct_modlist_iter_next(c_modlist_iter_t  *iter,
+                                        void             **key_p,
+                                        c_ver_t           *version_p,
+                                        c_val_tup_t       *cvt_p,
+                                        int               *unused)
 {
     castle_ct_modlist_iter_item_get(iter, iter->next_item, key_p, version_p, cvt_p);
     iter->next_item++;
@@ -1207,7 +1211,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
         might_resched();
 
         /* Get the next (unsorted) entry from the immutable iterator. */
-        castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt);
+        castle_ct_immut_iter.next(iter->enumerator, &key, &version, &cvt, NULL);
         debug("In enum got next: k=%p, version=%d, %u/%llu, cep="cep_fmt_str_nl,
                 key, version, (uint32_t)cvt.type, cvt.length, cep2str(cvt.cep));
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
@@ -1701,7 +1705,8 @@ static int castle_ct_merged_iter_prep_next(c_merged_iter_t *iter)
                 comp_iter->iterator_type->next(comp_iter->iterator,
                                                &comp_iter->cached_entry.k,
                                                &comp_iter->cached_entry.v,
-                                               &comp_iter->cached_entry.cvt);
+                                               &comp_iter->cached_entry.cvt,
+                                               &comp_iter->cached_entry.source_priority);
                 comp_iter->cached = 1;
                 iter->src_items_completed++;
                 debug_iter("%s:%p:%d - cached\n", __FUNCTION__, iter, i);
@@ -1983,10 +1988,11 @@ static c_val_tup_t castle_ct_merged_iter_timestamp_select(struct component_itera
     return most_recent_object;
 }
 
-static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
-                                       void **key_p,
-                                       c_ver_t *version_p,
-                                       c_val_tup_t *cvt_p)
+static void castle_ct_merged_iter_next(c_merged_iter_t  *iter,
+                                       void            **key_p,
+                                       c_ver_t          *version_p,
+                                       c_val_tup_t      *cvt_p,
+                                       unsigned int     *source_priority)
 {
     struct component_iterator *comp_iter;
     c_val_tup_t cvt;
@@ -2021,6 +2027,7 @@ static void castle_ct_merged_iter_next(c_merged_iter_t *iter,
     if(key_p)     *key_p     = comp_iter->cached_entry.k;
     if(version_p) *version_p = comp_iter->cached_entry.v;
     if(cvt_p)     *cvt_p     = cvt;
+    if(source_priority) *source_priority = comp_iter->cached_entry.source_priority;
 }
 
 static void castle_ct_merged_iter_skip(c_merged_iter_t *iter,
@@ -2188,7 +2195,7 @@ static USED void castle_ct_sort(struct castle_component_tree *ct1,
     debug("=============== SORTED ================\n");
     while(castle_iterator_has_next_sync(&castle_ct_merged_iter, &test_miter))
     {
-        castle_ct_merged_iter_next(&test_miter, &key, &version, &cvt);
+        castle_ct_merged_iter_next(&test_miter, &key, &version, &cvt, NULL);
         debug("Sorted: %d: k=%p, version=%d, cep=" cep_fmt_str_nl,
                 i, key, version, cep2str(cvt.cep));
         debug("Dereferencing first 4 bytes of the key (should be length)=0x%x.\n",
@@ -2233,12 +2240,13 @@ static void castle_da_rq_iter_end_io(void *merged_iter, int err)
         BUG();
 }
 
-static void castle_da_rq_iter_next(c_da_rq_iter_t *iter,
-                                   void **key_p,
-                                   c_ver_t *version_p,
-                                   c_val_tup_t *cvt_p)
+static void castle_da_rq_iter_next(c_da_rq_iter_t  *iter,
+                                   void           **key_p,
+                                   c_ver_t         *version_p,
+                                   c_val_tup_t     *cvt_p,
+                                   int             *unused)
 {
-    castle_ct_merged_iter_next(&iter->merged_iter, key_p, version_p, cvt_p);
+    castle_ct_merged_iter_next(&iter->merged_iter, key_p, version_p, cvt_p, NULL);
 }
 
 static void castle_da_rq_iter_skip(c_da_rq_iter_t *iter, void *key)
@@ -3091,6 +3099,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
 
             curr_comp->completed   = curr_immut->completed = in_tree_merge_mstore_arr[i].iter.component_completed;
             curr_comp->cached      = in_tree_merge_mstore_arr[i].iter.component_cached;
+            curr_comp->cached_entry.source_priority = 0;
 
             curr_immut->curr_idx   = in_tree_merge_mstore_arr[i].iter.immut_curr_idx;
             curr_immut->cached_idx = in_tree_merge_mstore_arr[i].iter.immut_cached_idx;
@@ -3109,6 +3118,7 @@ static int castle_da_iterators_create(struct castle_da_merge *merge)
                 curr_immut->curr_node = c2b_bnode(curr_immut->curr_c2b);
                 BUG_ON(!curr_immut->curr_node);
                 BUG_ON(curr_immut->curr_node->magic != BTREE_NODE_MAGIC);
+                curr_comp->cached_entry.source_priority = c2b_accessed(curr_immut->curr_c2b);
 
                 if(curr_comp->cached)
                 {
@@ -4409,14 +4419,44 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
     return preadoption_cvt;
 }
 
+/* Convenience accessors and mutators for the merge node priority inheritence
+   evaluation struct. */
+void castle_da_merge_node_prio_init(c_dam_prio_eval *inheritor)
+{
+    inheritor->max     = 0;
+    inheritor->min     = INT_MAX;
+    inheritor->total   = 0;
+    inheritor->samples = 0;
+}
+void castle_da_merge_node_prio_add(c_dam_prio_eval *inheritor, unsigned int prio_value)
+{
+    inheritor->max = max(inheritor->max, prio_value);
+    inheritor->min = min(inheritor->max, prio_value);
+    inheritor->total += prio_value;
+    inheritor->samples++;
+}
+unsigned int castle_da_merge_node_prio_mean_get(c_dam_prio_eval *inheritor)
+{
+    if(!inheritor->samples)
+        return 0;
+    else
+        return inheritor->total/inheritor->samples;
+}
+unsigned int castle_da_merge_node_prio_max_get(c_dam_prio_eval *inheritor)
+{
+    return inheritor->max;
+}
+
+
 /* wrapper around the real castle_immut_tree_entry_add; this performs orphan node preadoption iteratively */
-int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
-                                int depth,
-                                void *key,
-                                c_ver_t version,
-                                c_val_tup_t cvt,
-                                int is_re_add,
-                                int node_complete)
+static int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
+                                       int depth,
+                                       void *key,
+                                       c_ver_t version,
+                                       c_val_tup_t cvt,
+                                       unsigned int source_prio,
+                                       int is_re_add,
+                                       int node_complete)
 {
     c_val_tup_t preadoption_cvt, orig_cvt = cvt;
     struct castle_component_tree *out_tree = tree_constr->tree;
@@ -4425,6 +4465,8 @@ int castle_immut_tree_entry_add(struct castle_immut_tree_construct *tree_constr,
 
     if (depth==0)
         BUG_ON(!CVT_LEAF_VAL(cvt) && !CVT_LOCAL_COUNTER(cvt));
+
+    castle_da_merge_node_prio_add(&tree_constr->levels[depth].prio_inheritor, source_prio);
 
     do {
         preadoption_cvt = _castle_immut_tree_entry_add(tree_constr, depth, key,
@@ -4514,6 +4556,14 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     debug("Inserting into parent key=%p, *key=%d, version=%d\n",
             key, *((uint32_t*)key), node->version);
 
+    /* Handle c2b priority inheritence; leaf nodes get the mean priority from all
+       sources, internal nodes get the max priority from all source (which would
+       be their child nodes). */
+    c2b_accessed_assign(node_c2b,
+        (!depth) ? castle_da_merge_node_prio_mean_get(&tree_constr->levels[depth].prio_inheritor)
+                 : castle_da_merge_node_prio_max_get(&tree_constr->levels[depth].prio_inheritor));
+    castle_da_merge_node_prio_init(&tree_constr->levels[depth].prio_inheritor);
+
     /* Btree walk takes locks 2 at a time as it moves downwards. Node adoption attempts to do the
        reverse, i.e. move upwards while holding locks. To avoid deadlock, we need to temporarily
        give up the lock on the current node; this should be fine since we are the only writer. */
@@ -4556,6 +4606,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
                                         key,
                                         node->version,
                                         node_cvt,
+                                        c2b_accessed(node_c2b),
                                         0,  /* Not a re-add. */
                                         0); /* Don't complete nodes. */
         }
@@ -4586,6 +4637,7 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
                                     key,
                                     version,
                                     cvt,
+                                    c2b_accessed(node_c2b),
                                     1,  /* Re-add. */
                                     0); /* Don't complete nodes. */
         node_idx++;
@@ -5649,6 +5701,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                               void *key,
                               c_val_tup_t cvt,
                               c_ver_t version,
+                              int source_prio,
                               uint64_t max_nr_bytes)
 {
     int ret;
@@ -5753,6 +5806,7 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
                                       key,
                                       version,
                                       cvt,
+                                      source_prio,
                                       0,    /* Not a re-add. */
                                       1);   /* Complete nodes. */
     BUG_ON(ret == -ESHUTDOWN);
@@ -5800,6 +5854,7 @@ static int castle_da_merge_tv_resolver_flush(struct castle_da_merge *merge,
                                  tvr_key,
                                  tvr_cvt,
                                  tvr_version,
+                                 1, /* TODO@tr: actual prio inheritence */
                                  max_nr_bytes);
         if(ret != EXIT_SUCCESS)
             return ret;
@@ -5827,6 +5882,7 @@ static int castle_da_merge_unit_without_resolver_do(struct castle_da_merge *merg
     void *key;
     c_ver_t version;
     c_val_tup_t cvt;
+    unsigned int source_prio;
     int ret = 0;
 
     /* max_nr_bytes should point to total number of bytes this merge could be done upto. */
@@ -5838,13 +5894,13 @@ static int castle_da_merge_unit_without_resolver_do(struct castle_da_merge *merg
         might_resched();
 
         /* Get the next entry and account stats. */
-        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
+        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt, &source_prio);
 
         /* We should always get a valid cvt. */
         BUG_ON(CVT_INVALID(cvt));
 
         /* No resolver, add entries to the output directly. */
-        ret = castle_da_entry_do(merge, key, cvt, version, max_nr_bytes);
+        ret = castle_da_entry_do(merge, key, cvt, version, source_prio, max_nr_bytes);
         if(ret != EXIT_SUCCESS)
             return ret;
 
@@ -5879,6 +5935,7 @@ static int castle_da_merge_unit_with_resolver_do(struct castle_da_merge *merge,
     void *key;
     c_ver_t version;
     c_val_tup_t cvt;
+    unsigned int source_prio;
     int ret = 0;
 
     /* max_nr_bytes should point to total number of bytes this merge could be done upto. */
@@ -5890,11 +5947,15 @@ static int castle_da_merge_unit_with_resolver_do(struct castle_da_merge *merge,
         might_resched();
 
         /* Get the next entry and account stats. */
-        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt);
+        castle_ct_merged_iter_next(merge->merged_iter, &key, &version, &cvt, &source_prio);
 
         /* We should always get a valid cvt. */
         BUG_ON(CVT_INVALID(cvt));
 
+        /*****************************************************************************************
+        TODO@tr get the source_prio through somehow... not needed for V3 because versioning
+        go nite nite, and so resolver go bye bye.
+        *****************************************************************************************/
         /* Flush the resolver on new key boundary. Then serialise. */
         if(castle_dfs_resolver_is_new_key_check(merge->tv_resolver, key))
         {
@@ -6339,6 +6400,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
         tree_constr->levels[i].next_idx      = 0;
         tree_constr->levels[i].valid_end_idx = -1;
         tree_constr->levels[i].valid_version = INVAL_VERSION;
+        castle_da_merge_node_prio_init(&tree_constr->levels[i].prio_inheritor);
     }
     tree_constr->node_complete      = node_complete_cb;
     tree_constr->da                 = da;
@@ -13103,6 +13165,7 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
                                        key,
                                        version,
                                        cvt,
+                                       0,
                                        0,       /* Not a re-add. */
                                        1);      /* Complete nodes, if possible. */
 }

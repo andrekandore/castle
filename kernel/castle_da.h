@@ -30,6 +30,19 @@ typedef void (*c_immut_tree_node_complete_cb_t)(struct castle_immut_tree_constru
                                                 c2_block_t                         *node_c2b,
                                                 int                                 depth,
                                                 int                                 completing);
+
+/* Convenience structure to do simple priority inheritence calculations */
+typedef struct castle_da_merge_priority_inheritence_evaluator {
+    unsigned int max;
+    unsigned int min;
+    unsigned int total;
+    unsigned int samples;
+} c_dam_prio_eval;
+void castle_da_merge_node_prio_add(c_dam_prio_eval *inheritor, unsigned int prio_value);
+void castle_da_merge_node_prio_init(c_dam_prio_eval *inheritor);
+unsigned int castle_da_merge_node_prio_mean_get(c_dam_prio_eval *inheritor);
+unsigned int castle_da_merge_node_prio_max_get(c_dam_prio_eval *inheritor);
+
 struct castle_da_merge {
     c_merge_id_t                  id;
     struct list_head              hash_list;
@@ -62,6 +75,7 @@ struct castle_da_merge {
             int                       next_idx;
             int                       valid_end_idx;
             c_ver_t                   valid_version;
+            c_dam_prio_eval           prio_inheritor;
         } levels[MAX_BTREE_DEPTH];
 
         c_immut_tree_node_complete_cb_t node_complete;
