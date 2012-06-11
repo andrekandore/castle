@@ -2322,7 +2322,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
         else
         {
             castle_back_buffer_ool_memcpy(buf_con->buf + buf_con->cur_kv_off, val);
-            kv_hdr->val_type = CASTLE_VALUE_TYPE_INLINE;
+            val_type = CASTLE_VALUE_TYPE_INLINE;
         }
     }
     else
