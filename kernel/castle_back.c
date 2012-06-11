@@ -2850,7 +2850,7 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
     BUG_ON(!list_empty(&stateful_op->op_queue));
     stateful_op->curr_op = NULL;
 
-    castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 0 /*do NOT abort*/);
+    castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 1 /*abort*/);
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
