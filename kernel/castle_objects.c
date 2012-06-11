@@ -371,7 +371,7 @@ static int castle_object_data_write(struct castle_object_replace *replace)
             int mod_cp = copy_length % C_BLK_SIZE;
             if(mod_cp)
             {
-                castle_printk(LOG_DEBUG, "%s::zero padding %u bytes.\n",
+                debug("%s::zero padding %u bytes.\n",
                     __FUNCTION__, (C_BLK_SIZE - mod_cp));
                 memset(data_c2b_buffer + copy_length, 0, (C_BLK_SIZE - mod_cp));
             }
