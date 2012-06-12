@@ -17,6 +17,7 @@
 #endif
 
 #include <asm/unaligned.h>
+#include <asm/byteorder.h>
 #include "lzo.h"
 #include "lzodefs.h"
 
@@ -27,7 +28,10 @@
 #define COPY4(dst, src)	\
 		put_unaligned(get_unaligned((const u32 *)(src)), (u32 *)(dst))
 
-#define get_unaligned_le16(x)   le16_to_cpu(get_unaligned(x))
+static inline u16 get_unaligned_le16(const void *p)
+{
+	return le16_to_cpup((__le16 *)p);
+}
 
 int lzo1x_decompress_safe(const unsigned char *in, size_t in_len,
 			unsigned char *out, size_t *out_len)
