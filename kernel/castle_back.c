@@ -3632,13 +3632,19 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                                              op->buf->buffer,
                                              op->buf->size);
     if (unlikely(nr_keys < 0))
+    {
+        castle_printk(LOG_ERROR, "%s::[op %llu] nr_keys %d\n",
+            __FUNCTION__, stateful_op->token, nr_keys);
         return -EINVAL;
+    }
 
     if (unlikely(stateful_op->stream_in.received_entries
                 + nr_keys > stateful_op->stream_in.expected_entries))
     {
-        castle_printk(LOG_DEBUG, "%s: Attempt to insert %d keys would overflow "
+        castle_printk(LOG_ERROR, "%s::[op %llu] Attempt to insert %d keys would overflow "
                 "expected %lu (already received %lu).\n",
+                __FUNCTION__,
+                stateful_op->token,
                 nr_keys,
                 stateful_op->stream_in.expected_entries,
                 stateful_op->stream_in.received_entries);
@@ -3694,8 +3700,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                                                         0, /* was_preallocated */
                                                         &mobj_ext_cep)) < 0)
                     {
-                        castle_printk(LOG_ERROR, "%s::Failed to get medium object freespace, "
-                                "err=%d.\n", __FUNCTION__, err);
+                        castle_printk(LOG_ERROR, "%s::[op %llu] Failed to get medium object freespace, "
+                                "err=%d.\n", __FUNCTION__, stateful_op->token, err);
                         err = -ENOSPC;
                         goto err2;
                     }
@@ -3772,7 +3778,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
             case CASTLE_VALUE_TYPE_OUT_OF_LINE:
                 /* @TODO support out of line objects in stream-in */
                 // could be mobj or lobj
-                castle_printk(LOG_ERROR, "%s::WTFOOL.\n", __FUNCTION__);
+                castle_printk(LOG_ERROR, "%s::[op %llu] WTFOOL.\n",
+                    __FUNCTION__, stateful_op->token);
                 err = -EINVAL;
                 goto err2;
                 break;
