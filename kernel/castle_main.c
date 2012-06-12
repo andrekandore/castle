@@ -1745,8 +1745,8 @@ static void castle_bio_data_copy(c_bvec_t *c_bvec, c2_block_t *c2b)
     {
         sector_t bv_first_sec   = sector;
         sector_t bv_last_sec    = sector + (bvec->bv_len >> 9);
-        sector_t cbv_first_sec  =  MTREE_BVEC_BLOCK(c_bvec)      << (C_BLK_SHIFT - 9);
-        sector_t cbv_last_sec   = (MTREE_BVEC_BLOCK(c_bvec) + 1) << (C_BLK_SHIFT - 9);
+        sector_t cbv_first_sec  = 0;
+        sector_t cbv_last_sec   = 0;
         sector_t first_sec, last_sec;
 
         /* Exit if we've already gone too far */

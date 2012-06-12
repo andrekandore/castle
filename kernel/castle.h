@@ -865,8 +865,6 @@ enum {
 };
 
 
-#define MTREE_TYPE                 0x33
-#define MTREE_BVEC_BLOCK(_bvec)   ((sector_t)(_bvec)->key)
 #define VLBA_TREE_TYPE             0x66
 #define SLIM_TREE_TYPE             0x77
 
@@ -875,7 +873,6 @@ enum {
                                                           For example castle_clist_entry.
                                                           If modified, those need to be reviewed.*/
 
-#define MTREE_NODE_SIZE         10          /**< Size of the mtree nodes, in blocks.            */
 #define RW_TREE_NODE_SIZE        2          /**< Size of the RW tree nodes, in blocks.
                                                  Constant independent of the level.             */
 #define HDD_RO_TREE_INTERNAL_NODE_SIZE  64  /**< Size of RO internal nodes on HDDs, in blocks.  */

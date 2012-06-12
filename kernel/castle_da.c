@@ -10354,7 +10354,7 @@ static struct castle_component_tree * castle_ct_init(struct castle_double_array 
     ct->nr_drained_bytes         = 0;
     ct->chkpt_nr_bytes           = 0;
     ct->chkpt_nr_drained_bytes   = 0;
-    ct->btree_type               = da? da->btree_type: MTREE_TYPE;
+    ct->btree_type               = da->btree_type;
     ct->da                       = da;
     ct->level                    = -1;
     ct->root_node                = INVAL_EXT_POS;
