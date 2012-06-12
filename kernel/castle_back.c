@@ -3667,27 +3667,28 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     c_ext_pos_t mobj_ext_cep;
                     int total_blocks;
                     void *val_ptr;
+                    uint64_t rem_bytes_to_copy;
+                    int rem_blocks_to_copy;
 
                     BUG_ON(kv_hdr.val_len > MEDIUM_OBJECT_LIMIT);
-
                     /* Allocate space for the new copy. */
                     BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
                     total_blocks = (kv_hdr.val_len - 1) / C_BLK_SIZE + 1;
                     ext_space_needed = total_blocks * C_BLK_SIZE;
-                    castle_printk(LOG_DEBUG, "%s::total_blocks = %u, ext_space_needed = %lu\n",
-                        total_blocks, ext_space_needed);
+                    debug("%s::total_blocks = %u, ext_space_needed = %lu\n",
+                        __FUNCTION__, total_blocks, ext_space_needed);
                     if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
                                                         ext_space_needed,
                                                         0, /* was_preallocated */
                                                         &mobj_ext_cep)) < 0)
                     {
-                        castle_printk(LOG_DEBUG, "%s: Failed to get medium object freespace, "
-                                "err=%d.\n", __FUNCTION__);
+                        castle_printk(LOG_ERROR, "%s::Failed to get medium object freespace, "
+                                "err=%d.\n", __FUNCTION__, err);
                         err = -ENOSPC;
                         goto err2;
                     }
-                    else
-                        stateful_op->stream_in.received_mobj_off = mobj_ext_cep.offset;
+
+                    stateful_op->stream_in.received_mobj_off = mobj_ext_cep.offset;
 
                     /* Copy buffer value into medium object extent. */
                     val_ptr = kv_hdr.val;
@@ -3696,24 +3697,54 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                        mobj_ext_cep. */
                     CVT_MEDIUM_OBJECT_INIT(cvt, kv_hdr.val_len, mobj_ext_cep);
 
-                    while (total_blocks > 0)
+                    rem_blocks_to_copy = total_blocks;
+                    rem_bytes_to_copy = kv_hdr.val_len;
+                    while (rem_bytes_to_copy)
                     {
-                        int blocks;
                         c2_block_t *c_c2b;
-                        int step = total_blocks * PAGE_SIZE;
+                        uint64_t bytes_to_copy;
+                        /* copy a chk at a time if possible */
+                        int blocks_to_copy =
+                            (rem_blocks_to_copy < BLKS_PER_CHK) ? rem_blocks_to_copy
+                            : BLKS_PER_CHK;
+                        int last_copy = (blocks_to_copy == rem_blocks_to_copy);
 
-                        blocks = total_blocks;
-                        total_blocks -= blocks;
+                        if(last_copy)
+                        {
+                            BUG_ON(((rem_bytes_to_copy -1) / C_BLK_SIZE + 1) != blocks_to_copy);
+                            bytes_to_copy = rem_bytes_to_copy;
+                        }
+                        else
+                            bytes_to_copy = blocks_to_copy * C_BLK_SIZE;
 
-                        c_c2b = castle_cache_block_get(mobj_ext_cep, blocks, MERGE_OUT);
+                        BUG_ON(bytes_to_copy > rem_bytes_to_copy);
+
+                        c_c2b = castle_cache_block_get(mobj_ext_cep, blocks_to_copy, MERGE_OUT);
                         write_lock_c2b(c_c2b);
                         update_c2b(c_c2b);
-                        memcpy(c2b_buffer(c_c2b), kv_hdr.val, step);
+                        memcpy(c2b_buffer(c_c2b), val_ptr, bytes_to_copy);
+
+                        if (last_copy)
+                        {
+                            int mod_cp = bytes_to_copy % C_BLK_SIZE;
+                            if(mod_cp)
+                            {
+                                debug("%s::zero padding %u bytes.\n",
+                                        __FUNCTION__, (C_BLK_SIZE - mod_cp));
+                                memset((c2b_buffer(c_c2b) + bytes_to_copy),
+                                        0,
+                                        (C_BLK_SIZE - mod_cp));
+                            }
+                        }
+
                         dirty_c2b(c_c2b);
                         write_unlock_c2b(c_c2b);
+                        set_c2b_immutable(c_c2b);
                         put_c2b(c_c2b);
-                        mobj_ext_cep.offset += step;
-                        val_ptr += step;
+                        mobj_ext_cep.offset += C_BLK_SIZE;
+                        val_ptr += bytes_to_copy;
+                        rem_bytes_to_copy -= bytes_to_copy;
+                        rem_blocks_to_copy -= blocks_to_copy;
                     }
                 }
                 break;
