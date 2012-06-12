@@ -2176,12 +2176,20 @@ int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
 
     /* Sanity check buffer header fits in buffer and set pointer. */
     if (buf_len < sizeof(c_buf_hdr_t))
+    {
+        castle_printk(LOG_ERROR, "%s::failed because buf_len (%lu) is too small.\n",
+            __FUNCTION__, buf_len);
         return -EINVAL;
+    }
     buf_hdr = buf;
 
     /* Sanity check buffer version. */
     if (buf_hdr->version != CASTLE_BUFFER_VERSION)
+    {
+        castle_printk(LOG_ERROR, "%s::failed because of header version mismatch (want %u got %u).\n",
+            __FUNCTION__, buf_hdr->version, CASTLE_BUFFER_VERSION);
         return -EINVAL;
+    }
 
     /* Sanity check all key value headers fit in buffer.
      *
@@ -2190,7 +2198,11 @@ int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
     nr_entries = buf_hdr->nr_entries;
     index_off  = buf_hdr->index_off;
     if (index_off + nr_entries * sizeof(c_buf_kv_hdr_t) > buf_len)
+    {
+        castle_printk(LOG_ERROR, "%s::failed because buf %p apparently can't hold all it's values.\n",
+            __FUNCTION__, buf);
         return -EINVAL;
+    }
 
     buf_con->buf     = buf;
     buf_con->buf_len = buf_len;
@@ -3760,6 +3772,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
             case CASTLE_VALUE_TYPE_OUT_OF_LINE:
                 /* @TODO support out of line objects in stream-in */
                 // could be mobj or lobj
+                castle_printk(LOG_ERROR, "%s::WTFOOL.\n", __FUNCTION__);
                 err = -EINVAL;
                 goto err2;
                 break;
