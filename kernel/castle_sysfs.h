@@ -18,8 +18,6 @@ void castle_sysfs_slave_del      (struct castle_slave *slave);
 int  castle_sysfs_da_add         (struct castle_double_array *da);
 void castle_sysfs_da_del         (struct castle_double_array *da);
 void castle_sysfs_da_del_check   (struct castle_double_array *da);
-int  castle_sysfs_device_add     (struct castle_attachment *attachment);
-void castle_sysfs_device_del     (struct castle_attachment *attachment);
 int  castle_sysfs_collection_add (struct castle_attachment *attachment);
 void castle_sysfs_collection_del (struct castle_attachment *attachment);
 int  castle_sysfs_ct_add         (struct castle_component_tree *ct);

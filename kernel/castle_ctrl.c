@@ -87,37 +87,6 @@ void castle_control_claim(uint32_t dev, int *ret, c_slave_uuid_t *id)
     }
 }
 
-void castle_control_attach(c_ver_t version, int *ret, uint32_t *dev)
-{
-    struct castle_attachment *cd;
-
-    if (!DA_INVAL(castle_version_da_id_get(version)))
-    {
-        castle_printk(LOG_WARN, "Couldn't attach device to collection.\n");
-        *ret = -EINVAL;
-        return;
-    }
-
-    *dev = 0;
-    cd = castle_device_init(version);
-    if(!cd)
-    {
-        *ret = -EINVAL;
-        return;
-    }
-    *dev = new_encode_dev(MKDEV(cd->dev.gd->major, cd->dev.gd->first_minor));
-    *ret = 0;
-}
-
-void castle_control_detach(uint32_t dev, int *ret)
-{
-    dev_t dev_id = new_decode_dev(dev);
-    struct castle_attachment *cd = castle_device_find(dev_id);
-
-    if(cd) castle_device_free(cd);
-    *ret = (cd ? 0 : -ENODEV);
-}
-
 /**
  * Create a new doubling array.
  *
@@ -137,24 +106,17 @@ void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
 }
 void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, c_ver_t *id)
 {
-    int collection_tree = (size == 0);
     c_da_t da_id = INVAL_DA;
     c_ver_t version;
 
-    if(collection_tree)
+    if (size)
     {
-        castle_printk(LOG_USERINFO, "Creating a collection version tree.\n");
-        da_id = castle_next_da_id++;
-    }
-
-    /* If size isn't zero, make sure it's a multiple of block size. */
-    if(size % C_BLK_SIZE != 0)
-    {
-        castle_printk(LOG_ERROR,
-                "When creating a block device size must be a multiple of %d, got %lld.\n",
-                C_BLK_SIZE, size);
+        castle_printk(LOG_ERROR, "Not supporting block devices any more.\n");
         goto err_out;
     }
+
+    castle_printk(LOG_USERINFO, "Creating a collection version tree.\n");
+    da_id = castle_next_da_id++;
 
     /* Create a new version which will act as the root for this version tree */
     *ret = castle_version_new(0, /* clone */
@@ -164,7 +126,7 @@ void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, 
                               &version);
 
     /* We use doubling arrays for collection trees */
-    if (collection_tree && (*ret = castle_double_array_make(da_id, version, opts)))
+    if ((*ret = castle_double_array_make(da_id, version, opts)))
     {
         /* Free the created version. */
         BUG_ON(castle_version_free(version));
@@ -236,46 +198,6 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
         *clone = version;
 }
 
-void castle_control_snapshot(uint32_t dev, int *ret, c_ver_t *version)
-{
-    dev_t devid = new_decode_dev(dev);
-    struct castle_attachment *cd = castle_device_find(devid);
-    c_ver_t ver, old_version;
-
-    if(!cd)
-    {
-        *version = -1;
-        *ret     = -ENOENT;
-        return;
-    }
-    down_write(&cd->lock);
-    old_version = cd->version;
-    *ret = castle_version_new(1,            /* snapshot */
-                             cd->version,
-                             INVAL_DA,      /* take da_id from the parent */
-                             0,             /* take size from the parent */
-                             &ver);
-    if(VERSION_INVAL(ver))
-    {
-        *version = -1;
-        *ret     = -EINVAL; // currently ignoring castle_version_new()
-    }
-    else
-    {
-        /* Attach the new version */
-        BUG_ON(castle_version_attach(ver));
-        /* Change the version associated with the device */
-        cd->version    = ver;
-        /* Release the old version */
-        castle_version_detach(old_version);
-        *version = old_version;
-        *ret     = 0;
-    }
-    up_write(&cd->lock);
-
-    castle_events_device_snapshot(ver, cd->dev.gd->major, cd->dev.gd->first_minor);
-}
-
 void castle_control_fs_init(int *ret)
 {
     *ret = castle_fs_init();
@@ -317,8 +239,6 @@ int castle_attachments_writeback(void)
     list_for_each(lh, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            continue;
         if(castle_collection_writeback(mstore, ca))
             castle_printk(LOG_WARN, "Failed to writeback collection: (%u, %s)\n",
                     ca->col.id, ca->col.name);
@@ -388,8 +308,6 @@ void castle_control_collection_attach(c_ver_t            version,
     list_for_each(lh, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list);
-        if (ca->device)
-            continue;
         if (strcmp(name, ca->col.name) == 0)
         {
             castle_printk(LOG_WARN, "Collection name %s already exists\n", ca->col.name);
@@ -1015,19 +933,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
                                             &ioctl.protocol_version.version);
             break;
         case CASTLE_CTRL_ATTACH:
-            castle_control_attach( ioctl.attach.version,
-                                  &ioctl.attach.ret,
-                                  &ioctl.attach.dev);
-            break;
         case CASTLE_CTRL_DETACH:
-            castle_control_detach( ioctl.detach.dev,
-                                  &ioctl.detach.ret);
-            break;
         case CASTLE_CTRL_SNAPSHOT:
-            castle_control_snapshot( ioctl.snapshot.dev,
-                                    &ioctl.snapshot.ret,
-                                    &ioctl.snapshot.version);
-            break;
+            err = -EINVAL;
+            goto err;
 
         case CASTLE_CTRL_COLLECTION_ATTACH:
         {

@@ -42,12 +42,6 @@ void castle_netlink_fini(void);
 #define castle_events_slave_rebuild(_slave_uuid) \
     castle_uevent2(CASTLE_CTRL_SLAVE_EVACUATE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
 
-#define castle_events_device_attach(_maj, _min, _version_id) \
-    castle_uevent3(CASTLE_CTRL_ATTACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)), _version_id)
-
-#define castle_events_device_detach(_maj, _min) \
-    castle_uevent2(CASTLE_CTRL_DETACH, CASTLE_EVENTS_SUCCESS, new_encode_dev(MKDEV(_maj, _min)))
-
 #define castle_events_collection_attach(_id, _version_id) \
     castle_uevent3(CASTLE_CTRL_COLLECTION_ATTACH, CASTLE_EVENTS_SUCCESS, _id, _version_id)
 
@@ -69,9 +63,6 @@ void castle_netlink_fini(void);
 
 #define castle_events_version_clone(_version_id) \
     castle_uevent2(CASTLE_CTRL_CLONE, CASTLE_EVENTS_SUCCESS, _version_id)
-
-#define castle_events_device_snapshot(_version_id, _maj, _min) \
-    castle_uevent3(CASTLE_CTRL_SNAPSHOT, CASTLE_EVENTS_SUCCESS, _version_id, new_encode_dev(MKDEV(_maj, _min)))
 
 #define castle_events_collection_snapshot(_version_id, _id) \
     castle_uevent3(CASTLE_CTRL_COLLECTION_SNAPSHOT, CASTLE_EVENTS_SUCCESS, _version_id, _id)

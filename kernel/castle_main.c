@@ -1643,64 +1643,6 @@ void castle_release(struct castle_slave *cs)
     castle_free(cs);
 }
 
-static int castle_open(struct castle_attachment *dev)
-{
-    spin_lock(&castle_attachments.lock);
-    dev->ref_cnt++;
-    spin_unlock(&castle_attachments.lock);
-
-    return 0;
-}
-
-static int castle_close(struct castle_attachment *dev)
-{
-    spin_lock(&castle_attachments.lock);
-    dev->ref_cnt++;
-    spin_unlock(&castle_attachments.lock);
-
-    /* @TODO should call put, potentially free it? */
-
-    return 0;
-}
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-static int castle_old_open(struct inode *inode, struct file *filp)
-{
-    return castle_open(inode->i_bdev->bd_disk->private_data);
-}
-
-static int castle_old_close(struct inode *inode, struct file *filp)
-{
-    return castle_close(inode->i_bdev->bd_disk->private_data);
-}
-
-static struct block_device_operations castle_bd_ops = {
-    .owner           = THIS_MODULE,
-    .open            = castle_old_open,
-    .release         = castle_old_close,
-    .media_changed   = NULL,
-    .revalidate_disk = NULL,
-};
-#else
-static int castle_new_open(struct block_device *bdev, fmode_t mode)
-{
-    return castle_open(bdev->bd_disk->private_data);
-}
-
-static int castle_new_close(struct gendisk *gendisk, fmode_t mode)
-{
-    return castle_close(gendisk->private_data);
-}
-
-static struct block_device_operations castle_bd_ops = {
-    .owner           = THIS_MODULE,
-    .open            = castle_new_open,
-    .release         = castle_new_close,
-    .media_changed   = NULL,
-    .revalidate_disk = NULL,
-};
-#endif
-
 void castle_bio_get(c_bio_t *c_bio)
 {
     /* This should never called in race with the last _put */
@@ -1986,7 +1928,7 @@ static void castle_device_c_bvec_make(c_bio_t *c_bio,
     castle_btree_submit(c_bvec, 0 /*go_async*/);
 }
 
-static int castle_device_make_request(struct request_queue *rq, struct bio *bio)
+static USED int castle_device_make_request(struct request_queue *rq, struct bio *bio)
 {
     c_bio_t *c_bio = NULL;
     struct castle_attachment *dev = rq->queuedata;
@@ -2063,23 +2005,6 @@ fail_bio:
     return 0;
 }
 
-struct castle_attachment* castle_device_find(dev_t dev)
-{
-    struct castle_attachment *cd;
-    struct list_head *lh;
-
-    list_for_each(lh, &castle_attachments.attachments)
-    {
-        cd = list_entry(lh, struct castle_attachment, list);
-        if(!cd->device)
-            continue;
-        if((cd->dev.gd->major == MAJOR(dev)) &&
-           (cd->dev.gd->first_minor == MINOR(dev)))
-            return cd;
-    }
-    return NULL;
-}
-
 struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw)
 {
     struct castle_attachment *ca, *result = NULL;
@@ -2090,8 +2015,6 @@ struct castle_attachment* castle_attachment_get(c_collection_id_t col_id, int rw
     list_for_each(lh, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            continue;
         if(ca->col.id == col_id)
         {
             if (rw == WRITE && castle_collection_is_rdonly(ca))
@@ -2171,11 +2094,10 @@ void castle_attachment_free_complete(struct castle_attachment *ca)
 EXPORT_SYMBOL(castle_attachment_get);
 EXPORT_SYMBOL(castle_attachment_put);
 
-struct castle_attachment* castle_attachment_init(int device, /* _or_object_collection */
-                                                 c_ver_t version,
-                                                 c_da_t *da_id,
-                                                 c_byte_off_t *size,
-                                                 int *leaf)
+static struct castle_attachment* castle_attachment_init(c_ver_t version,
+                                                        c_da_t *da_id,
+                                                        c_byte_off_t *size,
+                                                        int *leaf)
 {
     struct castle_attachment *attachment = NULL;
 
@@ -2191,7 +2113,6 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     }
     init_rwsem(&attachment->lock);
     attachment->ref_cnt = 1; /* Use double put on detach */
-    attachment->device  = device;
     attachment->version = version;
 
     atomic64_set(&attachment->get.ios, 0);
@@ -2209,83 +2130,6 @@ struct castle_attachment* castle_attachment_init(int device, /* _or_object_colle
     return attachment;
 }
 
-void castle_device_free(struct castle_attachment *cd)
-{
-    c_ver_t version = cd->version;
-
-    castle_events_device_detach(cd->dev.gd->major, cd->dev.gd->first_minor);
-
-    castle_printk(LOG_INFO, "===> When freeing the number of cd users is: %d\n", cd->ref_cnt);
-    castle_sysfs_device_del(cd);
-    /* @TODO: Should this be done? blk_cleanup_queue(cd->dev.gd->rq); */
-    del_gendisk(cd->dev.gd);
-    put_disk(cd->dev.gd);
-    list_del(&cd->list);
-    castle_free(cd);
-    castle_version_detach(version);
-}
-
-struct castle_attachment* castle_device_init(c_ver_t version)
-{
-    struct castle_attachment *dev = NULL;
-    struct request_queue *rq      = NULL;
-    struct gendisk *gd            = NULL;
-    static int minor = 0;
-    c_byte_off_t size;
-    int leaf;
-    int err;
-
-    dev = castle_attachment_init(1, version, NULL, &size, &leaf);
-    if(!dev)
-        goto error_out;
-    gd = alloc_disk(1);
-    if(!gd)
-        goto error_out;
-
-    sprintf(gd->disk_name, "castle-fs-%d", minor);
-    gd->major        = castle_attachments.major;
-    gd->first_minor  = minor++;
-    gd->fops         = &castle_bd_ops;
-    gd->private_data = dev;
-
-    rq = blk_alloc_queue(GFP_KERNEL);
-    if (!rq)
-        goto error_out;
-    blk_queue_make_request(rq, castle_device_make_request);
-    rq->queuedata    = dev;
-    gd->queue        = rq;
-    if(!leaf)
-        set_disk_ro(gd, 1);
-
-    list_add(&dev->list, &castle_attachments.attachments);
-    dev->dev.gd = gd;
-
-    set_capacity(gd, size >> 9);
-    add_disk(gd);
-
-    bdget(MKDEV(gd->major, gd->first_minor));
-    err = castle_sysfs_device_add(dev);
-    if(err)
-    {
-        /* @TODO: this doesn't do bdput. device_free doesn't
-                  do this neither, and it works ... */
-        del_gendisk(gd);
-        list_del(&dev->list);
-        goto error_out;
-    }
-
-    castle_events_device_attach(gd->major, gd->first_minor, version);
-
-    return dev;
-
-error_out:
-    if(gd)  put_disk(gd);
-    if(rq)  blk_cleanup_queue(rq);
-    castle_check_free(dev);
-    castle_printk(LOG_ERROR, "Failed to init device.\n");
-    return NULL;
-}
-
 int castle_collection_is_rdonly(struct castle_attachment *ca)
 {
     return test_bit(CASTLE_ATTACH_RDONLY, &ca->col.flags);
@@ -2301,7 +2145,7 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
 
     BUG_ON(strlen(name) > MAX_NAME_SIZE);
 
-    collection = castle_attachment_init(0, version, &da_id, NULL, NULL);
+    collection = castle_attachment_init(version, &da_id, NULL, NULL);
     if (!collection)
         goto error_out;
 
@@ -2445,13 +2289,9 @@ static void castle_attachments_free(void)
     list_for_each_safe(lh, th, &castle_attachments.attachments)
     {
         ca = list_entry(lh, struct castle_attachment, list);
-        if(ca->device)
-            castle_device_free(ca);
-        else
-        {
-            castle_attachment_free(ca);
-            castle_attachment_free_complete(ca);
-        }
+
+        castle_attachment_free(ca);
+        castle_attachment_free_complete(ca);
     }
 
     if (castle_attachments.major)

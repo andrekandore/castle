@@ -1921,18 +1921,12 @@ struct castle_attachment {
     c_ver_t             version;
     int                 ref_cnt; /* protected by castle_attachments.lock */
     struct rw_semaphore lock;
-    int                 device; /* !=0 if block device, == 0 if object collection */
-    union {
-        struct {
-            struct gendisk             *gd;
-        } dev; /* Only valid for block devices */
-        struct {
-            c_collection_id_t           id;
-            uint32_t                    flags;
-            char                       *name;
-            struct castle_double_array *da;
-        } col; /* Only valid for object collections */
-    };
+    struct {
+        c_collection_id_t           id;
+        uint32_t                    flags;
+        char                       *name;
+        struct castle_double_array *da;
+    } col; /* Only valid for object collections */
 
     /* Stats for attachment. */
     struct {
@@ -1948,7 +1942,6 @@ struct castle_attachment {
 
 struct castle_attachments {
     struct kobject          collections_kobj;
-    struct kobject          devices_kobj;
     int                     major;
     struct list_head        attachments;
     spinlock_t              lock;
@@ -1971,12 +1964,6 @@ extern struct workqueue_struct *castle_wqs[2*MAX_BTREE_DEPTH+1];
 #define CASTLE_ATTACH_RDONLY           (0)
 #define CASTLE_ATTACH_DEAD             (1)  /* Set, when attachment resources are good to be
                                                freed. */
-
-struct castle_attachment*
-                      castle_device_init           (c_ver_t version);
-void                  castle_device_free           (struct castle_attachment *cd);
-struct castle_attachment*
-                      castle_device_find           (dev_t dev);
 
 int                   castle_collection_is_rdonly  (struct castle_attachment *ca);
 

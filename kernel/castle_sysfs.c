@@ -609,60 +609,17 @@ static ssize_t slaves_rebuild_chunks_remapped_show(struct kobject *kobj,
     return sprintf(buf, "%ld\n", castle_extents_chunks_remapped);
 }
 
-static ssize_t devices_number_show(struct kobject *kobj,
-                                   struct attribute *attr,
-                                   char *buf)
-{
-    struct castle_attachments *devices =
-                container_of(kobj, struct castle_attachments, devices_kobj);
-    struct castle_attachment *device;
-    struct list_head *lh;
-    int nr_devices = 0;
-
-    list_for_each(lh, &devices->attachments)
-    {
-        device = list_entry(lh, struct castle_attachment, list);
-        if(!device->device)
-            continue;
-        nr_devices++;
-    }
-
-    return sprintf(buf, "%d\n", nr_devices);
-}
-
-static ssize_t device_version_show(struct kobject *kobj,
-                                   struct attribute *attr,
-                                   char *buf)
-{
-    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj);
-
-    return sprintf(buf, "0x%x\n", device->version);
-}
-
-static ssize_t device_id_show(struct kobject *kobj,
-                              struct attribute *attr,
-                              char *buf)
-{
-    struct castle_attachment *device = container_of(kobj, struct castle_attachment, kobj);
-
-    return sprintf(buf, "0x%x\n", new_encode_dev(MKDEV(device->dev.gd->major, device->dev.gd->first_minor)));
-}
-
 static ssize_t collections_number_show(struct kobject *kobj,
                                        struct attribute *attr,
                                        char *buf)
 {
     struct castle_attachments *collections =
                 container_of(kobj, struct castle_attachments, collections_kobj);
-    struct castle_attachment *collection;
     struct list_head *lh;
     int nr_collections = 0;
 
     list_for_each(lh, &collections->attachments)
     {
-        collection = list_entry(lh, struct castle_attachment, list);
-        if(collection->device)
-            continue;
         nr_collections++;
     }
 
@@ -1389,21 +1346,6 @@ void castle_sysfs_slave_del(struct castle_slave *slave)
     kobject_remove_wait(&slave->kobj);
 }
 
-/* Definition of devices sysfs directory attributes */
-static struct castle_sysfs_entry devices_number =
-__ATTR(number, S_IRUGO|S_IWUSR, devices_number_show, NULL);
-
-static struct attribute *castle_devices_attrs[] = {
-    &devices_number.attr,
-    NULL,
-};
-
-static struct kobj_type castle_devices_ktype = {
-    .release        = castle_sysfs_kobj_release,
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_devices_attrs,
-};
-
 /* Definition of collections sysfs directory attributes */
 static struct castle_sysfs_entry collections_number =
 __ATTR(number, S_IRUGO|S_IWUSR, collections_number_show, NULL);
@@ -1456,56 +1398,6 @@ static struct kobj_type castle_devel_ktype = {
     .sysfs_ops      = &castle_sysfs_ops,
     .default_attrs  = castle_devel_attrs,
 };
-
-/* Definition of each device sysfs directory attributes */
-static struct castle_sysfs_entry device_version =
-__ATTR(version, S_IRUGO|S_IWUSR, device_version_show, NULL);
-
-static struct castle_sysfs_entry device_id =
-__ATTR(id, S_IRUGO|S_IWUSR, device_id_show, NULL);
-
-static struct attribute *castle_device_attrs[] = {
-    &device_id.attr,
-    &device_version.attr,
-    NULL,
-};
-
-static struct kobj_type castle_device_ktype = {
-    .release        = castle_sysfs_kobj_release,
-    .sysfs_ops      = &castle_sysfs_ops,
-    .default_attrs  = castle_device_attrs,
-};
-
-int castle_sysfs_device_add(struct castle_attachment *device)
-{
-    int ret;
-
-    memset(&device->kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&device->kobj,
-                           &castle_attachments.devices_kobj,
-                           &castle_device_ktype,
-                           "%x",
-                           new_encode_dev(MKDEV(device->dev.gd->major,
-                                                device->dev.gd->first_minor)));
-    if(ret < 0)
-        return ret;
-
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    ret = sysfs_create_link(&device->kobj, &device->dev.gd->kobj, "dev");
-    if (ret < 0)
-        return ret;
-#endif
-
-    return 0;
-}
-
-void castle_sysfs_device_del(struct castle_attachment *device)
-{
-#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,24)
-    sysfs_remove_link(&device->kobj, "dev");
-#endif
-    kobject_remove_wait(&device->kobj);
-}
 
 /* Definition of each collection sysfs directory attributes */
 static struct castle_sysfs_entry collection_version =
@@ -1590,13 +1482,6 @@ int castle_sysfs_init(void)
                            "%s", "slaves");
     if(ret < 0) goto out3;
 
-    memset(&castle_attachments.devices_kobj, 0, sizeof(struct kobject));
-    ret = kobject_tree_add(&castle_attachments.devices_kobj,
-                           &castle.kobj,
-                           &castle_devices_ktype,
-                           "%s", "devices");
-    if(ret < 0) goto out4;
-
     memset(&castle_attachments.collections_kobj, 0, sizeof(struct kobject));
     ret = kobject_tree_add(&castle_attachments.collections_kobj,
                            &castle.kobj,
@@ -1649,8 +1534,6 @@ out7:
 out6:
     kobject_remove_wait(&castle_attachments.collections_kobj);
 out5:
-    kobject_remove_wait(&castle_attachments.devices_kobj);
-out4:
     kobject_remove_wait(&castle_slaves.kobj);
 out3:
     kobject_remove_wait(&versions_kobj);
@@ -1691,9 +1574,6 @@ void castle_sysfs_fini(void)
 
     printk("Waiting on castle_attachments.collections_kobj ...\n");
     kobject_remove_wait(&castle_attachments.collections_kobj);
-
-    printk("Waiting on castle_attachments.devices_kobj ...\n");
-    kobject_remove_wait(&castle_attachments.devices_kobj);
 
     printk("Waiting on castle_slaves.kobj ...\n");
     kobject_remove_wait(&castle_slaves.kobj);

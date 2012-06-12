@@ -3,18 +3,10 @@
 
 void castle_control_claim           (uint32_t dev, int *ret, c_slave_uuid_t *id);
 void castle_control_release         (c_slave_uuid_t id, int *ret);
-void castle_control_attach          (c_ver_t version, int *ret, uint32_t *dev);
-void castle_control_detach          (uint32_t dev, int *ret);
 void castle_control_create          (uint64_t size, int *ret, c_ver_t *id);
 void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, c_ver_t *id);
 void castle_control_clone           (c_ver_t version, int *ret, c_ver_t *clone);
-void castle_control_snapshot        (uint32_t dev, int *ret, c_ver_t *version);
 void castle_control_fs_init         (int *ret);
-void castle_control_transfer_create (c_ver_t          version,
-                                     uint32_t         direction,
-                                     int             *ret,
-                                     c_transfer_id_t *id);
-void castle_control_transfer_destroy(c_transfer_id_t id, int *ret);
 void castle_control_collection_attach(c_ver_t version,
                                       char *name,
                                       int *ret,
