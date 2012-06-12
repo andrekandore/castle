@@ -86,9 +86,7 @@ extern int       castle_fs_exiting;
 extern c_state_t castle_fs_state;
 
 typedef c_array_id_t tree_seq_t;
-#define GLOBAL_TREE         ((tree_seq_t)0)
 #define INVAL_TREE          ((tree_seq_t)-1)
-#define TREE_GLOBAL(_t)     ((_t) == GLOBAL_TREE)
 #define TREE_INVAL(_t)      ((_t) == INVAL_TREE)
 #define TREE_SEQ_SHIFT      (56)                    /**< Shift for RWCTs (at levels 0,1)        */
 
@@ -191,9 +189,6 @@ typedef uint32_t block_t;
  * So, minimum size of the slave should be
  *
  * 100 + (META_SPACE_SIZE * MAX_NR_SLAVES / # of slaves) + (MSTORE_SPACE_SIZE * 2) + (global tree size * 2 / nr of slaves)
- *
- * Note: global tree size could be found in castle_global_tree, all other definitions should be
- * found in castle.h
  */
 
 #define SUP_EXT_ID                     (10)
@@ -1161,9 +1156,8 @@ struct castle_component_tree {
 
     uint32_t            max_versions_per_key; /**< For a merge to correctly size the tv_resolver (see
                                                    trac #4749) */
-};
-extern struct castle_component_tree *castle_global_tree;
-
+}
+;
 struct castle_large_obj_entry {
     c_ext_id_t          ext_id;
     uint64_t            length;

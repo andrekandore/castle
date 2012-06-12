@@ -8942,7 +8942,7 @@ void castle_ct_put(struct castle_component_tree *ct, int rw)
         BUG();
     }
     /* Destroy the component tree */
-    BUG_ON(TREE_GLOBAL(ct->seq) || TREE_INVAL(ct->seq));
+    BUG_ON(TREE_INVAL(ct->seq));
     castle_ct_hash_remove(ct);
 
     debug("Releasing freespace occupied by ct=%d\n", ct->seq);
@@ -9162,7 +9162,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
     ct->chkpt_nr_drained_bytes = ctm->nr_drained_bytes;
     ct->btree_type           = ctm->btree_type;
     ct->flags                = ctm->flags;
-    ct->da                   = da;           BUG_ON(!ct->da && !TREE_GLOBAL(ct->seq));
+    ct->da                   = da;           BUG_ON(!ct->da);
     ct->level                = ctm->level;
     ct->nr_rwcts             = ctm->nr_rwcts;
     atomic_set(&ct->tree_depth, ctm->tree_depth);
@@ -9351,11 +9351,6 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return 0;
 
-    /* Always writeback Global tree structure but, don't writeback. */
-    /* Note: Global Tree is not Crash-Consistent. */
-    if (TREE_GLOBAL(ct->seq))
-        goto mstore_writeback;
-
     /* Don't write back T0, unless the FS is exiting. */
     if ((ct->level == 0) && !castle_da_exiting)
         return 0;
@@ -9384,7 +9379,6 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
     if (CT_BLOOM_EXISTS(ct))
         castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
 
-mstore_writeback:
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
 
@@ -9655,8 +9649,6 @@ void castle_double_arrays_writeback(void)
     /* Writeback all the merges. */
     __castle_merges_hash_iterate(castle_da_merge_writeback, &mstores);
 
-    castle_da_tree_writeback(NULL, castle_global_tree, -1, &mstores);
-
     /* Writeback all data extent structures. */
     __castle_data_exts_hash_iterate(castle_data_ext_writeback, mstores.data_exts_store);
 
@@ -9862,10 +9854,6 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
 
 static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
 {
-    /* No need to add global tree to sysfs. */
-    if (TREE_GLOBAL(ct->seq))
-        return 0;
-
     /* Don't add output trees to sysfs yet. */
     if (test_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &ct->flags))
         return 0;
@@ -10100,7 +10088,6 @@ static int castle_da_merge_deser_intrees_attach(void)
         merge = castle_merges_hash_get(entry->merge_id);
         pos   = entry->pos_in_merge_struct;
         seq   = entry->seq;
-        BUG_ON(TREE_GLOBAL(seq));
         BUG_ON(TREE_INVAL(seq));
         BUG_ON(!merge);
         level = merge->level;
@@ -10177,15 +10164,8 @@ static int castle_da_ct_read(void)
 
         castle_mstore_iterator_next(iterator, &entry, &entry_size);
         BUG_ON(entry_size != sizeof(struct castle_clist_entry));
-        /* Special case for castle_global_tree, it doesn't have a da associated with it. */
         ct = castle_da_ct_unmarshall(&entry);
         da = ct->da;
-        if(TREE_GLOBAL(ct->seq))
-        {
-            BUG_ON(ct->da != NULL);
-            castle_global_tree = ct;
-            continue;
-        }
         BUG_ON(!da);
 
         debug("Read CT seq=%d\n", ct->seq);
