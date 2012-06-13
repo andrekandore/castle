@@ -334,6 +334,20 @@ static void castle_virt_masks_check_timer_fire(unsigned long first)
     mod_timer(&castle_virt_masks_check_timer, jiffies + HZ * CASTLE_VIRT_MASKS_CHECK_FREQ);
 }
 
+static int _castle_extent_for_each_virt_ext(c_ext_t *ext, void *fn_ptr)
+{
+    castle_extent_iterate_dirty_tree_cb_t fn = fn_ptr;
+
+    if (test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
+        fn(ext->dirtytree);
+
+    return 0;
+}
+
+void castle_extent_for_each_virt_ext(castle_extent_iterate_dirty_tree_cb_t fn)
+{
+    castle_extents_hash_iterate(_castle_extent_for_each_virt_ext, fn);
+}
 
 /**
  * Reservation pools.

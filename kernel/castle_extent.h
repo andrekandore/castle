@@ -251,6 +251,10 @@ void                castle_compr_map_set                     (c_ext_pos_t    vir
 void                castle_compr_ext_offset_set              (c_ext_id_t     ext_id,
                                                               c_byte_off_t   used_btyes);
 
+typedef void (* castle_extent_iterate_dirty_tree_cb_t)(struct castle_cache_extent_dirtytree *);
+
+void                castle_extent_for_each_virt_ext          (castle_extent_iterate_dirty_tree_cb_t fn);
+
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
     BUG_ON(((_pool)->reserved_schks[_id] < 0) && (_pool)->freed_schks[_id]);                \
