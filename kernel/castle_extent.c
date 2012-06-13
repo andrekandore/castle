@@ -3937,8 +3937,8 @@ c_byte_off_t castle_compr_map_get(c_ext_pos_t virt_cep, c_ext_pos_t *comp_cep)
     read_unlock_c2b(map_c2b);
     put_c2b(map_c2b);
 
-    debug_compr_map("Getting compression map: " cep_fmt_str " - " cep_fmt_str_nl,
-                     __cep2str(virt_cep), __cep2str(*comp_cep));
+    debug_compr_map("Getting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
+                     __cep2str(virt_cep), __cep2str(*comp_cep), blk_sz);
 
     return blk_sz;
 }
@@ -3983,8 +3983,8 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
         atomic64_add(C_COMPR_BLK_SZ - comp_blk_bytes, &virt_ext->compr_saved_bytes);
     }
 
-    debug_compr_map("Setting compression map: " cep_fmt_str " - " cep_fmt_str_nl,
-                     __cep2str(virt_cep), __cep2str(comp_cep));
+    debug_compr_map("Setting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
+                     __cep2str(virt_cep), __cep2str(comp_cep), comp_blk_bytes);
 
     return;
 }
