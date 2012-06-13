@@ -857,6 +857,7 @@ enum {
     MSTORE_LARGE_OBJECTS,
     MSTORE_DA_MERGE,                  /* state of merge structure and output tree */
     MSTORE_DA_MERGE_IN_TREE,          /* state of input trees in a merge, mainly iterator state */
+    MSTORE_DA_MERGE_BTREE_NODES,      /* binary copy of output tree active btree nodes */
     MSTORE_PART_SCHKS,
     MSTORE_STATS,
     MSTORE_DATA_EXTENTS,
@@ -1257,6 +1258,18 @@ struct castle_in_tree_merge_state_entry {
     /*         80 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_in_tree_merge_state_entry) != 80);
+
+/**
+ * Binary copy of btree node
+ */
+struct castle_active_btree_node_entry {
+    /* offset:  0 */ c_merge_id_t merge_id;
+    /*          4 */ uint16_t btree_level;
+    /*          6 */ uint16_t size_blocks;
+    /*          8 */ uint8_t payload[1];
+} PACKED;
+STATIC_BUG_ON(sizeof(c_merge_id_t)!=4);
+STATIC_BUG_ON(sizeof(struct castle_active_btree_node_entry) != 9);
 
 /** DA merge SERDES on-disk structure.
  *

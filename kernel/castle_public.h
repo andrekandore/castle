@@ -215,10 +215,13 @@ typedef uint8_t  castle_resp_flags_t;
 typedef uint64_t c_da_opts_t;       /**< Options bitmask for DA options that must be set at
                                          creation time. */
 enum {
-    CASTLE_DA_OPTS_NONE                  = (0),             /**< No options (all defaults). */
+    CASTLE_DA_OPTS_NONE                  = (0),             /**< No options (equivalent of all other
+                                                                 bits being unset - note, NOT the
+                                                                 same as CASTLE_DA_OPTS_DEFAULT). */
     CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Disable user timestamping. */
-    CASTLE_DA_OPTS_NO_VERSIONING         = (2 << 0)         /**< Disable versioning.        */
+    CASTLE_DA_OPTS_NO_VERSIONING         = (1 << 1)         /**< Disable versioning.        */
 };
+#define CASTLE_DA_OPTS_DEFAULT (CASTLE_DA_OPTS_NONE)
 
 /* Golden Nugget - Types */
 typedef uint64_t c_array_id_t;

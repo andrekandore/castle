@@ -102,7 +102,7 @@ void castle_control_claim(uint32_t dev, int *ret, c_slave_uuid_t *id)
  */
 void castle_control_create(uint64_t size, int *ret, c_ver_t *id)
 {
-    castle_control_create_with_opts(size, CASTLE_DA_OPTS_NONE, ret, id);
+    castle_control_create_with_opts(size, CASTLE_DA_OPTS_DEFAULT, ret, id);
 }
 void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, c_ver_t *id)
 {

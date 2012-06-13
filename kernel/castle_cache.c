@@ -7056,8 +7056,10 @@ static int castle_periodic_checkpoint(void *unused)
         castle_checkpoint_version_inc();
 
         castle_printk(LOG_USERINFO,
-            "***** Completed checkpoint of version: %u (%lu chunks used) *****\n",
-            version, USED_CHUNK(atomic64_read(&mstore_ext_free.used)));
+            "***** Completed checkpoint of version: %u (%lu/%lu chunks) *****\n",
+            version,
+            USED_CHUNK(atomic64_read(&mstore_ext_free.used)),
+            CHUNK(mstore_ext_free.ext_size));
 
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
     } while (!castle_last_checkpoint_ongoing);

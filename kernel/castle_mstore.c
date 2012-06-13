@@ -268,7 +268,8 @@ static void castle_mstore_node_add(struct castle_mstore *store)
     /* Update relevant pointers to point to us (either FS superblock, or prev node) */
     if(EXT_POS_INVAL(store->last_node_cep))
     {
-        debug("Linking into the superblock.\n");
+        castle_printk(LOG_DEBUG, "%s::Linking into the superblock for store %u.\n",
+            __FUNCTION__, store->store_id);
         fs_sb = castle_fs_superblocks_get();
         BUG_ON(!EXT_POS_INVAL(fs_sb->mstore[store->store_id]));
         fs_sb->mstore[store->store_id] = cep;

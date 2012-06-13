@@ -12,18 +12,28 @@
 struct castle_dfs_resolver;
 
 /* A package of all the material needed to checkpoint a merge; i.e. merge_state packed structure
-   that contains the state of the castle_da_merge struct and the output tree, and an array of
-   packed structures for each of the input trees. */
+   that contains the state of the castle_da_merge struct and the output tree, some set of btree
+   nodes on the "active path" of the output tree, and an array of packed structures for each of
+   the input trees. */
 struct castle_da_merge_mstore_package {
-    struct castle_dmserlist_entry           *merge_state;
-    struct castle_in_tree_merge_state_entry *in_tree_state_arr;
-    atomic_t                                state;
+    struct castle_dmserlist_entry             *merge_state;
+    struct {
+        int in_use;
+        struct castle_active_btree_node_entry *node_state;
+    } active_node[MAX_BTREE_DEPTH];
+    struct castle_in_tree_merge_state_entry   *in_tree_state_arr;
+    atomic_t                                   state;
 };
+/* This macro to only serialise internal nodes to mstore: */
+#define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) ((_lvl)>1)
+/* This macro to serialise all active leaf nodes to mstore (incl. leaf nodes) */
+//#define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) (1)
+
 void castle_da_merge_mstore_package_deep_copy(struct castle_da_merge_mstore_package *dest,
                                               struct castle_da_merge_mstore_package *source);
 void castle_da_merge_mstore_package_check_free(struct castle_da_merge_mstore_package *m);
 int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *m,
-                                         unsigned int nr_in_trees);
+                                         struct castle_da_merge *merge);
 
 struct castle_immut_tree_construct;
 typedef void (*c_immut_tree_node_complete_cb_t)(struct castle_immut_tree_construct *tree_constr,
