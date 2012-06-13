@@ -60,8 +60,8 @@
 #if 0
 #undef debug_compr
 #undef debug_compr_map
-#define debug_compr(_f, _a...)  (printk(_f, ##_a))
-#define debug_compr_map(_f, _a...)  (printk(_f, ##_a))
+#define debug_compr(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
+#define debug_compr_map(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
 #if 0
