@@ -3690,6 +3690,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     c_val_tup_t cvt;
     void *key;
 
+    CVT_INVALID_INIT(cvt);
+
     /* Basic init and checks. */
     BUG_ON(!stateful_op->attachment);
     da_stream  = stateful_op->stream_in.da_stream;
@@ -3846,12 +3848,9 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                 CVT_TOMBSTONE_INIT(cvt, (uint64_t)now.tv_sec);
                 break;
             case CASTLE_VALUE_TYPE_OUT_OF_LINE:
-                /* @TODO support out of line objects in stream-in */
-                // could be mobj or lobj
-                castle_printk(LOG_ERROR, "%s::[op %llu] WTFOOL.\n",
+                castle_printk(LOG_WARN, "%s::[op 0x%llx] skipping OoL.\n",
                     __FUNCTION__, stateful_op->token);
-                err = -EINVAL;
-                goto err2;
+                BUG_ON(!CVT_INVALID(cvt)); /* should still be INVAL; let's leave it that way. */
                 break;
             default:
                 BUG(); /* trust castle_buffer_kvp_get() */
@@ -3859,7 +3858,9 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         }
         cvt.user_timestamp = kv_hdr.user_timestamp;
 
-        if (unlikely(err = castle_da_in_stream_entry_add(da_stream,
+        BUG_ON(CVT_INVALID(cvt) && (kv_hdr.val_type != CASTLE_VALUE_TYPE_OUT_OF_LINE));
+        if (!CVT_INVALID(cvt) &&
+            unlikely(err = castle_da_in_stream_entry_add(da_stream,
                                                          key,
                                                          attachment->version,
                                                          cvt)))
