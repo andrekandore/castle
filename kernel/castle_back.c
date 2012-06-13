@@ -174,6 +174,7 @@ typedef void (*castle_back_stateful_op_expire_t) (struct castle_back_stateful_op
 
 struct castle_back_stateful_op
 {
+    struct list_head                    attachment_list;
     struct list_head                    list;
     /* token is calculated by (index + use_count * MAX_STATEFUL_OPS) | 0x80000000 where index is the
      * index in the stateful_ops array in the connection. So the index is calculated by
@@ -730,6 +731,31 @@ static void castle_back_stateful_op_expire(struct work_struct *work)
         spin_unlock(&stateful_op->lock);
 
     castle_back_conn_put(conn);
+}
+
+void castle_attachment_stateful_ops_expire(struct castle_attachment *ca)
+{
+    struct castle_back_stateful_op *sop;
+    struct list_head *lh;
+
+    BUG_ON(in_atomic());
+
+    spin_lock(&ca->sop_lock);
+    list_for_each(lh, &ca->stateful_ops)
+    {
+        sop = list_entry(lh, struct castle_back_stateful_op, attachment_list);
+        spin_lock(&sop->lock);
+        BUG_ON(sop->attachment != ca);
+        if (sop->in_use)
+        {
+            /* Simply nudge the normal process of expiry to work it's "magic". */
+            castle_printk(LOG_USERINFO, "%s::[col %u] forcing expiry of stateful op 0x%x\n",
+                    __FUNCTION__, ca->col.id, sop->token);
+            sop->last_used_jiffies = 0;
+        }
+        spin_unlock(&sop->lock);
+    }
+    spin_unlock(&ca->sop_lock);
 }
 
 /**
@@ -1749,6 +1775,19 @@ err0: castle_free(op->key);
  * instead of castle_back_reply() directly.
  */
 
+static void castle_back_stateful_op_attach(struct castle_back_stateful_op *stateful_op,
+                                           struct castle_attachment *attachment)
+{
+    BUG_ON(!attachment);
+    BUG_ON(!stateful_op);
+    BUG_ON(in_atomic());
+
+    stateful_op->attachment = attachment;
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_add_tail(&stateful_op->attachment_list, &attachment->stateful_ops);
+    spin_unlock(&stateful_op->attachment->sop_lock);
+}
+
 static void __castle_back_iter_next(void *data);
 DEFINE_WQ_TRACE_FN(__castle_back_iter_next, struct castle_back_stateful_op);
 
@@ -1913,6 +1952,9 @@ void _castle_back_iter_start(void *private, int err)
     return;
 
 err:
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
     castle_attachment_put(attachment);
     /* See castle_back_iter_start() comment for why we reset curr_op. */
     spin_lock(&stateful_op->lock);
@@ -2020,7 +2062,7 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.end_key = end_key;
     stateful_op->iterator.nr_keys = 0;
     stateful_op->iterator.nr_bytes = 0;
-    stateful_op->attachment = attachment;
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
@@ -2055,7 +2097,10 @@ static void castle_back_iter_start(void *data)
 err4: stateful_op->curr_op = NULL; /* revert the abuse performed above */
       castle_free(end_key);
 err3: castle_free(start_key);
-err2: castle_attachment_put(attachment);
+err2: spin_lock(&stateful_op->attachment->sop_lock);
+      list_del(&stateful_op->attachment_list);
+      spin_unlock(&stateful_op->attachment->sop_lock);
+      castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* No one could have added another op to queue as we haven't returns token yet */
       spin_lock(&stateful_op->lock);
@@ -2698,6 +2743,9 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 
     castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
+    spin_lock(&attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&attachment->sop_lock);
     castle_attachment_put(attachment);
 }
 
@@ -2843,11 +2891,16 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     castle_object_replace_cancel(&stateful_op->replace);
     castle_free(stateful_op->replace.key);
 
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
+
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
     stateful_op->attachment = NULL;
 
     castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
+
 
     castle_attachment_put(attachment);
 }
@@ -2863,6 +2916,10 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
     stateful_op->curr_op = NULL;
 
     castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 1 /*abort*/);
+
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
     attachment = stateful_op->attachment;
@@ -2932,6 +2989,10 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     c_vl_bkey_t *key = replace->key;
 
     debug("castle_back_big_put_complete err=%d\n", err);
+
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
 
@@ -3094,7 +3155,7 @@ static void castle_back_big_put(void *data)
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
-    stateful_op->attachment = attachment;
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.big_put.value_len;
@@ -3136,7 +3197,10 @@ static void castle_back_big_put(void *data)
 
     return;
 
-err2: castle_attachment_put(attachment);
+err2: spin_lock(&stateful_op->attachment->sop_lock);
+      list_del(&stateful_op->attachment_list);
+      spin_unlock(&stateful_op->attachment->sop_lock);
+      castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no-one could have queued up an op - we have not returned token */
       spin_lock(&stateful_op->lock);
@@ -3224,7 +3288,7 @@ static void castle_back_stream_in_start(void *data)
     stateful_op->tag = CASTLE_RING_STREAM_IN_START;
     stateful_op->flags = op->req.flags;
     stateful_op->queued_size = 0;
-    stateful_op->attachment = attachment;
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     stateful_op->stream_in.collection_id
                                     = op->req.stream_in_start.collection_id;
@@ -3287,6 +3351,9 @@ static void castle_back_stream_in_start(void *data)
     return;
 
 err2:
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
     castle_attachment_put(attachment);
     stateful_op->attachment = NULL;
 err1:
@@ -3470,7 +3537,7 @@ static void castle_back_timestamped_big_put(void *data)
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
-    stateful_op->attachment = attachment;
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.timestamped_big_put.value_len;
@@ -3511,7 +3578,10 @@ static void castle_back_timestamped_big_put(void *data)
 
     return;
 
-err2: castle_attachment_put(attachment);
+err2: spin_lock(&stateful_op->attachment->sop_lock);
+      list_del(&stateful_op->attachment_list);
+      spin_unlock(&stateful_op->attachment->sop_lock);
+      castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no-one could have queued up an op - we have not returned token */
       spin_lock(&stateful_op->lock);
@@ -3864,6 +3934,9 @@ static void castle_back_stream_in_continue(void *data)
             stateful_op->attachment = NULL;
             /* Will drop stateful_op->lock. */
             castle_back_put_stateful_op(stateful_op->conn, stateful_op);
+            spin_lock(&attachment->sop_lock);
+            list_del(&stateful_op->attachment_list);
+            spin_unlock(&attachment->sop_lock);
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
             castle_attachment_put(attachment);
             break;
@@ -3894,6 +3967,10 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
 
     castle_free(stateful_op->pull.key);
     stateful_op->pull.key = NULL;
+
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
 
@@ -3981,6 +4058,10 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
 
         castle_free(pull->key);
 
+        spin_lock(&attachment->sop_lock);
+        list_del(&stateful_op->attachment_list);
+        spin_unlock(&attachment->sop_lock);
+
         spin_lock(&stateful_op->lock);
 
         stateful_op->curr_op = NULL;
@@ -4039,7 +4120,7 @@ static void castle_back_big_get(void *data)
 
     stateful_op->tag = CASTLE_RING_BIG_GET;
     stateful_op->curr_op = op;
-    stateful_op->attachment = attachment;
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     stateful_op->pull.pull_continue = castle_back_big_get_continue;
 
@@ -4058,7 +4139,10 @@ static void castle_back_big_get(void *data)
 
     return;
 
-err2: castle_attachment_put(attachment);
+err2: spin_lock(&stateful_op->attachment->sop_lock);
+      list_del(&stateful_op->attachment_list);
+      spin_unlock(&stateful_op->attachment->sop_lock);
+      castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
 err1: /* Safe as no one will have queued up a op - we haven't returned token yet */
       spin_lock(&stateful_op->lock);

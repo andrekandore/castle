@@ -1833,6 +1833,8 @@ struct castle_attachment* castle_collection_init(c_ver_t version, uint32_t flags
     spin_lock(&castle_attachments.lock);
     list_add(&collection->list, &castle_attachments.attachments);
     spin_unlock(&castle_attachments.lock);
+    INIT_LIST_HEAD(&collection->stateful_ops);
+    spin_lock_init(&collection->sop_lock);
 
     err = castle_sysfs_collection_add(collection);
     if(err)

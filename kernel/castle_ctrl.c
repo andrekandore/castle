@@ -459,6 +459,9 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     /* Release transaction lock, we don't want to block on attachment delete with the lock. */
     CASTLE_TRANSACTION_END;
 
+    /* Trigger expiry of any stateful ops on this collection. */
+    castle_attachment_stateful_ops_expire(ca);
+
     /* Complete free. This would block until attachment is removed. */
     castle_attachment_free_complete(ca);
 

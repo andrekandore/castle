@@ -1938,6 +1938,8 @@ struct castle_attachment {
     struct kobject      kobj;
     int                 sysfs_registered;
     struct list_head    list;
+    struct list_head    stateful_ops;
+    spinlock_t          sop_lock;
 };
 
 struct castle_attachments {

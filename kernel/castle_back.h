@@ -16,5 +16,7 @@ int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
 
 void castle_back_fini(void);
 int castle_back_init(void);
+void castle_attachment_stateful_ops_expire(struct castle_attachment *ca);
+
 
 #endif /* __CASTLE_BACK_H__ */
