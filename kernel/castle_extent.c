@@ -324,7 +324,8 @@ static int                  min_rda_lvl = RDA_2; /* Keep track of minimum RDA us
 
 static void castle_extents_virt_masks_check(void *unused);
 
-static DECLARE_WORK(castle_virt_masks_check_work, castle_extents_virt_masks_check, NULL);
+static DECLARE_WORK(castle_virt_masks_check_work, castle_extents_virt_masks_check,
+                    &castle_extents_ref_count);
 static struct timer_list castle_virt_masks_check_timer;
 
 static void castle_virt_masks_check_timer_fire(unsigned long first)
@@ -1962,7 +1963,11 @@ static int castle_extent_stable_check(c_ext_t *ext, void *unused)
     BUG_ON(atomic_read(&ext->link_cnt) == 0);
 
     while (!list_is_singular(&ext->mask_list))
+    {
+        /* Keep checking virtual masks to promote masks for recently compressed part. */
+        castle_extents_virt_masks_check(NULL);
         msleep_interruptible(1000);
+    }
 
     return 0;
 }
@@ -1993,17 +1998,16 @@ int castle_extents_writeback(void)
 
         /* Wait for all references to be released. */
         while (atomic_read(&castle_extents_ref_count))
+        {
+            /* Keep checking virtual masks to release masks that belong to dead extents. */
+            castle_extents_virt_masks_check(NULL);
             msleep_interruptible(1000);
+        }
 
         /* --- Extents wouldn't be destroyed any more. Extents Hash is immutable --- */
 
         /* Ask for all the extents to be compressed. */
         castle_extents_compress();
-
-        /* All the compression is done. Look for any outstanding virtual masks that need to
-         * be promoted to compressed extent. */
-        atomic_inc(&castle_extents_ref_count);
-        castle_extents_virt_masks_check(NULL);
 
         /* Wait for all extents to become stable i.e. expire all old extents and
          * should have only one mask per extent. */
@@ -7542,7 +7546,7 @@ static int castle_extent_virt_masks_check(c_ext_t *virt_ext, void *unused)
     return 0;
 }
 
-static void castle_extents_virt_masks_check(void *unused)
+static void castle_extents_virt_masks_check(void* ref_count_ptr)
 {
     castle_extent_transaction_start();
 
@@ -7550,7 +7554,8 @@ static void castle_extents_virt_masks_check(void *unused)
 
     castle_extent_transaction_end();
 
-    atomic_dec(&castle_extents_ref_count);
+    if (ref_count_ptr)
+        atomic_dec((atomic_t *)ref_count_ptr);
 }
 
 static void _castle_extent_shrink(c_ext_t *ext, c_chk_cnt_t chunk)
