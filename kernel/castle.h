@@ -188,7 +188,7 @@ typedef uint32_t block_t;
  *
  * So, minimum size of the slave should be
  *
- * 100 + (META_SPACE_SIZE * MAX_NR_SLAVES / # of slaves) + (MSTORE_SPACE_SIZE * 2) + (global tree size * 2 / nr of slaves)
+ * 100 + (META_SPACE_SIZE * MAX_NR_SLAVES / # of slaves) + (MSTORE_SPACE_SIZE * 2)
  */
 
 #define SUP_EXT_ID                     (10)
@@ -371,8 +371,6 @@ STATIC_BUG_ON(sizeof(castle_rda_type_str) != (sizeof(void *) * (NR_RDA_SPECS + 1
  */
 typedef enum {
     EXT_T_META_DATA,
-    EXT_T_GLOBAL_BTREE,
-    EXT_T_BLOCK_DEV,
     EXT_T_INTERNAL_NODES,
     EXT_T_LEAF_NODES,
     EXT_T_MEDIUM_OBJECTS,
@@ -386,8 +384,6 @@ typedef enum {
 
 static USED char *castle_ext_type_str[] = {
     "EXT_T_META_DATA",
-    "EXT_T_GLOBAL_BTREE",
-    "EXT_T_BLOCK_DEV",
     "EXT_T_INTERNAL_NODES",
     "EXT_T_LEAF_NODES",
     "EXT_T_MEDIUM_OBJECTS",

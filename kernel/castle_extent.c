@@ -1335,8 +1335,6 @@ c_ext_flush_prio_t castle_ext_flush_prio_get(c_ext_type_t type, c_chk_cnt_t size
         case EXT_T_META_DATA:
             return META_FLUSH_PRIO;
 
-        case EXT_T_GLOBAL_BTREE:
-        case EXT_T_BLOCK_DEV:
         case EXT_T_BLOOM_FILTER:
             return DEFAULT_FLUSH_PRIO;
 

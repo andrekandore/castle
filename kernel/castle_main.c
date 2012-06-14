@@ -903,7 +903,8 @@ int castle_fs_init(void)
     {
         /* Checkpoint should never be requested on the first startup.
            This way we can guarantee that global tree will not be created afterwards
-           (which makes the rest of the startup process slightly more straightforward). */
+           (which makes the rest of the startup process slightly more straightforward).
+           FIXME: Global tree is gone do we still need this BUG_ON!! GM?*/
         BUG_ON(first);
         castle_printk(LOG_USERINFO, "Waiting for a checkpoint before completing the startup.\n");
         castle_ctrl_unlock();

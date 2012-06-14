@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 44 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 45 /* last updated by BM */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -111,8 +111,6 @@ typedef enum {
     TRACE_CACHE_RESERVE_PGS_USED_ID,      /**< Number of c2ps from reserve freelist in use.       */
     TRACE_CACHE_RESERVE_BLKS_USED_ID,     /**< Number of c2bs from reserve freelist in use.       */
     TRACE_CACHE_META_DATA_IOS_ID,         /**< IOs to meta extent                                 */
-    TRACE_CACHE_GLOBAL_BTREE_IOS_ID,      /**< IOs to global btree extent                         */
-    TRACE_CACHE_BLOCK_DEV_IOS_ID,         /**< IOs to device mapper blocks                        */
     TRACE_CACHE_INTERNAL_NODES_IOS_ID,    /**< IOs to non T0 internal btree nodes                 */
     TRACE_CACHE_LEAF_NODES_IOS_ID,        /**< IOs to non T0 leaf btree nodes                     */
     TRACE_CACHE_MEDIUM_OBJECTS_IOS_ID,    /**< IOs to non T0 medium objects                       */
