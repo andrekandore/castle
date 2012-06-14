@@ -3434,15 +3434,20 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     lfs->leafs_on_ssds = 1;
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
     {
+        unsigned long compr_ext_flags = growable_ext_flags;
+
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
         lfs->leafs_on_ssds = 0;
 
+        if (!castle_da_versioning_check(da))
+            /* If DA is unversioned, compress this shizzle. */
+            compr_ext_flags |= CASTLE_EXT_FLAG_COMPR_COMPRESSED;
         lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                    da->id,
                                                    EXT_T_LEAF_NODES,
                                                    lfs->tree_ext.size,
-                                                   growable_ext_flags);
+                                                   compr_ext_flags);
         castle_printk(LOG_DEBUG, "%s:: tree extent %d\n", __FUNCTION__,
                                  lfs->tree_ext.ext_id);
 
