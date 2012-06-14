@@ -2841,8 +2841,7 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     for (compr_part = 0; compr_part < NR_CACHE_PARTITIONS; ++compr_part)
         if (c2b_partition(c2b, compr_part))
             break;
-    if (compr_part == NR_CACHE_PARTITIONS)
-        compr_part = USER;
+    BUG_ON(compr_part == NR_CACHE_PARTITIONS);
 
     /* construct the compressed c2b */
     compr_cep.offset = compr_base;
