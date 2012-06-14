@@ -2664,8 +2664,6 @@ static void castle_slaves_unplug(void)
  * Decompression.
  */
 
-#define CASTLE_CACHE_USE_LZO 0
-
 /**
  * Actually perform the decompression of a compressed c2b into a virtual c2b.
  *
@@ -2696,37 +2694,29 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
         BUG_ON(compr_cep.ext_id != compr_c2b->cep.ext_id);
         BUG_ON(compr_cep.offset < compr_c2b->cep.offset ||
                compr_cep.offset + compr_size > compr_c2b->cep.offset + compr_c2b->nr_pages * PAGE_SIZE);
-#if CASTLE_CACHE_USE_LZO
-#else
-        BUG_ON(compr_size != compr_block_size);
-#endif
+        BUG_ON(compr_size > compr_block_size); /* if the block expands, we store it uncompressed */
         compr_buf = (unsigned char *) compr_c2b->buffer + (compr_cep.offset - compr_c2b->cep.offset);
 
         /* decompress the block */
         used = min(virt_size, compr_block_size - (virt_off - virt_base));
-        if (virt_base == virt_off && virt_size >= compr_block_size)
+        if (compr_size == compr_block_size /* block is stored uncompressed */)
         {
-#if CASTLE_CACHE_USE_LZO
+            memcpy(virt_buf, compr_buf + (virt_off - virt_base), used);
+        }
+        else if (virt_base == virt_off && virt_size >= compr_block_size)
+        {
             size_t decompressed = compr_block_size;
             if (lzo1x_decompress_safe(compr_buf, compr_size, virt_buf, &decompressed) < 0 ||
                 decompressed != compr_block_size)
                 BUG();
-#else
-            memcpy(virt_buf, compr_buf, compr_size);
-#endif
         }
         else
         {
             unsigned char *tmp_buf = get_cpu_var(castle_cache_decompress_buf);
-#if CASTLE_CACHE_USE_LZO
             size_t decompressed = CASTLE_CACHE_DECOMPRESS_BUF_SIZE;
             if (lzo1x_decompress_safe(compr_buf, compr_size, tmp_buf, &decompressed) < 0 ||
                 decompressed != compr_block_size)
                 BUG();
-#else
-            BUG_ON(compr_size > CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
-            memcpy(tmp_buf, compr_buf, compr_size);
-#endif
             memcpy(virt_buf, tmp_buf + (virt_off - virt_base), used);
             put_cpu_var(castle_cache_decompress_buf);
         }
