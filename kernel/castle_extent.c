@@ -1382,7 +1382,6 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->flags              = 0;
     ext->linked_ext_id      = INVAL_EXT_ID;
     atomic64_set(&ext->next_comp_byte, 0);
-    atomic64_set(&ext->compr_saved_bytes, 0);
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -3984,10 +3983,7 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
 
     /* It is possible that maps getting written OOO. */
     if (atomic64_read(&virt_ext->next_comp_byte) < (virt_cep.offset + C_COMPR_BLK_SZ))
-    {
         atomic64_add(C_COMPR_BLK_SZ, &virt_ext->next_comp_byte);
-        atomic64_add(C_COMPR_BLK_SZ - comp_blk_bytes, &virt_ext->compr_saved_bytes);
-    }
 
     debug_compr_map("Setting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
                      __cep2str(virt_cep), __cep2str(comp_cep), comp_blk_bytes);
@@ -4022,7 +4018,6 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
     if (used_bytes == 0)
     {
         atomic64_set(&virt_ext->next_comp_byte, 0);
-        atomic64_set(&virt_ext->compr_saved_bytes, 0);
         return;
     }
 
@@ -4050,10 +4045,6 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
     virt_ext->dirtytree->compr_compressed_off = roundup(comp_cep.offset + comp_blk_size,
                                                         C_BLK_SIZE);
     mutex_unlock(&virt_ext->dirtytree->compr_mutex);
-
-    /* Set extent offsets. */
-    atomic64_set(&virt_ext->compr_saved_bytes,
-          virt_ext->dirtytree->virt_compressed_off - virt_ext->dirtytree->compr_compressed_off);
 #endif
 }
 
@@ -7450,16 +7441,51 @@ static int _castle_extent_grow(c_ext_t *ext, c_chk_cnt_t count)
     {
         c_ext_t *virt_ext = ext;
         c_ext_t *comp_ext = castle_extents_hash_get(virt_ext->linked_ext_id);
-        c_chk_cnt_t compr_savings = (atomic64_read(&virt_ext->compr_saved_bytes) / C_CHK_SIZE);
+        c_byte_off_t space_needed, space_available, blk_size;
+        c_byte_off_t used_bytes = atomic64_read(&virt_ext->next_comp_byte);
+        c_ext_pos_t comp_cep;
 
-        /* Compression savings are not big enough, grow comrpessed extent. */
-        if (compr_savings < count && _castle_extent_grow(comp_ext, count - compr_savings))
-            return -ENOSPC;
+        /* If the extent got no space, used_bytes should be 0. */
+        BUG_ON(!virt_ext->global_mask.end && used_bytes);
+
+        /* Calculate amount of space needed on compressed extent. It is in two parts.
+         *  1. Space needed for uncompressed part of the current mask.
+         *  2. Space needed for growing bit. */
+        space_needed = (virt_ext->global_mask.end * C_CHK_SIZE - used_bytes) + count * C_CHK_SIZE;
+
+        /* Find last compressed byte on compressed extent. */
+        if (used_bytes)
+        {
+            /* used_bytes would be always C_COMPR_BLK_SZ algined. */
+            BUG_ON(used_bytes % C_COMPR_BLK_SZ);
+            blk_size = castle_compr_map_get(CEP(virt_ext->ext_id, used_bytes - C_COMPR_BLK_SZ),
+                                            &comp_cep);
+            comp_cep.offset += blk_size;
+        }
+        else
+            comp_cep.offset = 0;
+
+        /* Calculate space currently available in compressed extent and deduct it from
+         * space needed. */
+        space_available = (comp_ext->global_mask.end * C_CHK_SIZE - comp_cep.offset);
+
+        /* Already got enough space available!! */
+        if (space_available >= space_needed)
+            space_needed  = 0;
+        else
+            space_needed -= space_available;
 
         debug_compr("Growing CE %llu by %u chunks for VE %llu by %u chunks.\n",
-                     comp_ext->ext_id,
-                     (compr_savings < count)? (count - compr_savings): 0,
+                     comp_ext->ext_id, DIV_ROUND_UP(space_needed, C_CHK_SIZE),
                      virt_ext->ext_id, count);
+
+        /* Check space_needed calculation is sane. */
+        BUG_ON(DIV_ROUND_UP(space_needed, C_CHK_SIZE) > comp_ext->size);
+
+        /* It is possible we already got enough space left in comrpessed extent, otherwise
+         * get some. */
+        if (space_needed && _castle_extent_grow(comp_ext, DIV_ROUND_UP(space_needed, C_CHK_SIZE)))
+            return -ENOSPC;
 
         /* Create mask for virtual extent. */
         castle_extent_grow_mask_create(virt_ext, count);

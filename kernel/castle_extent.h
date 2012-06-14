@@ -47,7 +47,6 @@ typedef struct castle_extent {
     unsigned long       flags;          /* Bit Flags.                                   */
     c_ext_id_t          linked_ext_id;  /* Extent that is coupled with this extent.     */
     atomic64_t          next_comp_byte;
-    atomic64_t          compr_saved_bytes;
     struct list_head    hash_list;
     struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
     struct list_head    verify_list;    /* Used for testing.                            */
