@@ -68,6 +68,7 @@
 #endif
 
 #define C_COMPR_BLK_SZ (64 * 1024)
+STATIC_BUG_ON(C_COMPR_BLK_SZ & (C_COMPR_BLK_SZ-1) != 0); /* ensure it's a power of 2 */
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100
