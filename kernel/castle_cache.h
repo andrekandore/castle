@@ -13,6 +13,8 @@ typedef void  (*c2b_end_io_t)(struct castle_cache_block *c2b, int did_io);
 #define C2B_STATE_ACCESS_MAX        ((1 << C2B_STATE_ACCESS_BITS) - 1)
 STATIC_BUG_ON(C2B_STATE_BITS_BITS + C2B_STATE_PARTITION_BITS + C2B_STATE_ACCESS_BITS != 64);
 
+typedef struct castle_cache_block c2_block_t;
+
 /**
  * Extent dirtytree structure.
  *
@@ -31,19 +33,41 @@ typedef struct castle_cache_extent_dirtytree {
                                                  higher priority.                               */
     int                 nr_pages;           /**< Sum of c2b->nr_pages for c2bs in tree.
                                                  Protected by lock.                             */
-    c_byte_off_t        flushed_off;        /**< Exclusive offset before which flush I/O has
-                                                 been dispatched.                               */
-    c_byte_off_t        compr_flushed_off;  /**< Exclusive offset before which flush I/O has
-                                                 been dispatched in compressed extent.          */
     c_byte_off_t        compr_unit_size;    /**< Compression unit size.                         */
 #ifdef CASTLE_PERF_DEBUG
     c_chk_cnt_t         ext_size;           /**< Size of extent when created (in chunks).       */
     c_ext_type_t        ext_type;           /**< Extent type when created.                      */
 #endif
+
+    /*
+     * Virtual/compressed compression-related state.
+     *
+     * See comments in castle_cache.c for description of how compression works.
+     *
+     * All offsets are exclusive.
+     */
+
+    struct mutex        compr_mutex;            /**< Protects fields below.                     */
+    c2_block_t         *c_flush_c2b;            /**< COMPRESSED-extent c2b that lies from
+                                                     next_compr_mutable_off to the end of that
+                                                     chunk.  This c2b gets marked as dirty in
+                                                     the compression function and flushed.      */
+    c2_block_t         *c_strad_c2b;            /**< COMPRESSED-extent c2b that lies from the
+                                                     middle of the chunk next_compr_mutable_off
+                                                     is in or next_compr_mutable_off (whichever
+                                                     is greater) until half-way through the
+                                                     following chunk.  Never gets dirtied.      */
+    c_byte_off_t        next_virt_off;          /**< Start offset of next compression unit.     */
+    c_byte_off_t        next_virt_mutable_off;  /**< Offset beyond which compressed version
+                                                     can not yet be flushed.                    */
+    c_byte_off_t        next_compr_off;         /**< Start offset for compressed version of
+                                                     next_virt_off data.                        */
+    c_byte_off_t        next_compr_mutable_off; /**< Start offset for where to get next mutable
+                                                     compressed c2b.                            */
 } c2_ext_dirtytree_t;
 
 struct castle_cache_page;
-typedef struct castle_cache_block {
+struct castle_cache_block {
     c_ext_pos_t                cep;
     atomic_t                   remaining;
 
@@ -75,7 +99,7 @@ typedef struct castle_cache_block {
     char                      *file;
     int                        line;
 #endif
-} c2_block_t;
+};
 
 /**
  * Castle cache partition descriptors.
@@ -184,7 +208,6 @@ static inline int read_trylock_node(c2_block_t *c2b)
  */
 int  c2b_dirty              (c2_block_t *c2b);
 void dirty_c2b              (c2_block_t *c2b);
-void clean_c2b              (c2_block_t *c2b);
 int  c2b_uptodate           (c2_block_t *c2b);
 void update_c2b             (c2_block_t *c2b);
 int  c2b_bio_error          (c2_block_t *c2b);
@@ -258,7 +281,7 @@ void castle_cache_prefetches_wait(void);
  * Misc.
  */
 #define c2b_buffer(_c2b)    ((_c2b)->buffer)
-#define c2b_end_off(_c2b)   ((_c2b)->cep.offset + ((_c2b)->nr_pages << PAGE_SHIFT) - 1) // inclusive
+#define c2b_end_off(_c2b)   ((_c2b)->cep.offset + ((_c2b)->nr_pages << PAGE_SHIFT)) // exclusive
 
 int                        castle_stats_read               (void);
 
@@ -287,7 +310,6 @@ void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
-
 
 int                        castle_checkpoint_init          (void);
 void                       castle_checkpoint_fini          (void);

@@ -5219,13 +5219,22 @@ static void castle_immut_tree_constr_dealloc(struct castle_immut_tree_construct 
     if (constr == NULL)
         return;
 
-    /* FIXME: Talk LT, what happens if the extents freed with lve c2bs. */
     /* Release all outstanding locks on merge c2bs. */
     for (i=0; i<MAX_BTREE_DEPTH; i++)
-        check_and_put_c2b(constr->levels[i].node_c2b);
+        if (constr->levels[i].node_c2b)
+        {
+            /* Set immutable bit or cache may be unable to compress/flush. */
+            set_c2b_immutable(constr->levels[i].node_c2b);
+            put_c2b(constr->levels[i].node_c2b);
+        }
 
     /* Release the last leaf node c2b. */
-    check_and_put_c2b(constr->last_leaf_node_c2b);
+    if (constr->last_leaf_node_c2b)
+    {
+        /* Set immutable bit or cache may be unable to compress/flush. */
+        set_c2b_immutable(constr->last_leaf_node_c2b);
+        put_c2b(constr->last_leaf_node_c2b);
+    }
 
     castle_free(constr);
 }

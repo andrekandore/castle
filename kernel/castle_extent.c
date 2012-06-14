@@ -1403,13 +1403,18 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->rb_root            = RB_ROOT;
     ext->dirtytree->flush_prio         = (uint8_t)-1;
     ext->dirtytree->nr_pages           = 0;
-    ext->dirtytree->flushed_off        = 0;
-    ext->dirtytree->compr_flushed_off  = 0;
     ext->dirtytree->compr_unit_size    = C_COMPR_BLK_SZ;
 #ifdef CASTLE_PERF_DEBUG
     ext->dirtytree->ext_size           = 0;
     ext->dirtytree->ext_type           = ext->ext_type;
 #endif
+    mutex_init(&ext->dirtytree->compr_mutex);
+    ext->dirtytree->c_flush_c2b            = NULL;
+    ext->dirtytree->c_strad_c2b            = NULL;
+    ext->dirtytree->next_virt_off          = 0;
+    ext->dirtytree->next_virt_mutable_off  = 0;
+    ext->dirtytree->next_compr_off         = 0;
+    ext->dirtytree->next_compr_mutable_off = 0;
     ext->global_mask = EMPTY_MASK_RANGE;
 
     set_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
@@ -4039,11 +4044,13 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
                                          &comp_cep);
 
     /* Set dirty tree offsets. */
-#if 0
+#if 1
     mutex_lock(&virt_ext->dirtytree->compr_mutex);
-    virt_ext->dirtytree->virt_compressed_off = roundup(used_bytes, C_COMPR_BLK_SZ);
-    virt_ext->dirtytree->compr_compressed_off = roundup(comp_cep.offset + comp_blk_size,
-                                                        C_BLK_SIZE);
+    virt_ext->dirtytree->next_virt_off          = roundup(used_bytes, C_COMPR_BLK_SZ);
+    virt_ext->dirtytree->next_virt_mutable_off  = virt_ext->dirtytree->next_virt_off;
+    virt_ext->dirtytree->next_compr_off         = roundup(comp_cep.offset + comp_blk_size,
+                                                          C_BLK_SIZE);
+    virt_ext->dirtytree->next_compr_mutable_off = virt_ext->dirtytree->next_compr_off;
     mutex_unlock(&virt_ext->dirtytree->compr_mutex);
 #endif
 }
@@ -4917,6 +4924,10 @@ void __castle_extent_dirtytree_put(struct castle_cache_extent_dirtytree *dirtytr
     BUG_ON(!RB_EMPTY_ROOT(&dirtytree->rb_root));
     if (likely(check_hash))
         BUG_ON(!MASK_ID_INVAL(castle_extent_get(dirtytree->ext_id)));
+    /* When the extent was freed, castle_cache_extent_flush() should have done
+     * a force flush, freeing up the flush and straddle c2bs. */
+    BUG_ON(dirtytree->c_flush_c2b);
+    BUG_ON(dirtytree->c_strad_c2b);
     castle_free(dirtytree);
 }
 

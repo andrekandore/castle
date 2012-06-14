@@ -8,6 +8,7 @@
 #include <linux/delay.h>
 #include <linux/blkdev.h>
 #include <linux/hash.h>
+#include <linux/crc32.h>
 
 #include "castle_public.h"
 #include "castle.h"
@@ -42,6 +43,15 @@
                                                         FLE, __LINE__ , __func__, ##_a);
 #endif
 
+#define COMPR_DEBUG
+#ifndef COMPR_DEBUG
+#define compr_debug(_f, _a...)  ((void) 0)
+#else
+#define compr_debug(_f, _a...)  castle_printk(LOG_DEBUG, "%s:%.4d %s: " _f,                     \
+                                              FLE, __LINE__, __func__, ##_a);
+#endif
+
+#define CASTLE_CACHE_USE_LZO    1   /**< Whether to compress or memcpy.                         */
 
 /************************************************************************************************
  * Cache descriptor structures (c2b & c2p), and related accessor functions.                     *
@@ -443,8 +453,10 @@ static               LIST_HEAD(castle_cache_block_evictlist);   /**< Eviction li
  * for the exclusive use of the flush thread.  The flush thread gets single c2p
  * c2bs and these are used to perform I/O on the metaextent to allow RDA chunk
  * disks+disk offsets to be looked up. */
-#define CASTLE_CACHE_FLUSH_BATCH_SIZE   64                          /**< Number of c2bs to flush per
-                                                                         batch in _flush()        */
+#define CASTLE_CACHE_FLUSH_BATCH_SIZE       64      /**< Number of c2bs to flush per batch.       */
+#define CASTLE_CACHE_COMPR_BATCH_SIZE       64      /**< Number of c2bs to track in
+                                                         ..._compress_compr_unit_get()_.
+                                                         64KB/4KB==16 and we overallocate by 4x.  */
 #define CASTLE_CACHE_RESERVELIST_QUOTA  2*CASTLE_CACHE_FLUSH_BATCH_SIZE /**< Number of c2bs/c2ps to
                                                                              reserve for _flush() */
 static         DEFINE_SPINLOCK(castle_cache_reservelist_lock);      /**< Lock for reservelists    */
@@ -472,7 +484,9 @@ static         DEFINE_SPINLOCK(castle_cache_decompress_lock);
 static               LIST_HEAD(castle_cache_decompress_list);
 static atomic_t                castle_cache_decompress_list_size;
 
-#define CASTLE_CACHE_DECOMPRESS_BUF_SIZE (256 * 1024)
+#define CASTLE_CACHE_COMPRESS_BUF_SIZE      (LZO1X_1_MEM_COMPRESS)
+DEFINE_PER_CPU(unsigned char *, castle_cache_compress_buf);
+#define CASTLE_CACHE_DECOMPRESS_BUF_SIZE    (256 * 1024)
 DEFINE_PER_CPU(unsigned char *, castle_cache_decompress_buf);
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
@@ -480,7 +494,9 @@ static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pg
 
 struct timer_list              castle_cache_stats_timer;
 
-LIST_HEAD(castle_cache_flush_list);
+// @TODO LT/BM: make this static LIST_HEAD once castle_extents_writeback() is updated to arrange
+// compression of all extents in another way
+LIST_HEAD(castle_cache_flush_list); /**< No locks, only checkpoint manipulates this list.         */
 
 static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
 
@@ -1234,7 +1250,6 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     c2_ext_dirtytree_t *dirtytree;
     unsigned long flags;
 
-    BUG_ON(c2b_compressed(c2b));
     BUG_ON(atomic_read(&c2b->count) == 0);
 
     /* Get extent dirtytree from c2b. */
@@ -1291,8 +1306,6 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     c_chk_cnt_t start, end;
     int cmp;
 
-    BUG_ON(c2b_compressed(c2b));
-
     /* Get the current valid extent space. This is not a strict check. Strict check
      * would have to use the mask_id that the client is using. */
     castle_extent_mask_read_all(c2b->cep.ext_id, &start, &end);
@@ -1300,12 +1313,21 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     /* End of c2b, shouldn't below current valid extent space. */
     BUG_ON((c2b->cep.offset + (c2b->nr_pages * C_BLK_SIZE)) < (start * C_CHK_SIZE));
 
-    /* Start of c2b, shouldn't be after valid extent space. */
-    BUG_ON(c2b->cep.offset >= ((end + 1) * C_CHK_SIZE));
+    /* Start of c2b shouldn't be after valid extent space. */
+    if (c2b->cep.offset >= ((end + 1) * C_CHK_SIZE))
+    {
+        debug("c2b=%p start=%d end=%d\n", c2b, start, end);
+        BUG();
+    }
 
     /* Get dirtytree and hold its lock while we manipulate the tree. */
     dirtytree = castle_extent_dirtytree_by_ext_id_get(c2b->cep.ext_id);
     BUG_ON(!dirtytree);
+
+    /* Check nobody is dirtying c2bs prior to what has been compressed. */
+    if (castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL)
+        BUG_ON(c2b_end_off(c2b) <= dirtytree->next_virt_off);
+
     spin_lock_irqsave(&dirtytree->lock, flags);
 
     /* Find position in tree. */
@@ -1437,16 +1459,29 @@ void dirty_c2b(c2_block_t *c2b)
             spin_unlock_irq(&castle_cache_block_evictlist_lock);
         }
 
-        /* Place uncompressed dirty c2bs onto per-extent dirtytree. */
-        if (!c2b_compressed(c2b))
-            c2_dirtytree_insert(c2b);
+        /* Place dirty c2bs onto per-extent dirtytree. */
+        c2_dirtytree_insert(c2b);
     }
+}
+
+/**
+ * Mark all c2b's c2ps clean.
+ */
+void clean_c2b_c2ps(c2_block_t *c2b)
+{
+    int i, nr_c2ps;
+
+    nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
+    for (i = 0; i < nr_c2ps; i++)
+        clean_c2p(c2b->c2ps[i]);
 }
 
 /**
  * Mark c2b and associated c2ps clean.
  *
- * @param c2b   c2b to mark as clean.
+ * @param   c2b         c2b to clean
+ * @param   clean_c2ps  Should c2ps be cleaned
+ * @param   checklocked Whether to skip c2b_locked() test
  *
  * - Remove c2b from per-extent RB-tree dirtytree
  * - Update cache list accounting.
@@ -1461,25 +1496,22 @@ void dirty_c2b(c2_block_t *c2b)
  * @also c2_dirtytree_remove()
  * @also I/O callback handlers (callers)
  */
-void _clean_c2b(c2_block_t *c2b, int checklocked)
+void clean_c2b(c2_block_t *c2b, int clean_c2ps, int checklocked)
 {
     unsigned long old;
-    int i, nr_c2ps;
+    int i;
 
     BUG_ON(checklocked && !c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b) && (!c2b_remap(c2b)));
 
     /* Clean all c2ps. */
-    nr_c2ps = castle_cache_pages_to_c2ps(c2b->nr_pages);
-    for (i = 0; i < nr_c2ps; i++)
-        clean_c2p(c2b->c2ps[i]);
+    clean_c2b_c2ps(c2b);
 
     if (c2b_remap(c2b) && !c2b_dirty(c2b))
         return;
 
-    /* Remove from per-extent dirtytree if it is not compressed. */
-    if (!c2b_compressed(c2b))
-        c2_dirtytree_remove(c2b);
+    /* Remove from per-extent dirtytree. */
+    c2_dirtytree_remove(c2b);
 
     BUG_ON(atomic_read(&c2b->count) == 0);
 
@@ -1504,11 +1536,6 @@ void _clean_c2b(c2_block_t *c2b, int checklocked)
             if (old & (1ULL << (C2B_STATE_PARTITION_OFFSET + i)))
                 c2_partition_budget_dirty_update(i, -c2b->nr_pages);
     }
-}
-
-void clean_c2b(c2_block_t *c2b)
-{
-    _clean_c2b(c2b, 1 /*checklocked*/);
 }
 
 void update_c2b(c2_block_t *c2b)
@@ -1577,7 +1604,7 @@ static void c2b_remaining_io_sub(int rw, int nr_pages, c2_block_t *c2b, int asyn
     if(rw == READ)
         update_c2b(c2b);
     else
-        clean_c2b(c2b);
+        clean_c2b(c2b, 1 /*clean_c2ps*/, 1 /*checklocked*/);
     clear_c2b_in_flight(c2b);
     c2b->end_io(c2b, async /*did_io*/);
 }
@@ -2865,18 +2892,27 @@ endio:
     return 0;
 }
 
+static void _c2_virtual_extent_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree);
+
 /**
  * Stop the decompression thread and free the per-cpu decompression buffers.
  */
-static void castle_cache_decompress_fini(void)
+static void castle_cache_compr_fini(void)
 {
-    unsigned char **decompress_buf_ptr;
+    unsigned char **compress_buf_ptr, **decompress_buf_ptr;
     int i;
+
+    /* Destroy any outstanding flush and straddle c2bs. */
+    castle_extent_for_each_virt_ext(_c2_virtual_extent_compress_c2bs_put);
 
     kthread_stop(castle_cache_decompress_thread);
 
     for (i = 0; i < NR_CPUS; ++i)
     {
+        compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
+        if (*compress_buf_ptr)
+            castle_free(*compress_buf_ptr);
+
         decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
         if (*decompress_buf_ptr)
             castle_free(*decompress_buf_ptr);
@@ -2886,9 +2922,9 @@ static void castle_cache_decompress_fini(void)
 /**
  * Allocate the per-cpu decompression buffers and start the decompression thread.
  */
-static int castle_cache_decompress_init(void)
+static int castle_cache_compr_init(void)
 {
-    unsigned char **decompress_buf_ptr;
+    unsigned char **compress_buf_ptr, **decompress_buf_ptr;
     int i, ret = 0;
 
     atomic_set(&castle_cache_decompress_list_size, 0);
@@ -2897,11 +2933,20 @@ static int castle_cache_decompress_init(void)
     {
         if (cpu_possible(i))
         {
+            compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
+            *compress_buf_ptr = castle_alloc(CASTLE_CACHE_COMPRESS_BUF_SIZE);
+            if (!*compress_buf_ptr)
+            {
+                castle_printk(LOG_INIT, "could not allocate per-CPU compression buffers.\n");
+                ret = -ENOMEM;
+                goto err;
+            }
+
             decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
             *decompress_buf_ptr = castle_alloc(CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
             if (!*decompress_buf_ptr)
             {
-                castle_printk(LOG_INIT, "Could not allocate per-cpu decompression buffers.\n");
+                castle_printk(LOG_INIT, "Could not allocate per-CPU decompression buffers.\n");
                 ret = -ENOMEM;
                 goto err;
             }
@@ -2912,7 +2957,7 @@ static int castle_cache_decompress_init(void)
     return 0;
 
 err:
-    castle_cache_decompress_fini();
+    castle_cache_compr_fini();
     return ret;
 }
 
@@ -5165,12 +5210,25 @@ static void c2_pref_window_submit(c2_pref_window_t *window,
                                   c2_partition_id_t part_id,
                                   int pages)
 {
+    c2_ext_dirtytree_t *dirtytree;
     c2_block_t *c2b;
+    c_chk_cnt_t end_chk;
 
     BUG_ON(CHUNK_OFFSET(cep.offset));
     BUG_ON(pages % BLKS_PER_CHK);
 
-    while (pages && CHUNK(cep.offset) < castle_extent_size_get(cep.ext_id))
+    /* Calculate the chunk we must stop prefetching at.
+     *
+     * For VIRTUAL extents we can prefetch no further than the last complete
+     * chunk, which is why we round down the next available offset. */
+    end_chk   = castle_extent_size_get(cep.ext_id);
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(cep.ext_id);
+    BUG_ON(!dirtytree);
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+        end_chk = min(end_chk, (c_chk_cnt_t) CHUNK(dirtytree->next_compr_off));
+    castle_extent_dirtytree_put(dirtytree);
+
+    while (pages && CHUNK(cep.offset) < end_chk)
     {
         c2b = c2_pref_block_chunk_get(cep, window, part_id);
         atomic_inc(&castle_cache_prefetch_in_flight);
@@ -5366,10 +5424,14 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
     /* Pinning, etc. is handled via _prefetch_pin() call. */
     if (advise & C2_ADV_EXTENT)
     {
-        /* We are going to operate on a whole extent.
-         * Massage cep & chunks to match. */
+        /* We are going to operate on a whole extent.  Massage cep and chunks to
+         * match.  If this is a VIRTUAL extent, things could go badly wrong if
+         * the extent mask changes between the advise and advise clear calls.
+         * For this reason we ignore VIRTUAL extents.  @TODO support this. */
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
+        if (castle_compr_type_get(cep.ext_id) != C_COMPR_NORMAL)
+            return -EINVAL;
     }
     castle_cache_prefetch_pin(cep, advise, part_id, chunks);
 
@@ -5408,10 +5470,14 @@ int castle_cache_advise_clear(c_ext_pos_t cep,
     /* Unpinning, etc. is handled via _prefetch_unpin() call. */
     if (advise & C2_ADV_EXTENT)
     {
-        /* We are going to operate on a whole extent.
-         * Massage cep & chunks to match. */
+        /* We are going to operate on a whole extent.  Massage cep and chunks to
+         * match.  If this is a VIRTUAL extent, things could go badly wrong if
+         * the extent mask changes between the advise and advise clear calls.
+         * For this reason we ignore VIRTUAL extents.  @TODO support this. */
         cep.offset = 0;
         chunks = castle_extent_size_get(cep.ext_id);
+        if (castle_compr_type_get(cep.ext_id) != C_COMPR_NORMAL)
+            return -EINVAL;
     }
     castle_cache_prefetch_unpin(cep, advise, chunks);
 
@@ -5467,6 +5533,493 @@ void castle_cache_debug_fini(void)
 #define castle_cache_debug_fini()    ((void)0)
 #endif
 
+/*******************************************************************************
+ * Compression.
+ *
+ * Primary entry-point is c2_virtual_extent_compress().
+ *
+ * See also comments for castle_cache_extent_dirtytree{} which stores relevant
+ * offsets required for compression in the VIRTUAL extent.
+ *
+ * See _c2_virtual_extent_compress_c2bs_get() comments for details on the layout
+ * of the flush and straddle c2bs.
+ */
+
+/**
+ * Are the flush/straddle c2bs empty?
+ */
+#define COMPR_C2BS_EMPTY(_d)                    ({                                          \
+        BUG_ON((_d)->next_compr_off < (_d)->next_compr_mutable_off);                        \
+        (_d)->next_compr_off == (_d)->next_compr_mutable_off;                               \
+        })
+
+/**
+ * Destroys flush and straddle c2bs from COMPRESSED extent.
+ */
+static void _c2_virtual_extent_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree)
+{
+    if (dirtytree->c_flush_c2b)
+    {
+        castle_cache_block_destroy(dirtytree->c_flush_c2b);
+        dirtytree->c_flush_c2b = NULL;
+    }
+    if (dirtytree->c_strad_c2b)
+    {
+        castle_cache_block_destroy(dirtytree->c_strad_c2b);
+        dirtytree->c_strad_c2b = NULL;
+    }
+}
+
+/**
+ * Get compression unit-sized c2b starting at next_virt_off, if one exists.
+ *
+ * A read-lock is taken on the c2b to be returned and all c2bs finishing in the
+ * specified range are marked as clean.
+ *
+ * @TODO implement force!
+ *
+ * @param   dirtytree   Dirtytree to select c2bs from
+ * @param   force       If dirty c2bs exist after next_virt_off, return a
+ *                      compression unit c2b regardless of whether a full
+ *                      compression unit of dirty data is available
+ */
+static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
+                                                               int force)
+{
+    struct rb_node *parent;
+    c2_block_t *c2b = NULL, *ret_c2b = NULL;
+    c_byte_off_t start_off, end_off, seen_off;
+    c2_block_t *c2bs[CASTLE_CACHE_COMPR_BATCH_SIZE];
+    int c2bs_idx = 0;
+
+    /* Calculate exclusive end_off for compression unit c2b. */
+    BUG_ON(dirtytree->next_virt_off % dirtytree->compr_unit_size);
+    start_off = dirtytree->next_virt_off;
+    end_off   = start_off + dirtytree->compr_unit_size;
+    seen_off  = 0;
+
+    /* Verify c2bs with pages between start_off and end_off are immutable and
+     * all pages in the range are covered by at least one c2b. */
+    spin_lock_irq(&dirtytree->lock);
+    parent = rb_first(&dirtytree->rb_root);
+    while (parent)
+    {
+        c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
+
+        /* c2bs should not end before start_off (finishing after is okay). */
+        BUG_ON(c2b_end_off(c2b) <= start_off);
+
+        /* Stop searching if c2b is mutable. */
+        if (!c2b_immutable(c2b))
+        {
+            BUG_ON(c2b_end_off(c2b) <= seen_off);
+            break;
+        }
+
+        /* Stop searching if c2b starts beyond required range. */
+        if (c2b->cep.offset >= end_off)
+            break;
+
+        /* Update seen_off we have reached. */
+        if (c2b_end_off(c2b) > seen_off)
+            seen_off = c2b_end_off(c2b);
+
+        /* If c2b ends in range, track it. */
+        if (c2b_end_off(c2b) <= end_off)
+        {
+            c2bs[c2bs_idx++] = c2b;
+            get_c2b(c2b);
+            /* We should never hit this as CASTLE_CACHE_COMPR_BATCH_SIZE was
+             * specifically calculated to allow for the maximum number of medium
+             * objects in a C_COMPR_BLK_SZ compression unit.  In addition, we
+             * overallocate by 4x. */
+            BUG_ON(c2bs_idx >= CASTLE_CACHE_COMPR_BATCH_SIZE);
+        }
+
+        parent = rb_next(parent);
+    }
+    spin_unlock_irq(&dirtytree->lock);
+
+    /* Generate compression unit c2b if we have a contiguous, immutable range or
+     * if we have been instructed to force-get a c2b, e.g. if we have reached
+     * the end of the extent. */
+    if (seen_off && (seen_off >= end_off || force))
+    {
+        c_ext_pos_t cep;
+
+        /* TODO: support force for non-compr_unit_size multiples */
+        BUG_ON(force && seen_off < end_off);
+
+        cep.ext_id = dirtytree->ext_id;
+        cep.offset = start_off;
+        ret_c2b = castle_cache_block_get(cep,
+                                         dirtytree->compr_unit_size >> PAGE_SHIFT,
+                                         MERGE_OUT);
+        BUG_ON(!force && !c2b_uptodate(ret_c2b));
+        BUG_ON(test_set_c2b_flushing(ret_c2b));
+
+        /* Because all c2bs in this batch are immutable, only rebuild and the
+         * prefetcher will ever hold write-locks on the c2ps backing ret_c2b.
+         * Since both of these processes obtain locks sequentially, we are safe
+         * to block and go to sleep waiting for a read-lock here. */
+        read_lock_c2b(ret_c2b);
+
+        /* Mark all c2bs ending within the range as clean.  We don't clean the
+         * underlying c2ps as clean here - that will be done on ret_c2b by the
+         * caller once the c2b has been compressed. */
+        while (--c2bs_idx >= 0)
+        {
+            c2b = c2bs[c2bs_idx];
+            clean_c2b(c2b, 0 /*clean_c2ps*/, 0 /*checklocked*/);
+            put_c2b(c2b);
+        }
+
+        /* Caller to update dirtytree->next_virt_off. */
+    }
+
+    return ret_c2b;
+}
+
+/**
+ * Force dirty any stored compressed data.
+ *
+ * @param   dirtytree   Which flush/straddle c2bs to dirty?
+ *
+ * If outstanding compressed data exists in the flush/straddle c2bs we can force
+ * dirty it to ensure it hits disk (e.g. for checkpoint or correctness during
+ * extent eviction).  The only caveat is that if the end of the stored
+ * compressed data does not end on a 4KB boundary we must pad to protect against
+ * subsector writes (or the need to read then write).
+ *
+ * @return  0       Flush/straddle c2bs flushed
+ * @return -ENOENT  Flush/straddle c2bs empty
+ */
+static int _c2_virtual_extent_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
+{
+    c2_block_t  *c_c2b;
+    c_ext_pos_t  c_cep;
+    c_byte_off_t size;
+
+    /* Caller must hold compr_mutex. */
+    BUG_ON(mutex_trylock(&dirtytree->compr_mutex));
+
+    /* Return immediately if there is no data to flush. */
+    if (COMPR_C2BS_EMPTY(dirtytree))
+        return -ENOENT;
+
+    dirtytree->next_compr_off = roundup(dirtytree->next_compr_off, PAGE_SIZE);
+    c_cep.ext_id = dirtytree->compr_ext_id;
+    c_cep.offset = dirtytree->c_flush_c2b->cep.offset;
+    size         = dirtytree->next_compr_off - c_cep.offset;
+    c_c2b        = castle_cache_block_get(c_cep, size >> PAGE_SHIFT, MERGE_OUT);
+    write_lock_c2b(c_c2b);
+    dirty_c2b(c_c2b);
+    write_unlock_c2b(c_c2b);
+    dirtytree->next_compr_mutable_off = c2b_end_off(c_c2b);
+    dirtytree->next_compr_off         = dirtytree->next_compr_mutable_off;
+    dirtytree->next_virt_mutable_off  = dirtytree->next_virt_off;
+    put_c2b(c_c2b);
+
+    return 0;
+}
+
+/**
+ * Compress c2b_buffer(v_c2b) and store it in c_buf.
+ *
+ * @param   v_c2b   Data to compress
+ * @param   c_buf   Destination for compressed data
+ * @param   c_rem   Bytes remaining in c_buf
+ *
+ * If c2b_buffer(v_c2b) stays the same size or expands during compression
+ * discard the compressed data and memcpy() instead.
+ *
+ * @return  Bytes used in c_buf
+ */
+static c_byte_off_t _c2_virtual_extent_compress_fill(c2_block_t *v_c2b,
+                                                     void       *c_buf,
+                                                     size_t      c_rem,
+                                                     void       *c_work_buf)
+{
+    c_byte_off_t    size;
+    size_t          c_used;
+
+    /* Populate COMPRESSED c2b with locks held. */
+    BUG_ON(c_rem < C_CHK_SIZE / 2);
+    size = v_c2b->nr_pages << PAGE_SHIFT;
+    BUG_ON(c_rem < lzo1x_worst_compress(size) || c_rem < size);
+
+#if CASTLE_CACHE_USE_LZO
+    BUG_ON(lzo1x_1_compress(c2b_buffer(v_c2b),
+                            v_c2b->nr_pages << PAGE_SHIFT,
+                            c_buf,
+                           &c_used,
+                            c_work_buf));
+    if (unlikely(c_used >= v_c2b->nr_pages << PAGE_SHIFT))
+    {
+        /* Data expanded or stayed the same size during compression.
+         * To prevent the unlikely event that we overrun the extent, memcpy()
+         * the data in and adjust c_used accordingly. */
+        memcpy(c_buf, c2b_buffer(v_c2b), v_c2b->nr_pages << PAGE_SHIFT);
+        c_used = v_c2b->nr_pages << PAGE_SHIFT;
+    }
+#else
+    memcpy(c_buf, c2b_buffer(v_c2b), v_c2b->nr_pages << PAGE_SHIFT);
+    c_used = v_c2b->nr_pages << PAGE_SHIFT;
+#endif
+
+    return c_used;
+}
+
+/**
+ * Get flush and straddle c2bs for COMPRESSED extent.
+ *
+ * Compression-unit sized blocks of data from the VIRTUAL extent get compressed
+ * into one of two c2bs in the COMPRESSED extent.  To avoid unnecessary vmap and
+ * castle_cache_block_get() overheads we have a schema involving two overlapping
+ * c2bs that get advanced in step.
+ *
+ * These c2bs are the flush (c_flush_c2b) and straddle (c_strad_c2b) c2bs which
+ * are aligned, sized and used in a very specific manner.
+ *
+ * The flush c2b starts beyond the offset in the COMPRESSED extent that we last
+ * dirtied, c_compr_mutable_off, and runs until the end of the chunk that it
+ * lies within.  Generally this should result in a c2b starting and ending at
+ * CHUNK boundaries, but due to forced flushing (necessary for checkpoints and
+ * extent truncations) is not always the case.
+ *
+ * The straddle c2b starts halfway through the c_compr_mutable_off chunk, or at
+ * the same offset as the flush c2b, whichever is larger, and runs until the
+ * midpoint of the following chunk.
+ */
+static void _c2_virtual_extent_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
+                                                 int create)
+{
+    c_ext_pos_t c_cep;
+    c_byte_off_t size;
+
+    /* If we're trying to create (as opposed to advance) return immediately if
+     * the flush and straddle c2bs already exist. */
+    if (create && (dirtytree->c_flush_c2b && dirtytree->c_strad_c2b))
+        return;
+
+    /* Create c_flush_c2b.
+     *
+     * If we are advancing (e.g. !create) we know that c_flush_c2b has been
+     * marked dirty so any compressed data will be held in the cache until it is
+     * flushed.  The same is not true for the straddle c2b, so we create a new
+     * flush c2b prior to putting the reference on the straddle c2b, that way
+     * any compressed data stored in the straddle c2b will also be contained in
+     * the new flush c2b and hence will not be liable for eviction. */
+    c_cep.ext_id = dirtytree->compr_ext_id;
+    c_cep.offset = dirtytree->next_compr_mutable_off;
+    BUG_ON(dirtytree->next_compr_mutable_off % C_BLK_SIZE);
+    size         = C_CHK_SIZE - CHUNK_OFFSET(c_cep.offset);
+    if (create)
+        BUG_ON(dirtytree->c_flush_c2b);
+    else
+    {
+        BUG_ON(!dirtytree->c_flush_c2b);
+        BUG_ON((c_cep.offset != c2b_end_off(dirtytree->c_flush_c2b)
+                    || (size >> PAGE_SHIFT != BLKS_PER_CHK)));
+        put_c2b(dirtytree->c_flush_c2b);
+    }
+    dirtytree->c_flush_c2b  = castle_cache_block_get(c_cep,
+                                                     size >> PAGE_SHIFT,
+                                                     MERGE_OUT);
+
+    /* Create c_strad_c2b.
+     *
+     * If advancing any compressed data is now also referenced by an advanced
+     * flush c2b.  See comment above. */
+    c_cep.ext_id = dirtytree->compr_ext_id;
+    c_cep.offset = dirtytree->next_compr_mutable_off;
+    size         = c_cep.offset - CHUNK_OFFSET(c_cep.offset) + C_CHK_SIZE/2;
+    c_cep.offset = max(c_cep.offset, size);
+    size         = C_CHK_SIZE + C_CHK_SIZE/2 - CHUNK_OFFSET(c_cep.offset);
+    if (create)
+        BUG_ON(dirtytree->c_strad_c2b);
+    else
+    {
+        BUG_ON(!dirtytree->c_strad_c2b);
+        BUG_ON((c_cep.offset != c2b_end_off(dirtytree->c_strad_c2b))
+                || (size >> PAGE_SHIFT != BLKS_PER_CHK));
+        BUG_ON(castle_cache_block_destroy(dirtytree->c_strad_c2b));
+    }
+    dirtytree->c_strad_c2b  = castle_cache_block_get(c_cep,
+                                                     size >> PAGE_SHIFT,
+                                                     MERGE_OUT);
+
+    BUG_ON(!dirtytree->c_flush_c2b || !dirtytree->c_strad_c2b);
+    BUG_ON( dirtytree->c_flush_c2b ==  dirtytree->c_strad_c2b);
+}
+
+/**
+ * Compress dirty VIRTUAL c2bs into COMPRESSED c2bs and mark as clean.
+ *
+ * @param   dirtytree       [in]    VIRTUAL-extent dirtytree to compress
+ * @param   end_off         [in]    Exclusive offset
+ *                                      0 => Compress everything possible
+ *                                      * => force must also be specified
+ * @param   max_pgs         [in]    0 => No maximum
+ * @param   force           [in]    Whether to force compress all c2bs in dirtytree.
+ * @param   compressed_p    [out]   How many VIRTUAL pages were compressed
+ */
+static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
+                                       c_byte_off_t        end_off,
+                                       int                 max_pgs,
+                                       int                 force,
+                                       int                *compressed_p)
+{
+    c2_block_t  *v_c2b,             /* VIRTUAL c2b (compression-unit aligned and sized).        */
+                *c_c2b = NULL;      /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
+    void        *c_buf = NULL;      /* Pointer to dirtytree->next_compr_off in c_c2b->buffer.   */
+    c_byte_off_t c_rem = 0;         /* Bytes remaining in c_buf.                                */
+    void        *c_work_buf;        /* LZO working buffer space (per-CPU).                      */
+    int          compressed = 0;    /* Number of compressed pages (VIRTUAL).                    */
+    int          create = 1;        /* For _c2_virtual_extent_compress_c2bs_get().              */
+    c_byte_off_t size;              /* Transient, for calculations.                             */
+    size_t       c_used;            /* Transient, Bytes used by LZO/memcpy().                   */
+
+    BUG_ON(end_off && (!force || max_pgs));
+
+    /* Only wait for compr_mutex if we are force flushing. */
+    if (force)
+        mutex_lock(&dirtytree->compr_mutex);
+    else if (!mutex_trylock(&dirtytree->compr_mutex))
+        goto out;
+
+    c_work_buf = get_cpu_var(castle_cache_compress_buf);
+
+    /* Sanity check stored offsets. */
+    BUG_ON(dirtytree->next_compr_off < dirtytree->next_compr_mutable_off);
+    BUG_ON(dirtytree->next_compr_mutable_off % C_BLK_SIZE);
+
+    while (1)
+    {
+        /* Stop compressing if c_flush_c2b containing end_off has been marked
+         * as dirty, allowing it to be flushed out to disk. */
+        if (unlikely(end_off && dirtytree->next_virt_mutable_off >= end_off))
+            break;
+
+        if (unlikely(!c_c2b))
+        {
+            /* Create flush and straddle c2bs, if they don't already exist. */
+            if (unlikely(create))
+            {
+                _c2_virtual_extent_compress_c2bs_get(dirtytree, create);
+                create = 0;
+            }
+
+            /* Initialise c_c2b, c_buf, c_rem. */
+            if (dirtytree->next_compr_off < dirtytree->c_strad_c2b->cep.offset)
+                c_c2b = dirtytree->c_flush_c2b;
+            else
+                c_c2b = dirtytree->c_strad_c2b;
+            c_buf  = c2b_buffer(c_c2b);
+            c_rem  = c_c2b->nr_pages << PAGE_SHIFT;
+            size   = dirtytree->next_compr_off - c_c2b->cep.offset;
+            c_buf += size;
+            c_rem -= size;
+            BUG_ON(c_rem < C_CHK_SIZE / 2);
+        }
+        BUG_ON(!c_buf);
+
+        /* Try and get a VIRTUAL compression-unit sized c2b. */
+        v_c2b = _c2_virtual_extent_compress_compr_unit_get(dirtytree, force);
+        if (unlikely(!v_c2b))
+        {
+            int didnt_flush;
+
+            /* No need to dirty any outstanding compressed data. */
+            if (!force)
+                break;
+
+            didnt_flush = _c2_virtual_extent_compress_force_dirty(dirtytree);
+            if (end_off && didnt_flush)
+            {
+                /* No compressed data was available to flush and we have not
+                 * yet compressed up to end_off (we would have exited at the
+                 * next_virt_mutable_off >= end_off test above). */
+                castle_printk(LOG_ERROR, "Failed to compress to end_off %lu.\n",
+                        end_off);
+                BUG();
+            }
+            BUG_ON(!COMPR_C2BS_EMPTY(dirtytree));
+
+            break; /* Flush/straddle c2bs destroyed on the way out. */
+        }
+
+        /* Take locks on c2bs and compress into COMPRESSED c2b.
+         *
+         * _c2_virtual_extent_compress_compr_unit_get() returned v_c2b with a
+         * read-lock taken, so don't try and get it again here. */
+        write_lock_c2b(c_c2b);
+        if (unlikely(!c2b_uptodate(c_c2b)))
+            update_c2b(c_c2b);
+        c_used = _c2_virtual_extent_compress_fill(v_c2b, c_buf, c_rem, c_work_buf);
+        BUG_ON(!c_used); /* must have occupied some space */
+        BUG_ON(c_used >= v_c2b->nr_pages << PAGE_SHIFT);
+        write_unlock_c2b(c_c2b);
+        read_unlock_c2b(v_c2b);
+
+        /* Set maps and update offsets. */
+        castle_compr_map_set(v_c2b->cep,
+                             CEP(c_c2b->cep.ext_id, dirtytree->next_compr_off),
+                             c_used);
+        c_buf                     += c_used;
+        c_rem                     -= c_used;
+        dirtytree->next_compr_off += c_used;
+
+        /* Rotate buffers, dirty compressed data. */
+        if (c_rem <= C_CHK_SIZE / 2)
+        {
+            if (c_c2b == dirtytree->c_strad_c2b)
+            {
+                /* When c_strad_c2b has <= half a chunk remaining we know that
+                 * the next write will be beyond the end offset of c_flush_c2b.
+                 * This means c_flush_c2b is full of compressed data. */
+                write_lock_c2b(dirtytree->c_flush_c2b);
+                dirty_c2b(dirtytree->c_flush_c2b);
+                write_unlock_c2b(dirtytree->c_flush_c2b);
+                dirtytree->next_compr_mutable_off = c2b_end_off(dirtytree->c_flush_c2b);
+                if (c_rem == C_CHK_SIZE / 2)
+                    dirtytree->next_virt_mutable_off = c2b_end_off(v_c2b);
+                else
+                    dirtytree->next_virt_mutable_off = dirtytree->next_virt_off;
+
+                /* Advance flush and straddle c2bs. */
+                _c2_virtual_extent_compress_c2bs_get(dirtytree, 0 /*create*/);
+            }
+
+            /* Force c_c2b, c_buf and c_rem to be recalculated. */
+            c_c2b = NULL;
+        }
+
+        /* Record start offset for next VIRTUAL compression unit c2b. */
+        dirtytree->next_virt_off = c2b_end_off(v_c2b);
+        put_c2b(v_c2b);
+
+        /* Stop compressing if we've compressed max_pgs. */
+        if (unlikely(max_pgs && compressed >= max_pgs))
+            break;
+    }
+
+    /* Destroy flush and straddle c2bs if they contain no data. */
+    if (COMPR_C2BS_EMPTY(dirtytree))
+    {
+        BUG_ON(dirtytree->next_virt_off != dirtytree->next_virt_mutable_off);
+        _c2_virtual_extent_compress_c2bs_put(dirtytree);
+    }
+
+    put_cpu_var(castle_cache_compress_buf);
+    mutex_unlock(&dirtytree->compr_mutex);
+
+out:
+    /* Inform caller how many (VIRTUAL) pages were compressed. */
+    if (compressed_p)
+        *compressed_p = compressed;
+}
+
 /**********************************************************************************************
  * Flush thread functions.
  */
@@ -5492,7 +6045,13 @@ static void castle_cache_extent_flush_endio(c2_block_t *c2b, int did_io)
     BUG_ON(!c2b_flushing(c2b));
     clear_c2b_flushing(c2b);
     read_unlock_c2b(c2b);
-    put_c2b(c2b);
+
+    /* Demote c2b if compressed, otherwise drop reference.  We can't destroy
+     * the compressed c2b here as it may result in vunmap(). @TODO */
+    if (c2b_compressed(c2b))
+        put_c2b_and_demote(c2b);
+    else
+        put_c2b(c2b);
 
     /* Decrementing outstanding IOs count and signal waiters. */
     BUG_ON(atomic_dec_return(in_flight) < 0);
@@ -5542,117 +6101,6 @@ static inline void __castle_cache_extent_flush_batch(c2_block_t         *c2b_bat
 }
 
 /**
- * Get compression unit-sized c2b starting at start_off, if one exists.
- *
- * A read-lock is taken on the c2b to be returned and all c2bs finishing in the
- * specified range are marked as clean.
- *
- * @param   dirtytree   Dirtytree to select c2bs from
- * @param   start_off   Starting offset for c2b to be returned
- * @param   force       TODO    Force-get c2b even if pages do not exist at the end
- */
-c2_block_t * __castle_cache_virtual_extent_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
-                                                          c_byte_off_t start_off,
-                                                          int force)
-{
-#define TRACK_C2BS      64      // @FIXME - 64KB/4KB = 16, overallocate by 4x
-    struct rb_node *parent;
-    c2_block_t *c2b = NULL, *ret_c2b = NULL;
-    c_byte_off_t end_off, seen_off;
-    c2_block_t *c2bs[TRACK_C2BS];
-    int c2bs_idx = 0;
-
-    /* Calculate inclusive end_off for compression unit c2b. */
-    BUG_ON(start_off % dirtytree->compr_unit_size);
-    end_off  = start_off + dirtytree->compr_unit_size - 1;
-    seen_off = start_off;
-
-    /* Verify c2bs with pages between start_off (inclusive) and end_off (inclusive)
-     * are immutable and all pages in the range are covered by at least one c2b. */
-    spin_lock_irq(&dirtytree->lock);
-    parent = rb_first(&dirtytree->rb_root);
-    while (parent)
-    {
-        c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
-
-        /* Skip c2bs are out of range. */
-        if (c2b_end_off(c2b) <= start_off)
-            continue;
-
-        /* Stop searching if c2b is mutable or starts beyond end_off. */
-        if (!c2b_immutable(c2b) || c2b->cep.offset > end_off)
-            break;
-
-        /* Update the offset we have seen up to. */
-        if (c2b_end_off(c2b) > seen_off)
-            seen_off = c2b_end_off(c2b);
-
-        /* If c2b ends in range, track it. */
-        if (c2b_end_off(c2b) <= end_off)
-        {
-            c2bs[c2bs_idx++] = c2b;
-            get_c2b(c2b);
-            BUG_ON(c2bs_idx >= TRACK_C2BS);
-        }
-
-        parent = rb_next(parent);
-    }
-    spin_unlock_irq(&dirtytree->lock);
-
-    BUG_ON(seen_off >= end_off && !c2b_immutable(c2b)); // TR lied to me
-
-    /* Generate compression unit c2b if we have a contiguous, immutable range or
-     * if we have been instructed to force-get a c2b, e.g. if we have reached
-     * the end of the extent. */
-    if (seen_off >= end_off || force)
-    {
-        c_ext_pos_t cep;
-
-        cep.ext_id = dirtytree->ext_id;
-        cep.offset = start_off;
-        ret_c2b = castle_cache_block_get(cep,
-                                         dirtytree->compr_unit_size >> PAGE_SHIFT,
-                                         MERGE_OUT);
-        BUG_ON(!c2b_uptodate(ret_c2b));
-        set_c2b_flushing(ret_c2b); // someone else may already be flushing
-        // @TODO set some c2b->state bits?
-
-        /* Because the c2bs are all immutable, only rebuild should ever hold
-         * write locks on the c2ps in ret_c2b.  Busy wait for them. */
-        while (!read_trylock_c2b(ret_c2b))
-            msleep(10);
-
-        /* Do funny things with those c2bs. */
-        for ( ; c2bs_idx > 0; c2bs_idx--)
-        {
-            c2b = c2bs[c2bs_idx];
-            put_c2b(c2b);
-            clean_c2b(c2b);
-        }
-    }
-
-    return ret_c2b;
-}
-
-USED static void __castle_cache_virtual_extent_flush(c2_ext_dirtytree_t *dirtytree,
-                                                c_byte_off_t        start_off,
-                                                c_byte_off_t        end_off,
-                                                int                 max_pgs,
-                                                c2b_end_io_t        end_io,
-                                                atomic_t           *in_flight_p,
-                                                int                *flushed_p,
-                                                int                 force)
-{
-    c2_block_t *c2b;
-
-    BUG_ON(1);
-
-    c2b = __castle_cache_virtual_extent_compr_unit_get(dirtytree,
-                                                       0 /*start_off*/,
-                                                       1 /*force*/);
-}
-
-/**
  * Submit async IO on max_pgs dirty pages from start of extent to end_off.
  *
  * @param dirtytree     [in]    Per-extent dirtytree to flush
@@ -5695,7 +6143,7 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     c2_block_t *c2b;
     struct rb_node *parent;
     c2_block_t *c2b_batch[CASTLE_CACHE_FLUSH_BATCH_SIZE];
-    int batch_idx, flushed = 0;
+    int compr_type, batch_idx, flushed = 0;
 
     /* Flush from the beginning of the extent to end_off.
      * If end_off is not specified, flush the entire extent. */
@@ -5706,21 +6154,18 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     if (max_pgs == 0)
         max_pgs = INT_MAX;
 
-#if 0
-    /* Use dedicated function if we are flushing a virtual extent. */
-    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+    /* TODO: The following code is temporary until we have a dedicated set
+     * of compression threads that will perform all compression on demand. */
+    compr_type = castle_compr_type_get(dirtytree->ext_id);
+    if (compr_type == C_COMPR_VIRTUAL)
     {
-        __castle_cache_virtual_extent_flush(dirtytree,
-                                            start_off,
-                                            end_off,
-                                            max_pgs,
-                                            end_io,
-                                            in_flight_p,
-                                            flushed_p,
-                                            waitlock);
+        c2_virtual_extent_compress(dirtytree,   /* dirtytree    */
+                                   0,           /* end_off      */
+                                   0,           /* max_pgs      */
+                                   waitlock,    /* force        */
+                                   NULL);       /* compressed_p */
         return;
     }
-#endif
 
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
@@ -5833,40 +6278,96 @@ next_c2b:
 
 /**
  * Synchronously flush dirty pages from beginning of extent to start+size.
- * Extent must exist, checked with a BUG_ON(!dirtytree).
- *
- * NOTE: start is currently ignored; we always flush from the beginning of
- *       the extent to start+size.
  *
  * @param ext_id    Extent to flush
  * @param start     Byte offset to flush from   (legacy, ignored)
  * @param size      Bytes to flush from start   (0 => whole extent)
  * @param ratelimit Ratelimit in KB/s           (0 => unlimited)
+ *
+ * If ext_id is for a VIRTUAL extent we will first compress the VIRTUAL extent
+ * data and then arrange for the COMPRESSED data to be flushed to disk.  This
+ * will occur in a synchronous fashion and by the time the function returns all
+ * requested data will have hit disk.  If consistency is guaranteed, the caller
+ * must issue a barrier read to ensure any (possibly overlapping) I/O that was
+ * dispatched as part of an earlier regular flush has made it to disk.
+ *
+ * NOTE: Extent must exist - checked with a BUG_ON(!dirtytree).
+ *
+ * NOTE: start is currently ignored; we always flush from the beginning of
+ *       the extent to start+size.
  */
 void castle_cache_extent_flush(c_ext_id_t ext_id,
-                               uint64_t start,
-                               uint64_t size,
+                               c_byte_off_t start_off,
+                               c_byte_off_t size,
                                unsigned int ratelimit)
 {
     atomic_t in_flight = ATOMIC(0);
     c2_ext_dirtytree_t *dirtytree;
     int batch, batch_period, io_time, flushed;
+    c_ext_id_t compr_ext_id;
     unsigned long io_start;
+    c_byte_off_t end_off = 0;
 
-    /* Get the dirtytree. */
-    dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
-    BUG_ON(!dirtytree);
-
-    /* Flush 8 MB at the time if there is a ratelimit. */
+    /* Perform calculations for ratelimiting and end_off. */
     batch = INT_MAX;
     batch_period = 0;
-    if(ratelimit != 0)
+    if (ratelimit != 0)
     {
         batch = 8 * 256;
         /* Work out how long it should take to flush each batch in order
            to achieve the specified rate. In msecs. */
         batch_period = (4 * 1000 * batch) / ratelimit;
     }
+    if (size)
+        end_off = start_off + size;
+
+    /* If we are trying to flush a VIRTUAL extent we need to compress first then
+     * arrange for a flush of the COMPRESSED extent. */
+    compr_ext_id = castle_compr_compressed_ext_id_get(ext_id);
+    if (!EXT_ID_INVAL(compr_ext_id))
+    {
+        c_byte_off_t orig_end_off = 0;
+        c_ext_pos_t virt_cep, comp_cep;
+
+        dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
+
+        compr_debug("dirtytree=%p compressing to end_off=%lu\n",
+                dirtytree, end_off);
+
+        c2_virtual_extent_compress(dirtytree,   /* dirtytree    */
+                                   end_off,     /* end_off      */
+                                   0,           /* max_pgs      */
+                                   1,           /* force        */
+                                   NULL);       /* compressed_p */
+
+        /* Make flush happen on compressed extent. */
+        virt_cep.ext_id = ext_id;
+
+        virt_cep.offset = start_off - (start_off % dirtytree->compr_unit_size);
+        castle_compr_map_get(virt_cep, &comp_cep);
+        start_off = comp_cep.offset;
+
+        if (end_off)
+        {
+            virt_cep.offset  = end_off - (end_off % dirtytree->compr_unit_size);
+            virt_cep.offset -= dirtytree->compr_unit_size;
+            orig_end_off = end_off;
+            end_off  = castle_compr_map_get(virt_cep, &comp_cep);
+            end_off += comp_cep.offset;
+        }
+        compr_debug("start_off=%lu end_off=%lu compr_end_off=%lu\n",
+                start_off, orig_end_off, end_off);
+
+        ext_id = compr_ext_id;
+
+        castle_extent_dirtytree_put(dirtytree);
+    }
+
+    BUG_ON(castle_compr_type_get(ext_id) == C_COMPR_VIRTUAL);
+
+    /* Get the dirtytree. */
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
+    BUG_ON(!dirtytree);
 
     /* Continue flushing batches for as long as there are dirty blocks
        in the specified range. */
@@ -5876,8 +6377,8 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
 
         /* Schedule flush of up to batch pages. */
         __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
-                                    start,                          /* start offset */
-                                    start + size - 1,               /* end offset   */
+                                    start_off,                      /* start_off    */
+                                    end_off,                        /* end_off      */
                                     batch,                          /* max_pgs      */
                                     castle_cache_extent_flush_endio,/* callback     */
                                     &in_flight,                     /* callback data*/
@@ -5906,29 +6407,118 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
 }
 
 /**
+ * Clean, unlock and destroy c2b_batch[nr_c2bs] c2bs.
+ */
+void castle_cache_extent_batch_evict(c2_block_t *c2b_batch[], int nr_c2bs)
+{
+    int i;
+
+    for (i = 0; i < nr_c2bs; i++)
+    {
+        c2_block_t *c2b;
+
+        c2b = c2b_batch[i];
+        clean_c2b(c2b, 1 /*clean_c2ps*/, 1 /*checklocked*/);
+        read_unlock_c2b(c2b);
+        BUG_ON(castle_cache_block_destroy(c2b));
+    }
+}
+
+/**
  * Evict dirty blocks for specified extent from the cache.
  *
  * @TODO Make this castle_cache_advise() functionality.
  *
- * @also _castle_extent_free()
+ * Current called by the extent code for one of the three operations:
+ *
+ * - Front truncate (start=old start, count=to new start)
+ *   Dirty c2bs may exist in the range.  However, for VIRTUAL extents the evict
+ *   will only occur once a valid map has been set beyond start, so there is no
+ *   need to adjust dirtytree->next_virt_off
+ *
+ * - End truncuate (start=new end, count=to old end)
+ *   No dirty c2bs should exist in the range being shrunk (prefetcher never
+ *   creates dirty c2bs)
+ *
+ * - Freeing an extent (whole active mask range)
+ *   Dirty c2bs could exist anywhere within the range
+ *
+ * @also castle_extent_free_range()
  */
 void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start, c_chk_cnt_t count)
 {
-    atomic_t in_flight = ATOMIC(0);
-    int flushed = 0;
+    c2_block_t *c2b_batch[CASTLE_CACHE_FLUSH_BATCH_SIZE];
+    struct rb_node *parent;
+    c_byte_off_t start_off, end_off;
+    int batch_idx = 0;
+    c2_block_t *c2b;
 
-    /* Schedule flush of up to batch pages. */
-    __castle_cache_extent_flush(dirtytree,                              /* dirtytree    */
-                                start * C_CHK_SIZE,                     /* start offset */
-                                (start + count) * C_CHK_SIZE  - 1,      /* end offset   */
-                                0,                                      /* max_pgs      */
-                                castle_cache_extent_flush_endio,        /* Callback     */
-                                &in_flight,                             /* Callback data*/
-                                &flushed,                               /* flushed_p    */
-                                1);                                     /* waitlock     */
+    start_off = (start) * C_CHK_SIZE;
+    end_off   = (start + count) * C_CHK_SIZE;
 
-    /* We shouldn't have scheduled any pages for I/O. */
-    BUG_ON(atomic_read(&in_flight));
+    spin_lock_irq(&dirtytree->lock);
+    parent = rb_first(&dirtytree->rb_root);
+    while (parent)
+    {
+        c2b = rb_entry(parent, c2_block_t, rb_dirtytree);
+
+        /* Skip c2bs before the start of the range. */
+        if (c2b->cep.offset < start_off)
+        {
+            BUG_ON(c2b_end_off(c2b) > start_off);
+            goto next_c2b;
+        }
+
+        /* Stop once we see c2bs starting beyond the range. */
+        if (c2b->cep.offset >= end_off)
+        {
+            debug("dirtytree=%p c2b=%p cep.offset=%lu > end_off=%lu\n",
+                    dirtytree, c2b, c2b->cep.offset, end_off);
+            break;
+        }
+
+        /* Skip c2b if it is already flushing. */
+        if (test_set_c2b_flushing(c2b))
+        {
+            debug("dirtytree=%p skipping c2b=%p, already flushing\n",
+                    dirtytree, c2b);
+            goto next_c2b;
+        }
+
+        /* Flush this c2b. */
+        read_lock_c2b(c2b);
+        get_c2b(c2b);
+        c2b_batch[batch_idx++] = c2b;
+
+        if (unlikely(batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE))
+        {
+            spin_unlock_irq(&dirtytree->lock);
+            castle_cache_extent_batch_evict(c2b_batch, batch_idx);
+            batch_idx = 0;
+            spin_lock_irq(&dirtytree->lock);
+            parent = rb_first(&dirtytree->rb_root);
+
+            continue;
+        }
+
+next_c2b:
+        parent = rb_next(parent);
+    }
+    spin_unlock_irq(&dirtytree->lock);
+
+    /* Flush any c2bs remaining in the batch. */
+    castle_cache_extent_batch_evict(c2b_batch, batch_idx);
+
+    if (castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL)
+    {
+        /* All c2bs in the eviction range have been destroyed but VIRTUAL
+         * extents may have data from the eviction range compressed but not yet
+         * dirtied.  If it exists, force flush it. */
+        mutex_lock(&dirtytree->compr_mutex);
+        _c2_virtual_extent_compress_force_dirty(dirtytree);
+        _c2_virtual_extent_compress_c2bs_put(dirtytree);
+        mutex_unlock(&dirtytree->compr_mutex);
+    }
 }
 
 /**
@@ -5973,7 +6563,13 @@ static void castle_cache_flush_endio(c2_block_t *c2b, int did_io)
     BUG_ON(!c2b_flushing(c2b));
     clear_c2b_flushing(c2b);
     read_unlock_c2b(c2b);
-    put_c2b(c2b);
+
+    /* Demote c2b if compressed, otherwise drop reference.  We can't destroy
+     * the compressed c2b here as it may result in vunmap(). @TODO */
+    if (c2b_compressed(c2b))
+        put_c2b_and_demote(c2b);
+    else
+        put_c2b(c2b);
 
     /* Decrementing outstanding IOs count and signal waiters. */
     BUG_ON(atomic_dec_return(data->in_flight) < 0);
@@ -6689,10 +7285,13 @@ int castle_mstores_pre_writeback(uint32_t version)
  *
  * @also castle_cache_extents_flush()
  */
-int castle_cache_extent_flush_schedule(c_ext_id_t ext_id, uint64_t start,
+int castle_cache_extent_flush_schedule(c_ext_id_t ext_id,
+                                       uint64_t start,
                                        uint64_t count)
 {
     struct castle_cache_flush_entry *entry;
+
+    BUG_ON(current != checkpoint_thread);
 
     entry = castle_alloc(sizeof(struct castle_cache_flush_entry));
     BUG_ON(!entry);
@@ -7194,7 +7793,7 @@ int castle_cache_init(void)
     if ((ret = castle_cache_hashes_init()))     goto err_out;
     if ((ret = castle_cache_freelists_init()))  goto err_out;
     if ((ret = castle_vmap_fast_map_init()))    goto err_out;
-    if ((ret = castle_cache_decompress_init())) goto err_out;
+    if ((ret = castle_cache_compr_init()))      goto err_out;
     if ((ret = castle_cache_threads_init()))    goto err_out;
 
     /* Initialise per-cpu vmap mutexes */
@@ -7258,7 +7857,7 @@ void castle_cache_fini(void)
     castle_cache_debug_fini();
     castle_cache_prefetch_fini();
     castle_cache_threads_fini();
-    castle_cache_decompress_fini();
+    castle_cache_compr_fini();
     castle_cache_hashes_fini();
     castle_vmap_fast_map_fini();
     castle_cache_freelists_fini();
