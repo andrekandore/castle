@@ -8421,6 +8421,7 @@ static void castle_component_tree_L1_add(struct castle_double_array *da,
 
     ct->data_age = atomic64_inc_return(&castle_next_tree_data_age);
     castle_component_tree_add(da, ct, NULL);
+    wake_up(&da->merge_waitq);
 }
 
 /**
