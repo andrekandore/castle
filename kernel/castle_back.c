@@ -3260,6 +3260,13 @@ static void castle_back_stream_in_start(void *data)
     struct castle_immut_tree_construct *constr;
     int err = 0;
 
+    if(!op->req.stream_in_start.entries_count)
+    {
+        error("castle_back: rejecting request for stream_in of 0 objects.\n");
+        err = -ECANCELED;
+        goto err0;
+    }
+
     /* Get a new stateful op to handle stream_in. */
     castle_back_stateful_op_get(conn,
                                 &stateful_op,
