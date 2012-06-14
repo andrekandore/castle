@@ -363,6 +363,7 @@ static USED char *castle_rda_type_str[] = {
     "SSD_ONLY_EXT",
     "NR_RDA_SPECS"
 };
+STATIC_BUG_ON(sizeof(castle_rda_type_str) != (sizeof(void *) * (NR_RDA_SPECS + 1)));
 
 /* Type of data stored within extent.
    NOTE: all extent types must be dealt with in castle_ext_flush_prio_get(), please modify
@@ -397,6 +398,7 @@ static USED char *castle_ext_type_str[] = {
     "EXT_T_BLOOM_FILTER",
     "EXT_T_INVALID"
 };
+STATIC_BUG_ON(sizeof(castle_ext_type_str) != (sizeof(void *) * (EXT_T_INVALID + 1)));
 
 /* This type determines the way, this extent has to be handled in case of Low Free-Space (LFS)
  * situation. */
@@ -415,6 +417,7 @@ static USED char *castle_lfs_vct_type_str[] = {
     "LFS_VCT_T_MERGE",
     "LFS_VCT_T_INVALID"
 };
+STATIC_BUG_ON(sizeof(castle_lfs_vct_type_str) != (sizeof(void *) * (LFS_VCT_T_INVALID + 1)));
 
 typedef void (*c_ext_event_callback_t) (void *data);
 
