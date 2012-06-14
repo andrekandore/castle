@@ -39,7 +39,7 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 /* Printk implementation used in the entire filesystem. */
 #define PRINTKS_PER_SEC_STEADY_STATE    5
 #define PRINTKS_IN_BURST                100
-#define PRINTK_BUFFER_MBS               10          /**< Size of printk ring buffer (in MB).    */
+#define PRINTK_BUFFER_MBS               20          /**< Size of printk ring buffer (in MB).    */
 #define PRINTK_BUFFER_SIZE              PRINTK_BUFFER_MBS*1024*1024 /**< Size of printk buffer. */
 /*#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                     \
                                                 HZ/PRINTKS_PER_SEC_STEADY_STATE,    \
