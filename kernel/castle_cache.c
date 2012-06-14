@@ -2503,26 +2503,7 @@ int submit_c2b_rda(int rw, c2_block_t *c2b)
     return _submit_c2b_rda(rw, c2b, NULL);
 }
 
-static int _submit_c2b_decompress(int rw, c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps);
-
-/**
- * Submit compressed c2b I/O.
- *
- * If the c2b belongs to a virtual extent, find the id of the corresponding compressed
- * extent and submit an appropriate request to that. Otherwise, simply pass through to
- * _submit_c2b_rda().
- */
-static int _submit_c2b_compressed(int rw, c2_block_t *c2b, int *submitted_c2ps)
-{
-    c_ext_id_t compr_ext_id = castle_compr_compressed_ext_id_get(c2b->cep.ext_id);
-
-    if (!EXT_ID_INVAL(compr_ext_id) && rw == READ)
-        return _submit_c2b_decompress(rw, c2b, compr_ext_id, submitted_c2ps);
-    else if (!EXT_ID_INVAL(compr_ext_id) && rw == WRITE)
-        BUG();                  /* we should never submit writes on virtual c2bs */
-    else
-        return _submit_c2b_rda(rw, c2b, submitted_c2ps);
-}
+static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps);
 
 /**
  * Submit asynchronous c2b I/O.
@@ -2536,6 +2517,8 @@ static int _submit_c2b_compressed(int rw, c2_block_t *c2b, int *submitted_c2ps)
  */
 int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
+    c_ext_id_t compr_ext_id;
+
     BUG_ON(!c2b->end_io);
     BUG_ON(EXT_POS_INVAL(c2b->cep));
     BUG_ON(atomic_read(&c2b->remaining));
@@ -2553,7 +2536,15 @@ int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
     /* Set in-flight bit on the block. */
     set_c2b_in_flight(c2b);
 
-    return _submit_c2b_compressed(rw, c2b, submitted_c2ps);
+    compr_ext_id = castle_compr_compressed_ext_id_get(c2b->cep.ext_id);
+    if (!EXT_ID_INVAL(compr_ext_id))
+    {
+        if (rw == READ)
+            return _submit_c2b_decompress(c2b, compr_ext_id, submitted_c2ps);
+        else
+            BUG();              /* we should never submit writes on virtual c2bs */
+    }
+    else return _submit_c2b_rda(rw, c2b, submitted_c2ps);
 }
 
 /**
@@ -2807,7 +2798,6 @@ static void decompress_c2b_endio(c2_block_t *compr_c2b, int async)
 /**
  * Submit compressed c2b I/O.
  *
- * @param   rw              [in]    READ or WRITE
  * @param   c2b             [in]    Block to perform I/O on
  * @param   compr_ext_id    [in]    Id of the corresponding compressed extent
  * @param   submitted_c2ps  [out]   Number of c2ps we issued I/O on
@@ -2815,7 +2805,7 @@ static void decompress_c2b_endio(c2_block_t *compr_c2b, int async)
  * Given a c2b belonging to a virtual extent, construct a c2b for the corresponding
  * compressed extent and submit that for I/O.
  */
-static int _submit_c2b_decompress(int rw, c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps)
+static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps)
 {
     c_ext_pos_t virt_cep = c2b->cep, compr_cep;
     c_byte_off_t virt_size = c2b->nr_pages * PAGE_SIZE, compr_size;
