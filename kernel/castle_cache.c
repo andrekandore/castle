@@ -2812,6 +2812,7 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     c_byte_off_t virt_base, virt_off, compr_base, compr_off;
     c_byte_off_t compr_block_size = castle_compr_block_size_get(compr_ext_id);
     c2_block_t *compr_c2b;
+    c2_partition_id_t compr_part;
 
     /* get extent mapping for the start of the c2b */
     virt_off = virt_cep.offset;
@@ -2836,9 +2837,16 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     compr_size += compr_cep.offset - compr_base;
     compr_size = roundup(compr_size, PAGE_SIZE);
 
+    /* decide on a partition for the compressed c2b */
+    for (compr_part = 0; compr_part < NR_CACHE_PARTITIONS; ++compr_part)
+        if (c2b_partition(c2b, compr_part))
+            break;
+    if (compr_part == NR_CACHE_PARTITIONS)
+        compr_part = USER;
+
     /* construct the compressed c2b */
     compr_cep.offset = compr_base;
-    compr_c2b = castle_cache_block_get(compr_cep, compr_size / PAGE_SIZE, USER /* TODO@LT */);
+    compr_c2b = castle_cache_block_get(compr_cep, compr_size / PAGE_SIZE, compr_part);
 
     /* schedule I/O on the compressed c2b, if necessary */
     if (c2b_uptodate(compr_c2b))
