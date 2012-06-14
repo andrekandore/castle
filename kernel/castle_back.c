@@ -3768,6 +3768,14 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     int rem_blocks_to_copy;
 
                     BUG_ON(kv_hdr.val_len > MEDIUM_OBJECT_LIMIT);
+                    if(!stateful_op->stream_in.expected_dataext_chunks)
+                    {
+                        castle_printk(LOG_ERROR, "%s::[op %llx] user requested 0 MO chunks on this op; giving up on value of size %llu bytes.\n",
+                            __FUNCTION__, stateful_op->token, kv_hdr.val_len);
+                        err = -EFBIG;
+                        goto err2;
+                    }
+
                     /* Allocate space for the new copy. */
                     BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
                     total_blocks = (kv_hdr.val_len - 1) / C_BLK_SIZE + 1;
