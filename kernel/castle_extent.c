@@ -1459,6 +1459,18 @@ void castle_extent_mark_live(c_ext_id_t ext_id, c_da_t da_id)
     }
 }
 
+static int castle_extent_compr_ext_check_alive(c_ext_t *ext, void *unused)
+{
+    if (!test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &ext->flags))
+        return 0;
+
+    /* Don't have associated virtual extent, freeing it. */
+    if (__castle_extents_hash_get(ext->linked_ext_id) == NULL)
+        castle_extent_free(ext->ext_id);
+
+    return 0;
+}
+
 /* Check if the extent is alive or not.
  * Extent is alive if it referenced by one of
  *  - Component Trees in a DA
@@ -1475,6 +1487,10 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
 
+    /* We already dealt with compressed extents in castle_extent_compr_ext_check_alive(). */
+    if (test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &ext->flags))
+        return 0;
+
     if (!test_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags))
     {
         castle_printk(LOG_INFO, "Found dead extent: %llu\n", ext->ext_id);
@@ -1486,6 +1502,9 @@ static int castle_extent_check_alive(c_ext_t *ext, void *unused)
 
 int castle_extents_restore(void)
 {
+    /* First deal with compressed extents, as we are guaranteed to see virtual extents. */
+    __castle_extents_hash_iterate(castle_extent_compr_ext_check_alive, NULL);
+
     __castle_extents_hash_iterate(castle_extent_check_alive, NULL);
     return 0;
 }
