@@ -6424,7 +6424,7 @@ void castle_cache_extent_batch_evict(c2_block_t *c2b_batch[], int nr_c2bs)
         c2b = c2b_batch[i];
         clean_c2b(c2b, 1 /*clean_c2ps*/, 1 /*checklocked*/);
         read_unlock_c2b(c2b);
-        BUG_ON(castle_cache_block_destroy(c2b));
+        castle_cache_block_destroy(c2b);
     }
 }
 
