@@ -311,6 +311,7 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_VERTREE_TDP_SET          45
 #define CASTLE_CTRL_STATE_QUERY              46
 #define CASTLE_CTRL_REBUILD_START            47
+#define CASTLE_CTRL_VERTREE_COMPR_SET        48
 
 
 
@@ -546,6 +547,12 @@ typedef struct castle_control_cmd_rebuild_start {
     int             ret;            /* OUT */
 } cctrl_cmd_rebuild_start_t;
 
+typedef struct castle_control_cmd_vertree_compr_set {
+    c_da_t          vertree_id;     /* IN */
+    int             enable;         /* IN */
+    int             ret;            /* OUT */
+} cctrl_cmd_vertree_compr_set_t;
+
 
 typedef struct castle_control_ioctl {
     uint16_t cmd;
@@ -601,6 +608,7 @@ typedef struct castle_control_ioctl {
         cctrl_cmd_vertree_tdp_set_t     vertree_tdp_set;
         cctrl_cmd_state_query_t         state_query;
         cctrl_cmd_rebuild_start_t       rebuild_start;
+        cctrl_cmd_vertree_compr_set_t   vertree_compr_set;
     };
 } cctrl_ioctl_t;
 
@@ -686,6 +694,8 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_STATE_QUERY, cctrl_ioctl_t),
     CASTLE_CTRL_REBUILD_START_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_REBUILD_START, cctrl_ioctl_t),
+    CASTLE_CTRL_VERTREE_COMPR_SET_IOCTL =
+        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_VERTREE_COMPR_SET, cctrl_ioctl_t),
 };
 
 /*

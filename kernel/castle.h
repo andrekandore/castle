@@ -2349,6 +2349,7 @@ typedef enum {
 #define CASTLE_DA_INSERTS_DISABLED          (3)     /**< Set when inserts are disabled.         */
 #define CASTLE_DA_INSERTS_BLOCKED_ON_MERGE  (4)
 #define CASTLE_DA_BACK_UP_ONGOING           (5)
+#define CASTLE_DA_COMPR_ENABLED             (6)     /**< Should future extents be compressed?   */
 
 #define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (0)
 

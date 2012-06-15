@@ -1073,6 +1073,10 @@ int castle_control_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
             ioctl.vertree_tdp_set.ret = castle_da_vertree_tdp_set(ioctl.vertree_tdp_set.vertree_id,
                                                                   ioctl.vertree_tdp_set.seconds);
             break;
+        case CASTLE_CTRL_VERTREE_COMPR_SET:
+            ioctl.vertree_compr_set.ret = castle_da_vertree_compr_set(ioctl.vertree_compr_set.vertree_id,
+                                                                      ioctl.vertree_compr_set.enable);
+            break;
 
 
         /* Golden Nugget. */

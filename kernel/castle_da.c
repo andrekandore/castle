@@ -3348,10 +3348,16 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
 {
     struct castle_double_array *da = lfs->da;
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
-    unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED;
+    unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED,
+                  compr_ext_flags;
 
     if (growable)
         growable_ext_flags |= CASTLE_EXT_FLAG_GROWABLE;
+    compr_ext_flags = growable_ext_flags;
+    if (!castle_da_versioning_check(da)
+            && test_bit(CASTLE_DA_COMPR_ENABLED, &da->flags))
+        /* Compressed extents if unversioned and DA compression bit set. */
+        compr_ext_flags |= CASTLE_EXT_FLAG_COMPR_COMPRESSED;
 
     /* da_lfs_ct functions are being used only by merge code. */
     BUG_ON(lfs->rwct);
@@ -3434,15 +3440,10 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     lfs->leafs_on_ssds = 1;
     if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
     {
-        unsigned long compr_ext_flags = growable_ext_flags;
-
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
         lfs->leafs_on_ssds = 0;
 
-        if (!castle_da_versioning_check(da))
-            /* If DA is unversioned, compress this shizzle. */
-            compr_ext_flags |= CASTLE_EXT_FLAG_COMPR_COMPRESSED;
         lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
                                                    da->id,
                                                    EXT_T_LEAF_NODES,
@@ -8306,6 +8307,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     da->root_version    = INVAL_VERSION;
     rwlock_init(&da->lock);
     da->flags           = 0;
+    set_bit(CASTLE_DA_COMPR_ENABLED, &da->flags);
     da->nr_trees        = 0;
     da->inc_backup.active_barrier_ct = INVAL_TREE;
     da->inc_backup.barrier_ct = NULL;
@@ -13191,6 +13193,31 @@ int castle_da_vertree_tdp_set(c_da_t da_id, uint64_t seconds)
     atomic64_set(&da->tombstone_discard_threshold_time_s, seconds);
     castle_printk(LOG_USERINFO, "Set tombstone discard period on da %u to %llu seconds\n",
             da_id, seconds);
+    return 0;
+}
+
+/**
+ * Enable or disable compressed extents for DA.
+ *
+ * Applies only to extents created after the function returns.
+ *
+ * Existing extents are not decompressed/compressed.
+ */
+int castle_da_vertree_compr_set(c_da_t da_id, int enable)
+{
+    struct castle_double_array *da = castle_da_hash_get(da_id);
+    if (da == NULL)
+    {
+        castle_printk(LOG_WARN, "Cannot %s compression on invalid DA: %u\n",
+                enable ? "enable" : "disable", da_id);
+        return -EINVAL;
+    }
+    if (enable)
+        set_bit(CASTLE_DA_COMPR_ENABLED, &da->flags);
+    else
+        clear_bit(CASTLE_DA_COMPR_ENABLED, &da->flags);
+    castle_printk(LOG_USERINFO, "%s compression on DA %u\n",
+            enable ? "Enabled" : "Disabled", da_id);
     return 0;
 }
 
