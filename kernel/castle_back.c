@@ -1812,6 +1812,10 @@ static void castle_back_iter_expire(struct castle_back_stateful_op *stateful_op)
 
     castle_object_iter_finish(stateful_op->iterator.iterator, -ETIMEDOUT);
 
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del_init(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
+
     spin_lock(&stateful_op->lock);
     castle_back_iter_cleanup(stateful_op); /* drops stateful_op->lock */
 }
@@ -1953,7 +1957,7 @@ void _castle_back_iter_start(void *private, int err)
 
 err:
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
     castle_attachment_put(attachment);
     /* See castle_back_iter_start() comment for why we reset curr_op. */
@@ -2098,7 +2102,7 @@ err4: stateful_op->curr_op = NULL; /* revert the abuse performed above */
       castle_free(end_key);
 err3: castle_free(start_key);
 err2: spin_lock(&stateful_op->attachment->sop_lock);
-      list_del(&stateful_op->attachment_list);
+      list_del_init(&stateful_op->attachment_list);
       spin_unlock(&stateful_op->attachment->sop_lock);
       castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
@@ -2743,9 +2747,6 @@ static void castle_back_iter_cleanup(struct castle_back_stateful_op *stateful_op
 
     castle_back_put_stateful_op(stateful_op->conn, stateful_op); /* drops stateful_op->lock */
 
-    spin_lock(&attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
-    spin_unlock(&attachment->sop_lock);
     castle_attachment_put(attachment);
 }
 
@@ -2771,6 +2772,10 @@ static void __castle_back_iter_finish(void *data)
             stateful_op2str(stateful_op), err);
 
     castle_back_reply(stateful_op->curr_op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+
+    spin_lock(&stateful_op->attachment->sop_lock);
+    list_del_init(&stateful_op->attachment_list);
+    spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
     stateful_op->curr_op = NULL;
@@ -2892,7 +2897,7 @@ static void castle_back_big_put_expire(struct castle_back_stateful_op *stateful_
     castle_free(stateful_op->replace.key);
 
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
@@ -2918,7 +2923,7 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
     castle_da_in_stream_complete(stateful_op->stream_in.da_stream, 1 /*abort*/);
 
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
@@ -2991,7 +2996,7 @@ static void castle_back_big_put_complete(struct castle_object_replace *replace, 
     debug("castle_back_big_put_complete err=%d\n", err);
 
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
@@ -3198,7 +3203,7 @@ static void castle_back_big_put(void *data)
     return;
 
 err2: spin_lock(&stateful_op->attachment->sop_lock);
-      list_del(&stateful_op->attachment_list);
+      list_del_init(&stateful_op->attachment_list);
       spin_unlock(&stateful_op->attachment->sop_lock);
       castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
@@ -3359,7 +3364,7 @@ static void castle_back_stream_in_start(void *data)
 
 err2:
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
     castle_attachment_put(attachment);
     stateful_op->attachment = NULL;
@@ -3586,7 +3591,7 @@ static void castle_back_timestamped_big_put(void *data)
     return;
 
 err2: spin_lock(&stateful_op->attachment->sop_lock);
-      list_del(&stateful_op->attachment_list);
+      list_del_init(&stateful_op->attachment_list);
       spin_unlock(&stateful_op->attachment->sop_lock);
       castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
@@ -3943,6 +3948,10 @@ static void castle_back_stream_in_continue(void *data)
             castle_da_in_stream_complete(stateful_op->stream_in.da_stream,
                     abort_stream);
 
+            spin_lock(&stateful_op->attachment->sop_lock);
+            list_del_init(&stateful_op->attachment_list);
+            spin_unlock(&stateful_op->attachment->sop_lock);
+
             spin_lock(&stateful_op->lock);
 
             castle_back_stateful_op_finish_all(stateful_op, 0);
@@ -3950,9 +3959,6 @@ static void castle_back_stream_in_continue(void *data)
             stateful_op->attachment = NULL;
             /* Will drop stateful_op->lock. */
             castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-            spin_lock(&attachment->sop_lock);
-            list_del(&stateful_op->attachment_list);
-            spin_unlock(&attachment->sop_lock);
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
             castle_attachment_put(attachment);
             break;
@@ -3985,7 +3991,7 @@ static void castle_back_big_get_expire(struct castle_back_stateful_op *stateful_
     stateful_op->pull.key = NULL;
 
     spin_lock(&stateful_op->attachment->sop_lock);
-    list_del(&stateful_op->attachment_list);
+    list_del_init(&stateful_op->attachment_list);
     spin_unlock(&stateful_op->attachment->sop_lock);
 
     spin_lock(&stateful_op->lock);
@@ -4075,7 +4081,7 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
         castle_free(pull->key);
 
         spin_lock(&attachment->sop_lock);
-        list_del(&stateful_op->attachment_list);
+        list_del_init(&stateful_op->attachment_list);
         spin_unlock(&attachment->sop_lock);
 
         spin_lock(&stateful_op->lock);
@@ -4156,7 +4162,7 @@ static void castle_back_big_get(void *data)
     return;
 
 err2: spin_lock(&stateful_op->attachment->sop_lock);
-      list_del(&stateful_op->attachment_list);
+      list_del_init(&stateful_op->attachment_list);
       spin_unlock(&stateful_op->attachment->sop_lock);
       castle_attachment_put(attachment);
       stateful_op->attachment = NULL;
