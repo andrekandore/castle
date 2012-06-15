@@ -549,7 +549,7 @@ typedef struct castle_control_cmd_rebuild_start {
 
 typedef struct castle_control_cmd_vertree_compr_set {
     c_da_t          vertree_id;     /* IN */
-    int             enable;         /* IN */
+    uint32_t        enable;         /* IN */
     int             ret;            /* OUT */
 } cctrl_cmd_vertree_compr_set_t;
 

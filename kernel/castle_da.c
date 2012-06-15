@@ -13203,7 +13203,7 @@ int castle_da_vertree_tdp_set(c_da_t da_id, uint64_t seconds)
  *
  * Existing extents are not decompressed/compressed.
  */
-int castle_da_vertree_compr_set(c_da_t da_id, int enable)
+int castle_da_vertree_compr_set(c_da_t da_id, uint32_t enable)
 {
     struct castle_double_array *da = castle_da_hash_get(da_id);
     if (da == NULL)
