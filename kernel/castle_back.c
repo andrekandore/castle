@@ -2162,7 +2162,7 @@ int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
         return err;
 #endif
 
-    /* Sanity check value in buffer and set val pointer or collection_id. */
+    /* Sanity check value in buffer and set val pointer. */
     if (kv_hdr.val_type == CASTLE_VALUE_TYPE_INVALID)
     {
         err = -EINVAL;
@@ -2185,10 +2185,7 @@ int castle_buffer_kvp_get(c_buf_consumer_t *buf_con,
         user_hdr->val = buf_con->buf + kv_hdr.val_off;
     }
     else if (kv_hdr.val_type == CASTLE_VALUE_TYPE_OUT_OF_LINE)
-    {
         user_hdr->val           = NULL;
-        user_hdr->collection_id = kv_hdr.collection_id;
-    }
     else
     {
         err = -EINVAL;
@@ -2372,7 +2369,7 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
     kv_hdr->key_off      = buf_con->cur_kv_off;
     memcpy(buf_con->buf + buf_con->cur_kv_off, key, key_len);
 
-    /* Copy value into buffer (or set collection_id). */
+    /* Copy value into buffer. */
     val_type = castle_back_buffer_cvt_type_to_user(*val);
     if (likely(val_len))
     {
@@ -2386,8 +2383,6 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
             val_type = CASTLE_VALUE_TYPE_INLINE;
         }
     }
-    else
-        kv_hdr->collection_id = collection_id;
 
     /* With the exception of iterators for incremental backup we will have
      * accumulated counters from all trees relevant to the requested range so

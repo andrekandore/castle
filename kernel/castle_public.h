@@ -1026,10 +1026,7 @@ typedef struct castle_buffer_user_key_value_header {
     c_vl_bkey_t            *key;
     uint8_t                 val_type;
     uint64_t                val_len;
-    union {
-        void               *val;
-        c_collection_id_t   collection_id;
-    };
+    void                   *val;
     castle_user_timestamp_t user_timestamp;
 } c_buf_user_kv_hdr_t;
 
@@ -1039,10 +1036,7 @@ typedef struct castle_buffer_user_key_value_header {
 typedef struct castle_buffer_key_value_header {
     /* align:   8 */
     /* offset:  0 */ uint32_t                key_off;       /**< Absolute offset of c_vl_bkey_t in buffer.  */
-    /*          4 */ union {
-                        uint32_t             val_off;       /**< Absolute offset of value in buffer.        */
-                        c_collection_id_t    collection_id; /**< Collection ID key belongs to.              */
-    };
+    /*          4 */ uint32_t                val_off;       /**< Absolute offset of value in buffer.        */
     /*          8 */ castle_user_timestamp_t user_timestamp;/**< User timestamp associated with key.        */
     /*         16 */ uint64_t                val_len;       /**< Length of value.                           */
     /*         24 */ uint8_t                 val_type;      /**< Value type.                                */
