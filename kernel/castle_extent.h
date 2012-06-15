@@ -206,6 +206,10 @@ int                 castle_extent_lfs_callback_add           (int               
 
 /* Compressed extents API. */
 
+#define C_COMPR_MAX_BLOCK_SIZE (64 * 1024)
+STATIC_BUG_ON((C_COMPR_MAX_BLOCK_SIZE & (C_COMPR_MAX_BLOCK_SIZE-1)) != 0);
+STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_MAX_BLOCK_SIZE != 0);
+
 enum {
     C_COMPR_COMPRESSED,     /**< On-disk compressed extent.         */
     C_COMPR_VIRTUAL,        /**< Virtual decompressed extent.       */

@@ -74,8 +74,9 @@
 #define debug_resize(_f, _a...)  (castle_printk(LOG_DEBUG, _f, ##_a))
 #endif
 
-#define C_COMPR_BLK_SZ (64 * 1024)
+#define C_COMPR_BLK_SZ C_COMPR_MAX_BLOCK_SIZE
 STATIC_BUG_ON((C_COMPR_BLK_SZ & (C_COMPR_BLK_SZ-1)) != 0); /* ensure it's a power of 2 */
+STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chunk size */
 
 #define MAP_IDX(_ext, _i, _j)       (((_ext)->k_factor * _i) + _j)
 #define CASTLE_EXTENTS_HASH_SIZE    100

@@ -484,9 +484,9 @@ static         DEFINE_SPINLOCK(castle_cache_decompress_lock);
 static               LIST_HEAD(castle_cache_decompress_list);
 static atomic_t                castle_cache_decompress_list_size;
 
-#define CASTLE_CACHE_COMPRESS_BUF_SIZE      (LZO1X_1_MEM_COMPRESS)
+#define CASTLE_CACHE_COMPRESS_BUF_SIZE      LZO1X_1_MEM_COMPRESS
 DEFINE_PER_CPU(unsigned char *, castle_cache_compress_buf);
-#define CASTLE_CACHE_DECOMPRESS_BUF_SIZE    (256 * 1024)
+#define CASTLE_CACHE_DECOMPRESS_BUF_SIZE    C_COMPR_MAX_BLOCK_SIZE
 DEFINE_PER_CPU(unsigned char *, castle_cache_decompress_buf);
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
