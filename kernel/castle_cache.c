@@ -6340,15 +6340,19 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
                                    1,           /* force        */
                                    NULL);       /* compressed_p */
 
-        /* Make flush happen on compressed extent. */
-        virt_cep.ext_id = ext_id;
-
-        virt_cep.offset = start_off - (start_off % dirtytree->compr_unit_size);
-        castle_compr_map_get(virt_cep, &comp_cep);
-        start_off = comp_cep.offset;
-
+        /* Continue to flush COMPRESSED extent.
+         *
+         * Only issue castle_compr_map_get() calls if offsets are supplied. */
+        if (start_off)
+        {
+            virt_cep.ext_id = ext_id;
+            virt_cep.offset = start_off - (start_off % dirtytree->compr_unit_size);
+            castle_compr_map_get(virt_cep, &comp_cep);
+            start_off = comp_cep.offset;
+        }
         if (end_off)
         {
+            virt_cep.ext_id  = ext_id;
             virt_cep.offset  = end_off - (end_off % dirtytree->compr_unit_size);
             virt_cep.offset -= dirtytree->compr_unit_size;
             orig_end_off = end_off;
