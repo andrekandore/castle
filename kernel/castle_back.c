@@ -3702,8 +3702,6 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     c_val_tup_t cvt;
     void *key;
 
-    CVT_INVALID_INIT(cvt);
-
     /* Basic init and checks. */
     BUG_ON(!stateful_op->attachment);
     da_stream  = stateful_op->stream_in.da_stream;
@@ -3738,6 +3736,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     /* Iterate over all key value pairs in the buffer. */
     for (kvp = 0; kvp < nr_keys; kvp++)
     {
+        CVT_INVALID_INIT(cvt);
         err = castle_buffer_kvp_get(&buf_con, kvp, &kv_hdr);
         if (err)
             goto err1;
