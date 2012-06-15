@@ -219,7 +219,7 @@ enum {
     CASTLE_DA_OPTS_NO_USER_TIMESTAMPING  = (1 << 0),        /**< Disable user timestamping. */
     CASTLE_DA_OPTS_NO_VERSIONING         = (1 << 1)         /**< Disable versioning.        */
 };
-#define CASTLE_DA_OPTS_DEFAULT (CASTLE_DA_OPTS_NONE)
+#define CASTLE_DA_OPTS_DEFAULT (CASTLE_DA_OPTS_NONE | CASTLE_DA_OPTS_NO_VERSIONING)
 
 /* Golden Nugget - Types */
 typedef uint64_t c_array_id_t;
