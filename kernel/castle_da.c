@@ -7265,6 +7265,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                                                  bytes_pad,
                                                  0,
                                                 &new_cep) < 0);
+                BUG_ON( (new_cep.offset + bytes_pad) % compr_block_size != 0);
                 c2b = castle_cache_block_get(new_cep, blocks_pad, MERGE_OUT);
                 write_lock_c2b(c2b);
                 update_c2b(c2b);
