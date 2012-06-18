@@ -2383,6 +2383,8 @@ static int castle_back_buffer_kvp_add(c_buf_constructor_t *buf_con,
             val_type = CASTLE_VALUE_TYPE_INLINE;
         }
     }
+    else
+        kv_hdr->val_off = 0;
 
     /* With the exception of iterators for incremental backup we will have
      * accumulated counters from all trees relevant to the requested range so
