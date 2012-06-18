@@ -26,6 +26,7 @@
 #include "castle_ring.h"
 #include "castle_systemtap.h"
 #include "castle_da.h"
+#include "castle_freespace.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
@@ -58,6 +59,14 @@ int                             castle_back_inited = 0;
 atomic_t                        castle_req_seq_id = ATOMIC_INIT(0); /**< Unique ID for tracing */
 
 struct castle_back_op;
+
+static int castle_stream_in_headroom_chunks = 200;
+module_param(castle_stream_in_headroom_chunks, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_stream_in_headroom_chunks, "Amount of space (in chunks) that must be free to allow a stream_in op to start");
+
+static int castle_stream_in_headroom_cts = 100;
+module_param(castle_stream_in_headroom_cts, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_stream_in_headroom_cts, "Upper bound on number of component trees that may exist to allow another stream_in op to start");
 
 #define CASTLE_BACK_CONN_INITIALISED_BIT    (0)
 #define CASTLE_BACK_CONN_INITIALISED_FLAG   (1 << CASTLE_BACK_CONN_INITIALISED_BIT)
@@ -3292,6 +3301,27 @@ static void castle_back_stream_in_start(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+
+    /* Check if it's safe to start another stream-in op */
+    if(castle_freespace_space_get() < castle_stream_in_headroom_chunks)
+    {
+        castle_printk(LOG_WARN,
+                "Cannot allow stream-in; running low on freespace (min req: %u chunks). Try again later.\n",
+                castle_stream_in_headroom_chunks);
+        castle_freespace_stats_print();
+        err = -EAGAIN;
+        goto err2;
+    }
+    if(attachment->col.da->nr_trees > castle_stream_in_headroom_cts)
+    {
+        castle_printk(LOG_WARN,
+                "Cannot allow stream-in; too many component trees in vertree %lu (max allowed: %u trees). Try again later.\n",
+                attachment->col.da->id,
+                castle_stream_in_headroom_cts);
+        err = -EAGAIN;
+        goto err2;
+    }
+
 
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_STREAM_IN_START;
