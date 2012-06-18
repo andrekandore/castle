@@ -3249,11 +3249,10 @@ static inline void __castle_cache_block_freelist_add(c2_block_t *c2b)
  * Get nr_pages of c2ps from the freelist.
  *
  * @param nr_pages  Number of pages to get from freelist
- * @param part_id   Cache partition to allocate from
  *
  * @also castle_cache_page_reservelist_get()
  */
-static c2_page_t** castle_cache_page_freelist_get(int nr_pages, c2_partition_id_t part_id)
+static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
 {
     struct list_head *lh, *lt;
     c2_page_t **c2ps;
@@ -3355,12 +3354,10 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
 /**
  * Get a c2b from the freelist.
  *
- * @param part_id   Cache partition to allocate from
- *
  * @return c2b from freelist.
  * @return NULL if the freelist is empty.
  */
-static c2_block_t* castle_cache_block_freelist_get(c2_partition_id_t part_id)
+static c2_block_t* castle_cache_block_freelist_get(void)
 {
     struct list_head *lh;
     c2_block_t *c2b = NULL;
@@ -3483,8 +3480,7 @@ static int castle_cache_pages_get(c_ext_pos_t cep,
 static void castle_cache_block_init(c2_block_t *c2b,
                                     c_ext_pos_t cep,
                                     c2_page_t **c2ps,
-                                    int nr_pages,
-                                    c2_partition_id_t part_id)
+                                    int nr_pages)
 {
     struct page *page;
     c_ext_pos_t dcep;
@@ -4280,7 +4276,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
          * If we are the flush thread and fail to get c2b/c2ps from the freelist
          * after a _freelist_grow then allocate from the reservelist. */
         do {
-            c2b = castle_cache_block_freelist_get(part_id);
+            c2b = castle_cache_block_freelist_get();
             if (unlikely(!c2b))
             {
                 castle_cache_block_freelist_grow(part_id);
@@ -4291,7 +4287,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             }
         } while (!c2b);
         do {
-            c2ps = castle_cache_page_freelist_get(nr_pages, part_id);
+            c2ps = castle_cache_page_freelist_get(nr_pages);
             if (unlikely(!c2ps))
             {
                 castle_cache_page_freelist_grow(nr_pages, part_id);
@@ -4304,7 +4300,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
 
         /* Initialise the buffer */
         debug("Initialising the c2b: %p\n", c2b);
-        castle_cache_block_init(c2b, cep, c2ps, nr_pages, part_id);
+        castle_cache_block_init(c2b, cep, c2ps, nr_pages);
         get_c2b(c2b);
         /* Try to insert into the hash, can fail if it is already there */
         debug("Trying to insert\n");
@@ -5456,7 +5452,6 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
  *
  * @param cep       Extent/offset to operate on/from
  * @param advise    Advice for the cache
- * @param part_id   Cache partition to (de)allocate from
  * @param chunks    Chunks to unpin from cep (for !(advise & C2_ADV_EXTENT))
  *
  * - If operating on an extent (advise & C2_ADV_EXTENT) manipulate cep and
