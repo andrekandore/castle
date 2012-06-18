@@ -105,7 +105,6 @@ STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chun
         (_ext)->ext_type                = (_me)->ext_type;                  \
         (_ext)->da_id                   = (_me)->da_id;                     \
         (_ext)->flags                  |= (_me)->flags;                     \
-        atomic64_set(&(_ext)->next_comp_byte, (_me)->next_comp_byte);       \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->ext_size     = (_me)->size;                      \
@@ -121,7 +120,6 @@ STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chun
         (_ext)->ext_type                = (_me)->ext_type;                  \
         (_ext)->da_id                   = (_me)->da_id;                     \
         (_ext)->flags                  |= (_me)->flags;                     \
-        atomic64_set(&(_ext)->next_comp_byte, (_me)->next_comp_byte);       \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;
 #endif
