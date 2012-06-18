@@ -3301,6 +3301,7 @@ static void castle_back_stream_in_start(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     /* Check if it's safe to start another stream-in op */
     if(castle_freespace_space_get() < castle_stream_in_headroom_chunks)
@@ -3327,7 +3328,6 @@ static void castle_back_stream_in_start(void *data)
     stateful_op->tag = CASTLE_RING_STREAM_IN_START;
     stateful_op->flags = op->req.flags;
     stateful_op->queued_size = 0;
-    castle_back_stateful_op_attach(stateful_op, attachment);
 
     stateful_op->stream_in.collection_id
                                     = op->req.stream_in_start.collection_id;
