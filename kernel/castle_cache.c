@@ -5116,11 +5116,24 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
                                c2_partition_id_t part_id,
                                int chunks)
 {
+    c2_ext_dirtytree_t *dirtytree;
+    c_chk_cnt_t end_chk;
     c2_block_t *c2b;
 
     BUG_ON(cep.offset % BLKS_PER_CHK != 0);
 
-    while (chunks > 0)
+    /* Calculate the chunk we must stop prefetching at.
+     *
+     * For VIRTUAL extents we can prefetch no further than the last complete
+     * chunk, which is why we round down the next available offset. */
+    end_chk   = castle_extent_size_get(cep.ext_id);
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(cep.ext_id);
+    BUG_ON(!dirtytree);
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+        end_chk = min(end_chk, (c_chk_cnt_t) CHUNK(dirtytree->next_compr_off));
+    castle_extent_dirtytree_put(dirtytree);
+
+    while (chunks && CHUNK(cep.offset) < end_chk)
     {
         /* Get block, lock it and update offset. */
         c2b = castle_cache_block_get(cep, BLKS_PER_CHK, part_id);
