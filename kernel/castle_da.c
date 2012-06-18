@@ -7377,12 +7377,11 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                     active_node->btree_level = i;
                     active_node->size_blocks = castle_immut_tree_node_size_get(merge->out_tree_constr, i);
                     BUG_ON(node->size != active_node->size_blocks);
-                    castle_printk(LOG_DEVEL, "%s::[merge %u] copying %lu blocks for level %u node at %p (node->used:%u).\n",
+                    castle_printk(LOG_DEBUG, "%s::[merge %u, btree lvl %u] copying %lu blocks (node->used:%u).\n",
                             __FUNCTION__,
                             merge->id,
-                            active_node->size_blocks,
                             i,
-                            active_node,
+                            active_node->size_blocks,
                             node->used);
                     memcpy(active_node->payload, node, active_node->size_blocks * C_BLK_SIZE);
                 }
@@ -7494,7 +7493,18 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
     merge->out_tree_constr->last_key=NULL;
     for(i=0; i<MAX_BTREE_DEPTH; i++)
     {
+        struct castle_active_btree_node_entry *node_entry = NULL;
         struct castle_immut_tree_level *level = merge->out_tree_constr->levels + i;
+
+        if (merge->serdes.live.active_node[i].in_use)
+        {
+            BUG_ON(EXT_POS_INVAL(merge_mstore->levels[i].node_c2b_cep));
+            /* If this is an unversioned DA we would never see a serialised leaf node */
+            BUG_ON( (i==0) && !castle_da_versioning_check(da));
+            node_entry = merge->serdes.live.active_node[i].node_state;
+            castle_printk(LOG_INFO, "%s::[merge %u, btree lvl %u] recovered node_entry\n",
+                __FUNCTION__, merge->id, i);
+        }
 
         BUG_ON(level->node_c2b); /* Initialising merge - this should always be NULL */
         level->node_c2b      = NULL;
@@ -7513,9 +7523,16 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
             c_ver_t      dummy_v;
             c_val_tup_t  dummy_cvt;
 
+            castle_printk(LOG_INFO, "%s::[merge %u, btree lvl %u] got node c2b\n",
+                __FUNCTION__, merge->id, i);
+
             /* For a non-versioned DA, we only checkpoint on new node boundaries, which means we
                would never expect to recover an in-progress leaf btree node. */
-            BUG_ON(!castle_da_versioning_check(da) && (i == 0));
+            if(!castle_da_versioning_check(da))
+            {
+                BUG_ON(i==0);
+                BUG_ON(!node_entry);
+            }
 
             castle_printk(LOG_DEBUG, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
                     __FUNCTION__, merge, da->id, level,
@@ -7556,6 +7573,14 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
                     merge->out_tree_constr->btree->entries_drop(node, drop_start, drop_end);
                 }
             }
+
+            if(memcmp(node, node_entry->payload, node_entry->size_blocks * C_BLK_SIZE))
+            {
+                castle_printk(LOG_WARN, "%s::[merge %u, node lvl %u] fixing node discrepeancy\n",
+                    __FUNCTION__, merge->id, i);
+                memcpy(node, node_entry->payload, node_entry->size_blocks * C_BLK_SIZE);
+            }
+
             /* recover last key */
             if(node->used)
             {
@@ -10096,7 +10121,9 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
 }
 
 /**
- * Recover internal btree nodes directly from mstore
+ * Recover internal btree nodes directly from mstore; load them into the live
+ * merge serdes structure, and let merge_struct_deser complete the job by
+ * overwriting the nodes in the ct.
  */
 static int castle_da_merge_deser_mstore_outtree_int_nodes_recover(void)
 {
@@ -10105,10 +10132,11 @@ static int castle_da_merge_deser_mstore_outtree_int_nodes_recover(void)
     struct castle_active_btree_node_entry *entry = NULL;
     size_t node_size = max(SSD_RO_TREE_INTERNAL_NODE_SIZE,
             HDD_RO_TREE_INTERNAL_NODE_SIZE);
+
     entry = castle_alloc(DMSER_NODE_ENTRY_SIZE_BYTES(node_size));
     if(!entry)
     {
-        castle_printk(LOG_ERROR, "%s:: castle_alloc fail\n", __FUNCTION__);
+        castle_printk(LOG_ERROR, "%s:: castle_alloc fail -- this early, it's not tolerable.\n", __FUNCTION__);
         BUG();
     }
 
@@ -10133,12 +10161,23 @@ static int castle_da_merge_deser_mstore_outtree_int_nodes_recover(void)
         BUG_ON(entry->merge_id != merge->id);
         BUG_ON(!merge);
         BUG_ON(entry->size_blocks != castle_immut_tree_node_size_get(merge->out_tree_constr, entry->btree_level));
+        /* If the DA is not being versioned now, then it must not have been versioned before, in
+           which case we would only have marshalled the merge on new node boundaries, and therefore
+           would never have seen an active leaf node. */
+        BUG_ON( (entry->btree_level == 0) && !castle_da_versioning_check(merge->da) );
 
         btree_node = (struct castle_btree_node *)entry->payload;
         BUG_ON(btree_node->magic != BTREE_NODE_MAGIC);
 
-        castle_printk(LOG_DEVEL, "%s::[merge %u] recovering %lu block level %u node from mstore.\n",
+        castle_printk(LOG_UNLIMITED, "%s::[merge %u] recovering %lu block level %u node from mstore.\n",
             __FUNCTION__, merge->id, entry->size_blocks, entry->btree_level);
+
+        /* set up serdes recovery package. */
+        BUG_ON(merge->serdes.live.active_node[entry->btree_level].in_use);
+        merge->serdes.live.active_node[entry->btree_level].in_use = 1;
+        BUG_ON(!merge->serdes.live.active_node[entry->btree_level].node_state);
+        memcpy(merge->serdes.live.active_node[entry->btree_level].node_state,
+            entry, entry_size);
     }
     BUG_ON(ret);
 out:

@@ -3310,7 +3310,7 @@ static void castle_back_stream_in_start(void *data)
 
     tree_ext_size     = castle_back_stream_in_tree_ext_size_wc_estimate(stateful_op);
     internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
-    internal_ext_size = tree_ext_size;
+    internal_ext_size = tree_ext_size; /* TODO@tr get rid of this! */
 
     castle_printk(LOG_DEBUG, "%s:: stream_in op on cpu %u, expected_entries: %lld, "
                 "expected_dataext_chunks: %ld, stateful_op:%p\n",
