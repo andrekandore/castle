@@ -654,7 +654,7 @@ static void _castle_back_stateful_op_timeout_check(void *data)
     struct castle_back_stateful_op *stateful_ops = conn->stateful_ops;
     uint32_t i;
 
-    debug("_castle_back_stateful_op_timeout_check for conn = %p\n", conn);
+    debug("%s::conn = %p\n", __FUNCTION__, conn);
 
     for (i = 0; i < MAX_STATEFUL_OPS; i++)
     {
@@ -667,7 +667,7 @@ static void _castle_back_stateful_op_timeout_check(void *data)
                 jiffies - stateful_ops[i].last_used_jiffies > STATEFUL_OP_TIMEOUT &&
                 !stateful_ops[i].expiring)
         {
-            castle_printk(LOG_INFO, "stateful_op index %u, token %u has expired.\n",
+            castle_printk(LOG_WARN, "stateful_op index %u, token %u has expired.\n",
                     i, stateful_ops[i].token);
             /*
              * We may have already queued up this stateful_op to expire. Be sure to not
@@ -3346,7 +3346,6 @@ static void castle_back_stream_in_start(void *data)
     spin_lock(&stateful_op->lock);
     stateful_op->stream_in.da_stream = constr;
     castle_back_stateful_op_enable_expire(stateful_op);
-    //castle_back_stateful_op_disable_expire(stateful_op);
     spin_unlock(&stateful_op->lock);
 
     /* stream_in_start is the first op, but we already finished it now. */
@@ -3425,7 +3424,6 @@ static void castle_back_stream_in_next(void *data)
     /* Go through Q and handle ops. */
     castle_back_stateful_call_queued(stateful_op);
 
-    //castle_back_stateful_op_disable_expire(stateful_op);
     spin_unlock(&stateful_op->lock);
 
     /* To prevent #3144. */
@@ -3457,6 +3455,7 @@ static void castle_back_stream_in_finish(void *data)
         castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
         goto err0;
     }
+    castle_printk(LOG_INFO, "%s::stateful op %llx\n", __FUNCTION__, stateful_op->token);
     /*
      * Put this op on the queue for the stream_in
      */
@@ -3920,18 +3919,19 @@ static void castle_back_stream_in_continue(void *data)
         case CASTLE_RING_STREAM_IN_NEXT:
             spin_unlock(&stateful_op->lock);
             if ((ret = castle_back_stream_in_buf_process(stateful_op)))
-                castle_printk(LOG_ERROR, "%s::stateful op %llu failed with error code %d.\n",
+                castle_printk(LOG_ERROR, "%s::stateful op %llx failed with error code %d.\n",
                         __FUNCTION__, stateful_op->token, ret);
             spin_lock(&stateful_op->lock);
             castle_back_buffer_put(stateful_op->conn, op->buf);
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
             stateful_op->curr_op = NULL;
+            castle_back_stateful_op_enable_expire(stateful_op);
             spin_unlock(&stateful_op->lock);
             break;
         case CASTLE_RING_STREAM_IN_FINISH:
             abort_stream = stateful_op->curr_op->req.stream_in_finish.abort;
 
-            castle_printk(LOG_USERINFO, "%s::finishing stream in for token %u, abort=%u\n",
+            castle_printk(LOG_USERINFO, "%s::finishing stream in for op %llx, abort=%u\n",
                     __FUNCTION__,
                     stateful_op->token,
                     abort_stream);
