@@ -7377,7 +7377,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                     active_node->btree_level = i;
                     active_node->size_blocks = castle_immut_tree_node_size_get(merge->out_tree_constr, i);
                     BUG_ON(node->size != active_node->size_blocks);
-                    castle_printk(LOG_DEBUG, "%s::[merge %u, btree lvl %u] copying %lu blocks (node->used:%u).\n",
+                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %lu blocks (node->used:%u).\n",
                             __FUNCTION__,
                             merge->id,
                             i,
