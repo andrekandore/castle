@@ -3270,6 +3270,7 @@ static void castle_back_stream_in_start(void *data)
     struct castle_attachment *attachment;
     struct castle_immut_tree_construct *constr;
     int err = 0;
+    int col_da_nr_trees;
 
     if(!op->req.stream_in_start.entries_count)
     {
@@ -3313,10 +3314,12 @@ static void castle_back_stream_in_start(void *data)
         err = -EAGAIN;
         goto err2;
     }
-    if(attachment->col.da->nr_trees > castle_stream_in_headroom_cts)
+    col_da_nr_trees = attachment->col.da->nr_trees;
+    if(col_da_nr_trees >= castle_stream_in_headroom_cts)
     {
         castle_printk(LOG_WARN,
-                "Cannot allow stream-in; too many component trees in vertree %lu (max allowed: %u trees). Try again later.\n",
+                "Cannot allow stream-in; %u component trees in vertree %lu (max allowed: %u trees). Try again later.\n",
+                col_da_nr_trees,
                 attachment->col.da->id,
                 castle_stream_in_headroom_cts);
         err = -EAGAIN;
