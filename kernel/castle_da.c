@@ -3878,10 +3878,10 @@ static int castle_immut_tree_space_alloc(struct castle_immut_tree_construct *tre
                                          c_byte_off_t                        bloom_size,
                                          struct castle_da_lfs_ct_t          *lfs,
                                          c_ext_event_callback_t              lfs_callback,
-                                         void                               *lfs_data)
+                                         void                               *lfs_data,
+                                         int                                 growable)
 {
     struct castle_component_tree *ct = tree_constr->tree;
-    const int growable = tree_constr->checkpointable;
     int ret;
 
     BUG_ON(!EXT_ID_INVAL(ct->internal_ext_free.ext_id) ||
@@ -4002,7 +4002,8 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
                                         tree_size,
                                         data_size,
                                         bloom_size,
-                                        lfs, lfs_callback, lfs_data);
+                                        lfs, lfs_callback, lfs_data,
+                                        merge->out_tree_constr->checkpointable);
     if (ret)
     {
         if (!RES_POOL_INVAL(merge->pool_id))
@@ -13391,7 +13392,8 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                         tree_ext_size * C_CHK_SIZE,
                                         data_ext_size * C_CHK_SIZE,
                                         item_count,
-                                        &lfs, NULL, NULL);
+                                        &lfs, NULL, NULL,
+                                        1 /* growable */);
 
     if (ret)
     {
@@ -13483,6 +13485,14 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
     {
         castle_printk(LOG_ERROR, "Stream-in keys should be in increasing order.\n");
         return -EINVAL;
+    }
+
+    if(castle_da_immut_tree_constr_space_reserve(constr, cvt, CVT_MEDIUM_OBJECT(cvt)))
+    {
+        castle_printk(LOG_ERROR,
+                "%s::failed to obtain freespace; suggest complete current streams, wait, then retry.\n",
+                __FUNCTION__);
+        return -ENOSPC;
     }
 
     constr->is_new_key = is_new_key;
