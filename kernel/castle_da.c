@@ -13466,6 +13466,9 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     castle_da_cts_proxy_invalidate(da);
 
     CASTLE_TRANSACTION_END;
+
+    /* Notify the world that a new tree is born */
+    castle_events_new_tree_added(constr->tree->seq, constr->tree->da->id);
 }
 
 int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
