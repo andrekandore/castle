@@ -25,7 +25,7 @@ struct castle_da_merge_mstore_package {
     atomic_t                                   state;
 };
 /* This macro to only serialise internal nodes to mstore: */
-#define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) ((_lvl)>1)
+#define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) ((_lvl)>=1)
 /* This macro to serialise all active leaf nodes to mstore (incl. leaf nodes) */
 //#define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) (1)
 
