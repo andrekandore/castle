@@ -5590,19 +5590,17 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         merge->in_tree_shrinkable_cep[i] = INVAL_EXT_POS;
 }
 
-static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tup_t cvt)
+static int castle_da_immut_tree_constr_space_reserve(struct castle_immut_tree_construct *constr,
+                                                     c_val_tup_t cvt,
+                                                     int grow_data_extent_if_needed)
 {
-    struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_component_tree *out_tree = constr->tree;
     c_byte_off_t space_needed;
     int ret = 0;
 
-    /* If the tree can't be checkpointable, it can't be partially merged. */
-    if (!MERGE_CHECKPOINTABLE(merge))
-        return 0;
-
     /* Always make sure we have enough space available in the extent for next leaf node. */
     /* Need space for one leaf node. */
-    space_needed = castle_immut_tree_node_size_get(merge->out_tree_constr, 0) * C_BLK_SIZE;
+    space_needed = castle_immut_tree_node_size_get(constr, 0) * C_BLK_SIZE;
 
     /* This functions checks whether we got enough space, if not grows the extent. */
     ret = castle_da_merge_extent_grow(&out_tree->tree_ext_free,
@@ -5610,14 +5608,12 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                       MERGE_OUTPUT_TREE_GROWTH_RATE);
     if (ret)
     {
-        castle_printk(LOG_USERINFO, "Failed to grow the tree extent %llu for merge: %u\n",
-                                     out_tree->tree_ext_free.ext_id, merge->id);
+        castle_printk(LOG_USERINFO, "Failed to grow the tree extent %llu\n",
+                                     out_tree->tree_ext_free.ext_id);
         return ret;
     }
 
-    /* If not a medium object or if this extent nor marked to drain, nothing else to be
-     * done, just return. */
-    if ( !CVT_MEDIUM_OBJECT(cvt) || (castle_data_ext_should_drain(cvt.cep.ext_id, merge) == -1) )
+    if ( !CVT_MEDIUM_OBJECT(cvt) || !grow_data_extent_if_needed )
         return 0;
 
     /* Calculate space needed for the medium object. 4K aligned. */
@@ -5629,8 +5625,8 @@ static int castle_da_merge_space_reserve(struct castle_da_merge *merge, c_val_tu
                                       MERGE_OUTPUT_DATA_GROWTH_RATE);
     if (ret)
     {
-        castle_printk(LOG_USERINFO, "Failed to grow data extent %llu for merge: %u\n",
-                                     out_tree->data_ext_free.ext_id, merge->id);
+        castle_printk(LOG_USERINFO, "Failed to grow data extent %llu\n",
+                                     out_tree->data_ext_free.ext_id);
         return ret;
     }
 
@@ -5769,7 +5765,10 @@ static int castle_da_entry_do(struct castle_da_merge *merge,
         castle_da_merge_serialise(merge, 0 /* not using tvr */, 69 /* whatever... */);
 
     /* Make sure we got enough space for the entry_add() current cvt to be success. */
-    while (castle_da_merge_space_reserve(merge, cvt))
+    while (MERGE_CHECKPOINTABLE(merge) &&
+            castle_da_immut_tree_constr_space_reserve(merge->out_tree_constr,
+                cvt,
+                (castle_data_ext_should_drain(cvt.cep.ext_id, merge) != -1)) )
     {
         /* On exit, just return error code -ESHUTDOWN. */
         if (castle_da_exiting)
