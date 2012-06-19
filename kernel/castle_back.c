@@ -3782,6 +3782,18 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         btree->key_print(LOG_DEVEL, key);
 #endif
 
+        /* Make room for the new entry... */
+        if(castle_da_immut_tree_extent_grow(&da_stream->tree->tree_ext_free,
+                castle_immut_tree_node_size_get(da_stream, 0) * C_BLK_SIZE,
+                MERGE_OUTPUT_TREE_GROWTH_RATE))
+        {
+            castle_printk(LOG_ERROR,
+                    "%s::[op %llx] failed to obtain freespace on tree extent; suggest complete current streams, wait, then retry.\n",
+                    __FUNCTION__, stateful_op->token);
+            err = -ENOSPC;
+            goto err2;
+        }
+
         /* Construct the CVT. */
         switch (kv_hdr.val_type)
         {
@@ -3815,6 +3827,35 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     ext_space_needed = total_blocks * C_BLK_SIZE;
                     debug("%s::total_blocks = %u, ext_space_needed = %lu\n",
                         __FUNCTION__, total_blocks, ext_space_needed);
+
+                    /* Make room for the new medium-sized value... */
+                    if (castle_ext_freespace_available(&da_stream->tree->data_ext_free) < total_blocks*C_BLK_SIZE)
+                    {
+                        /* Growth necessary */
+                        if( CHUNK(da_stream->tree->data_ext_free.ext_size +
+                                (MERGE_OUTPUT_DATA_GROWTH_RATE * C_BLK_SIZE)) >
+                                        stateful_op->stream_in.expected_dataext_chunks )
+                        {
+                            /* Growth will exceed allocation */
+                            castle_printk(LOG_ERROR,
+                                    "%s::[op %llx] exhausted stream_in mo_chunk allocation; suggest complete current stream then retry.\n",
+                                    __FUNCTION__, stateful_op->token);
+                            err = -ENOSPC;
+                            goto err2;
+                        }
+
+                        if(castle_da_immut_tree_extent_grow(&da_stream->tree->data_ext_free,
+                                total_blocks * C_BLK_SIZE,
+                                MERGE_OUTPUT_DATA_GROWTH_RATE))
+                        {
+                            /* Growth failed because running low on freespace */
+                            castle_printk(LOG_ERROR,
+                                    "%s::[op %llx] failed to obtain freespace on data extent; suggest complete current streams, wait, then retry.\n",
+                                    __FUNCTION__, stateful_op->token);
+                            err = -ENOSPC;
+                            goto err2;
+                        }
+                    }
                     if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
                                                         ext_space_needed,
                                                         0, /* was_preallocated */
@@ -3883,8 +3924,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                         val_ptr += bytes_to_copy;
                         rem_bytes_to_copy -= bytes_to_copy;
                         rem_blocks_to_copy -= blocks_to_copy;
-                    }
-                }
+                    }//while (rem_bytes_to_copy)
+                } //copy into data extent
                 break;
             case CASTLE_VALUE_TYPE_COUNTER:
                 CVT_COUNTER_SET_INIT(cvt, kv_hdr.val_len, kv_hdr.val);
@@ -3905,6 +3946,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                 break;
         }
         cvt.user_timestamp = kv_hdr.user_timestamp;
+
 
         BUG_ON(CVT_INVALID(cvt) && (kv_hdr.val_type != CASTLE_VALUE_TYPE_OUT_OF_LINE));
         if (!CVT_INVALID(cvt) &&

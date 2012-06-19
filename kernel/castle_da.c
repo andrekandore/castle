@@ -4028,9 +4028,9 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
  * This function wouldn't increase the count of used bytes. If grow fails, just respond back
  * as failure. Doesn't block on low freespace.
  */
-static int castle_da_merge_extent_grow(c_ext_free_t     *ext_free,
-                                       uint64_t          space_needed_bytes,
-                                       int               growth_rate_chunks)
+int castle_da_immut_tree_extent_grow(c_ext_free_t     *ext_free,
+                                     uint64_t          space_needed_bytes,
+                                     int               growth_rate_chunks)
 {
     debug("%s:: ext %llu, bytes currently allocated: %llu, bytes used: %llu; bytes needed %llu\n",
             __FUNCTION__,
@@ -5604,7 +5604,7 @@ static int castle_da_immut_tree_constr_space_reserve(struct castle_immut_tree_co
     space_needed = castle_immut_tree_node_size_get(constr, 0) * C_BLK_SIZE;
 
     /* This functions checks whether we got enough space, if not grows the extent. */
-    ret = castle_da_merge_extent_grow(&out_tree->tree_ext_free,
+    ret = castle_da_immut_tree_extent_grow(&out_tree->tree_ext_free,
                                       space_needed,
                                       MERGE_OUTPUT_TREE_GROWTH_RATE);
     if (ret)
@@ -5621,7 +5621,7 @@ static int castle_da_immut_tree_constr_space_reserve(struct castle_immut_tree_co
     space_needed = ((cvt.length - 1) / C_BLK_SIZE + 1) * C_BLK_SIZE;
 
     /* Grow data extent. */
-    ret = castle_da_merge_extent_grow(&out_tree->data_ext_free,
+    ret = castle_da_immut_tree_extent_grow(&out_tree->data_ext_free,
                                       space_needed,
                                       MERGE_OUTPUT_DATA_GROWTH_RATE);
     if (ret)
@@ -13485,14 +13485,6 @@ int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
     {
         castle_printk(LOG_ERROR, "Stream-in keys should be in increasing order.\n");
         return -EINVAL;
-    }
-
-    if(castle_da_immut_tree_constr_space_reserve(constr, cvt, CVT_MEDIUM_OBJECT(cvt)))
-    {
-        castle_printk(LOG_ERROR,
-                "%s::failed to obtain freespace; suggest complete current streams, wait, then retry.\n",
-                __FUNCTION__);
-        return -ENOSPC;
     }
 
     constr->is_new_key = is_new_key;

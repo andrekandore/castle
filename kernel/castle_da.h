@@ -313,8 +313,8 @@ int  castle_tree_size_stats_update      (void                            *key,
                                          c_val_tup_t                     *cvt_p,
                                          struct castle_component_tree    *ct,
                                          int                              op);
-uint16_t castle_da_merge_node_size_get(struct castle_da_merge *merge,
-                                              uint8_t level);
+uint16_t castle_immut_tree_node_size_get(struct castle_immut_tree_construct *tree_constr,
+                                         uint8_t level);
 castle_user_timestamp_t castle_da_min_ts_cts_exclude_this_merge_get(struct castle_da_merge *merge);
 
 void castle_double_array_inserts_enable(void);
@@ -333,4 +333,8 @@ int    castle_da_in_stream_entry_add       (struct castle_immut_tree_construct *
                                             void                               *key,
                                             c_ver_t                             version,
                                             c_val_tup_t                         cvt);
+
+int castle_da_immut_tree_extent_grow       (c_ext_free_t     *ext_free,
+                                            uint64_t          space_needed_bytes,
+                                            int               growth_rate_chunks);
 #endif /* __CASTLE_DA_H__ */
