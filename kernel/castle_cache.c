@@ -4254,16 +4254,25 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
          * doesn't break any of the clients. */
 #ifdef CASTLE_DEBUG
         {
-            uint64_t ext_size;
+            c_byte_off_t ext_end_off, cep_end_off;
 
             /* Check sanity of CEP. */
-            ext_size = (uint64_t)castle_extent_size_get(cep.ext_id);
-            BUG_ON(ext_size == 0 && cep.ext_id != RESERVE_EXT_ID);
-            if (ext_size &&
-                ((ext_size * C_CHK_SIZE) < (cep.offset + (nr_pages * C_BLK_SIZE))))
+            ext_end_off = castle_extent_size_get(cep.ext_id) * C_CHK_SIZE;
+            cep_end_off = cep.offset + (nr_pages << PAGE_SHIFT);
+            BUG_ON(ext_end_off == 0 && cep.ext_id != RESERVE_EXT_ID);
+
+            /* Fail immediately if c2b would end beyond extent mask.
+             *
+             * Bypass this test for straddle c2bs that end exactly half a CHUNK
+             * beyond the extent boundary.  They do no I/O and unless the
+             * VIRTUAL/COMPRESSED extents are grown, compressed data will never
+             * occupy the pages the straddle c2b has mapped. */
+            if (ext_end_off && cep_end_off > ext_end_off
+                    && !((cep_end_off - C_CHK_SIZE/2) == ext_end_off
+                        && castle_compr_type_get(cep.ext_id) == C_COMPR_COMPRESSED))
             {
                 castle_printk(LOG_ERROR, "Couldn't create cache page of size %d at cep: "cep_fmt_str
-                       "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_size);
+                       "on extent of size %llu chunks\n", nr_pages, __cep2str(cep), ext_end_off);
                 BUG();
             }
         }
