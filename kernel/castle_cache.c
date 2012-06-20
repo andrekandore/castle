@@ -1428,6 +1428,8 @@ void dirty_c2b(c2_block_t *c2b)
     /* The c2b must be write-locked while dirtying.  This ensures we are
      * serialised but also means the c2b cannot be evicted as it is busy. */
     BUG_ON(!c2b_write_locked(c2b));
+    /* Only uptodate c2bs can be flushed. */
+    BUG_ON(!c2b_uptodate(c2b));
 
     /* With overlapping c2bs we cannot rely on this c2b being dirty.
      * We have to dirty all c2ps. */
