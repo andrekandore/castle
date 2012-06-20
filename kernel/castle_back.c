@@ -3925,6 +3925,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                         rem_bytes_to_copy -= bytes_to_copy;
                         rem_blocks_to_copy -= blocks_to_copy;
                     }//while (rem_bytes_to_copy)
+                    castle_data_extent_update(cvt.cep.ext_id, NR_BLOCKS(cvt.length) * C_BLK_SIZE, 1);
                 } //copy into data extent
                 break;
             case CASTLE_VALUE_TYPE_COUNTER:
