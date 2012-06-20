@@ -1095,7 +1095,7 @@ static int _castle_back_key_copy_get(c_vl_bkey_t *src_key,
         uint8_t *dim_data  = castle_object_btree_key_dim_get(bkey, i);
 
         /* Flags other than INFINITY flags are not supported. */
-        if (dim_flags & (KEY_DIMENSION_FLAGS_MASK ^ KEY_DIMENSION_INFINITY_FLAGS_MASK))
+        if (dim_flags & ~KEY_DIMENSION_INFINITY_FLAGS_MASK)
         {
             error("Found flags other than INFINITY %u\n", dim_flags);
             err = -EINVAL;

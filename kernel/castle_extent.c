@@ -7207,7 +7207,7 @@ static int castle_extent_mask_create(c_ext_t            *ext,
     atomic_set(&mask->ref_count, atomic_read(&ext->link_cnt));
 
     /* If there is no previous mask, list should be empty. Same the other way. */
-    BUG_ON(!!MASK_ID_INVAL(prev_mask_id) ^ !!list_empty(&ext->mask_list));
+    BUG_ON(!!MASK_ID_INVAL(prev_mask_id) != !!list_empty(&ext->mask_list));
 
     /* If there is a previous mask. */
     if (!MASK_ID_INVAL(prev_mask_id))

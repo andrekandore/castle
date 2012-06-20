@@ -436,7 +436,7 @@ static c2_block_t* castle_btree_effective_node_create(struct castle_component_tr
      * is not same as original node. */
     eff_node = castle_alloc(node_size * C_BLK_SIZE);
     /* rev_level == 0 should be equivalent to the IS_LEAF flag */
-    BUG_ON((rev_level == 0) ^ (BTREE_NODE_IS_LEAF(node) != 0));
+    BUG_ON((rev_level == 0) != !!BTREE_NODE_IS_LEAF(node));
     castle_btree_node_init(ct, eff_node, version, node_size, rev_level);
 
     last_eff_key = btree->inv_key;
