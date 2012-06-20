@@ -2925,7 +2925,7 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
             continue;
         }
 
-        /* Immutable CT: Promote it to level-2 and add to sysfs. */
+        /* Immutable CT: Promote it to level-2, add tell the world about it. */
         if (!test_bit(CASTLE_CT_DYNAMIC_BIT, &ct->flags))
         {
             DA_TRANSACTION_BEGIN(da);
@@ -2933,6 +2933,7 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
             DA_TRANSACTION_END(da);
 
             castle_sysfs_ct_add(ct);
+            castle_events_new_tree_added(ct->seq, ct->da->id);
 
             continue;
         }
@@ -13466,9 +13467,6 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     castle_da_cts_proxy_invalidate(da);
 
     CASTLE_TRANSACTION_END;
-
-    /* Notify the world that a new tree is born */
-    castle_events_new_tree_added(constr->tree->seq, constr->tree->da->id);
 }
 
 int castle_da_in_stream_entry_add(struct castle_immut_tree_construct *constr,
