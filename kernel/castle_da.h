@@ -97,8 +97,10 @@ struct castle_da_merge {
                                                               the last key added to out_tree.    */
         void                         *last_key;          /**< Last key added to out tree, depth
                                                               0. */
-        c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.            */
+        c2_block_t                   *last_leaf_node_c2b; /**< Last node c2b at depth 0.         */
         int                           checkpointable;
+        int                           is_completing;      /** Indicates when tree construction is
+                                                              completing.                        */
 #ifdef CASTLE_DEBUG
         uint8_t                       is_recursion;
 #endif

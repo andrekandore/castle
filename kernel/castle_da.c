@@ -4704,7 +4704,8 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     if ((depth == 0) &&
         !castle_da_versioning_check(tree_constr->da) &&
         tree_constr->merge &&
-        MERGE_CHECKPOINTABLE(tree_constr->merge))
+        MERGE_CHECKPOINTABLE(tree_constr->merge) &&
+        !tree_constr->is_completing)
     {
         castle_da_versionless_merge_serialise(tree_constr->merge);
     }
@@ -4942,6 +4943,8 @@ static void castle_immut_tree_complete(struct castle_immut_tree_construct *tree_
     int next_idx, i;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
+
+    tree_constr->is_completing = 1;
 
     debug("Completed immut tree construction of depth: %d\n", atomic_read(&out_tree->tree_depth));
     /* Force the nodes to complete by setting next_idx negative. Valid node idx
@@ -6430,6 +6433,7 @@ static struct castle_immut_tree_construct * castle_immut_tree_constr_alloc(
     tree_constr->leafs_on_ssds      = 0;
     tree_constr->internals_on_ssds  = 0;
     tree_constr->checkpointable     = checkpointable;
+    tree_constr->is_completing      = 0;
 #ifdef CASTLE_DEBUG
     tree_constr->is_recursion       = 0;
 #endif
