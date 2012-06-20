@@ -46,6 +46,7 @@ typedef struct castle_extent {
     c_ext_pos_t         maps_cep;       /* Offset of chunk mapping in logical extent    */
     unsigned long       flags;          /* Bit Flags.                                   */
     c_ext_id_t          linked_ext_id;  /* Extent that is coupled with this extent.     */
+    uint64_t            used_bytes;
     atomic64_t          next_comp_byte;
     struct list_head    hash_list;
     struct list_head    process_list;   /* List of extents for rebuild, rebalance etc.  */
@@ -254,9 +255,13 @@ void                castle_compr_map_set                     (c_ext_pos_t    vir
 void                castle_compr_ext_offset_set              (c_ext_id_t     ext_id,
                                                               c_byte_off_t   used_btyes);
 
-typedef void (* castle_extent_iterate_dirty_tree_cb_t)(struct castle_cache_extent_dirtytree *);
+typedef
+void              (*castle_extent_iterate_dirty_tree_cb_t)(struct castle_cache_extent_dirtytree *);
 
 void                castle_extent_for_each_virt_ext          (castle_extent_iterate_dirty_tree_cb_t fn);
+
+void                castle_extent_last_consistant_byte_set   (c_ext_id_t     ext_id,
+                                                              uint64_t       used_bytes);
 
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \

@@ -105,6 +105,7 @@ STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chun
         (_ext)->ext_type                = (_me)->ext_type;                  \
         (_ext)->da_id                   = (_me)->da_id;                     \
         (_ext)->flags                  |= (_me)->flags;                     \
+        (_ext)->used_bytes              = (_me)->used_bytes;                \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->ext_size     = (_me)->size;                      \
@@ -120,6 +121,7 @@ STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chun
         (_ext)->ext_type                = (_me)->ext_type;                  \
         (_ext)->da_id                   = (_me)->da_id;                     \
         (_ext)->flags                  |= (_me)->flags;                     \
+        (_ext)->used_bytes              = (_me)->used_bytes;                \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
         (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;
 #endif
@@ -136,7 +138,7 @@ STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_BLK_SZ != 0);   /* ensure it divides the chun
         (_me)->cur_mask                 = GET_LATEST_MASK(_ext)->range;     \
         (_me)->prev_mask                = (_ext)->global_mask;              \
         (_me)->flags                    = ((_ext)->flags & CASTLE_EXT_ON_DISK_FLAGS_MASK); \
-        (_me)->next_comp_byte           = atomic64_read(&(_ext)->next_comp_byte);          \
+        (_me)->used_bytes               = (_ext)->used_bytes;               \
         (_me)->linked_ext_id            = (_ext)->linked_ext_id;
 
 #define FAULT_CODE EXTENT_FAULT
@@ -356,6 +358,17 @@ static int _castle_extent_for_each_virt_ext(c_ext_t *ext, void *fn_ptr)
 void castle_extent_for_each_virt_ext(castle_extent_iterate_dirty_tree_cb_t fn)
 {
     castle_extents_hash_iterate(_castle_extent_for_each_virt_ext, fn);
+}
+
+void castle_extent_last_consistant_byte_set(c_ext_id_t ext_id, uint64_t used_bytes)
+{
+    c_ext_t *ext = castle_extents_hash_get(ext_id);
+
+    if (!ext)
+        return;
+
+    ext->used_bytes = used_bytes;
+    castle_cache_extent_flush_schedule(ext_id, 0, used_bytes);
 }
 
 /**
@@ -1390,6 +1403,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->flags              = 0;
     ext->linked_ext_id      = INVAL_EXT_ID;
     atomic64_set(&ext->next_comp_byte, 0);
+    ext->used_bytes         = 0;
     ext->maps_cep           = INVAL_EXT_POS;
     ext->ext_type           = EXT_T_INVALID;
     ext->da_id              = INVAL_DA;
@@ -2082,12 +2096,12 @@ int castle_extents_writeback(void)
     castle_ext_freespace_marshall(&meta_ext_free, &ext_sblk->meta_ext_free_bs);
 
     /* Flush micro extent. */
-    castle_cache_extent_flush_schedule(MICRO_EXT_ID, 0, 0);
+    castle_extent_last_consistant_byte_set(MICRO_EXT_ID, 0);
 
     /* Flush the complete meta extent onto disk, before completing writeback. */
     BUG_ON(!castle_ext_freespace_consistent(&meta_ext_free));
-    castle_cache_extent_flush_schedule(META_EXT_ID, 0,
-                                       atomic64_read(&meta_ext_free.used));
+    castle_extent_last_consistant_byte_set(META_EXT_ID,
+                                           atomic64_read(&meta_ext_free.used));
 
     INJECT_FAULT;
 
@@ -2166,7 +2180,7 @@ static int load_extent_from_mentry(struct castle_elist_entry *mstore_entry)
 
     castle_extents_hash_add(ext);
 
-    castle_compr_ext_offset_set(ext->ext_id, mstore_entry->next_comp_byte);
+    castle_compr_ext_offset_set(ext->ext_id, ext->used_bytes);
 
     /* Need special handling for virtual extents. */
     if (test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
@@ -4023,6 +4037,27 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
     return;
 }
 
+static int castle_extent_used_bytes_check(c_ext_t *ext, void *unused)
+{
+    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
+        return 0;
+
+    if (ext->used_bytes > atomic64_read(&ext->next_comp_byte))
+        castle_printk(LOG_UNLIMITED, "%s [%llu] %llu %llu\n",
+                                      __FUNCTION__,
+                                      ext->ext_id,
+                                      ext->used_bytes,
+                                      atomic64_read(&ext->next_comp_byte));
+    BUG_ON(ext->used_bytes > atomic64_read(&ext->next_comp_byte));
+
+    return 0;
+}
+
+void castle_extents_used_bytes_check(void)
+{
+    castle_extents_hash_iterate(castle_extent_used_bytes_check, NULL);
+}
+
 /**
  * Called during desrialisation phase of FS, to let extents code know the number of used
  * bytes in extent. i.e. all bytes upto this are compressed onto disk, so they got valid
@@ -4045,6 +4080,14 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
     /* Not a virtual extent!! */
     if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags))
         return;
+
+    if (virt_ext->used_bytes != used_bytes)
+        castle_printk(LOG_UNLIMITED, "%s [%llu] %llu %llu\n",
+                                      __FUNCTION__,
+                                      virt_ext->ext_id,
+                                      virt_ext->used_bytes, used_bytes);
+
+    BUG_ON(virt_ext->used_bytes != used_bytes);
 
     /* Extent has no valid data, yet. */
     if (used_bytes == 0)
@@ -4071,7 +4114,6 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
                                          &comp_cep);
 
     /* Set dirty tree offsets. */
-#if 1
     mutex_lock(&virt_ext->dirtytree->compr_mutex);
     virt_ext->dirtytree->next_virt_off          = roundup(used_bytes, C_COMPR_BLK_SZ);
     virt_ext->dirtytree->next_virt_mutable_off  = virt_ext->dirtytree->next_virt_off;
@@ -4079,7 +4121,6 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
                                                           C_BLK_SIZE);
     virt_ext->dirtytree->next_compr_mutable_off = virt_ext->dirtytree->next_compr_off;
     mutex_unlock(&virt_ext->dirtytree->compr_mutex);
-#endif
 }
 
 static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)

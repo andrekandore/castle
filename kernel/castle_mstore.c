@@ -498,8 +498,8 @@ int castle_mstores_writeback(uint32_t version, int is_fini)
     castle_stats_writeback();
 
     BUG_ON(!castle_ext_freespace_consistent(&mstore_ext_free));
-    castle_cache_extent_flush_schedule(MSTORE_EXT_ID + slot, 0,
-                                       atomic64_read(&mstore_ext_free.used));
+    castle_extent_last_consistant_byte_set(MSTORE_EXT_ID + slot,
+                                           atomic64_read(&mstore_ext_free.used));
 
     return 0;
 }

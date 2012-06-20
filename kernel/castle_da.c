@@ -8961,7 +8961,7 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
 
         /* Mark the extent for flush. We want flush only the data extents that are linked to
          * checkpointable trees. It is fine to mark same data extent multiple times. */
-        castle_cache_extent_flush_schedule(ext_id, 0, 0);
+        castle_extent_last_consistant_byte_set(ext_id, 0);
     }
 
     return 0;
@@ -9603,17 +9603,14 @@ static int castle_da_tree_writeback(struct castle_double_array *da,
         castle_ct_stats_commit(ct);
 
     /* Schedule flush of the CT onto disk. */
-    if(!EXT_ID_INVAL(ct->internal_ext_free.ext_id))
-        castle_cache_extent_flush_schedule(ct->internal_ext_free.ext_id, 0,
-                                       atomic64_read(&ct->internal_ext_free.used));
-    if (!EXT_ID_INVAL(ct->tree_ext_free.ext_id))
-        castle_cache_extent_flush_schedule(ct->tree_ext_free.ext_id, 0,
+    castle_extent_last_consistant_byte_set(ct->internal_ext_free.ext_id,
+                                           atomic64_read(&ct->internal_ext_free.used));
+    castle_extent_last_consistant_byte_set(ct->tree_ext_free.ext_id,
                                            atomic64_read(&ct->tree_ext_free.used));
-    if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
-        castle_cache_extent_flush_schedule(ct->data_ext_free.ext_id, 0,
+    castle_extent_last_consistant_byte_set(ct->data_ext_free.ext_id,
                                            atomic64_read(&ct->data_ext_free.used));
     if (CT_BLOOM_EXISTS(ct))
-        castle_cache_extent_flush_schedule(ct->bloom.ext_id, 0, 0);
+        castle_extent_last_consistant_byte_set(ct->bloom.ext_id, 0);
 
     /* Never writeback T0 in periodic checkpoints. */
     BUG_ON((ct->level == 0) && !castle_da_exiting);
@@ -9788,19 +9785,19 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
 
         debug("%s::    internal_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->internal_ext_free_bs.ext_id);
-        castle_cache_extent_flush_schedule(
-                cl->internal_ext_free_bs.ext_id, 0, cl->internal_ext_free_bs.used);
+        castle_extent_last_consistant_byte_set(cl->internal_ext_free_bs.ext_id,
+                                               cl->internal_ext_free_bs.used);
 
         debug("%s::    tree_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->tree_ext_free_bs.ext_id);
-        castle_cache_extent_flush_schedule(
-                cl->tree_ext_free_bs.ext_id, 0, cl->tree_ext_free_bs.used);
+        castle_extent_last_consistant_byte_set(cl->tree_ext_free_bs.ext_id,
+                                               cl->tree_ext_free_bs.used);
 
         debug("%s::    data_ext_free_bs ext_id = %lld.\n",
                 __FUNCTION__, cl->data_ext_free_bs.ext_id);
         if (!EXT_ID_INVAL(cl->data_ext_free_bs.ext_id))
-            castle_cache_extent_flush_schedule(cl->data_ext_free_bs.ext_id, 0,
-                                               cl->data_ext_free_bs.used);
+            castle_extent_last_consistant_byte_set(cl->data_ext_free_bs.ext_id,
+                                                   cl->data_ext_free_bs.used);
 
         if (CT_BLOOM_EXISTS(ct))
         {
@@ -9808,7 +9805,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
             BUG_ON(ct->bloom.ext_id != cl->bloom_ext_id);
             debug("%s::    bloom ext_id = %lld.\n",
                     __FUNCTION__, cl->bloom_ext_id);
-            castle_cache_extent_flush_schedule(cl->bloom_ext_id, 0, 0);
+            castle_extent_last_consistant_byte_set(cl->bloom_ext_id, 0);
         }
         new_state = VALID_AND_STALE_DAM_SERDES;
         atomic_set(&merge->serdes.checkpointable.state, (int)new_state);

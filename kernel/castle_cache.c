@@ -7542,6 +7542,8 @@ static void castle_cache_dirty_user_flood(void)
  *
  *  END
  */
+void castle_extents_used_bytes_check(void);
+
 static int castle_periodic_checkpoint(void *unused)
 {
     uint32_t version = 0;
@@ -7671,6 +7673,8 @@ static int castle_periodic_checkpoint(void *unused)
             CHUNK(mstore_ext_free.ext_size));
 
         castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
+
+        castle_extents_used_bytes_check();
     } while (!castle_last_checkpoint_ongoing);
     /* Clean exit, return success. */
     ret = 0;

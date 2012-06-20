@@ -467,7 +467,7 @@ struct castle_elist_entry {
                                                          space on reboot. */
     /*         68 */ uint64_t        flags;
     /*         76 */ uint64_t        linked_ext_id;
-    /*         84 */ uint64_t        next_comp_byte;
+    /*         84 */ uint64_t        used_bytes;
     /*         92 */ uint8_t         _unused[36];
     /*        128 */
 } PACKED;
