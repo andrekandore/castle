@@ -3640,14 +3640,6 @@ static void castle_da_lfs_merge_ct_callback(void *data)
                                  data,
                                  0);    /* Extents not growable. */
 }
-static void castle_da_lfs_merge_ct_growable_callback(void *data)
-{
-    castle_da_lfs_ct_space_alloc(data,
-                                 1,     /* Reallocation. */
-                                 castle_da_lfs_merge_ct_growable_callback,
-                                 data,
-                                 1);    /* Extents growable. */
-}
 
 /**
  * Allocate all required extents for a T0 RWCT.
