@@ -213,6 +213,12 @@ static signed int castle_tree_ext_index_lookup(struct castle_component_tree *ct,
                                                struct castle_da_merge *merge);
 static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
                                      uint64_t *nr_drain_bytes, uint64_t *nr_entries);
+static int castle_data_ext_add(c_ext_id_t                    ext_id,
+                               uint64_t                      nr_entries,
+                               uint64_t                      nr_bytes,
+                               uint64_t                      nr_drain_bytes,
+                               uint64_t                      used_bytes);
+static void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct);
 static int castle_merge_thread_create(c_thread_id_t *thread_id, struct castle_double_array *da);
 static int castle_merge_thread_attach(c_merge_id_t merge_id, c_thread_id_t thread_id);
 static void castle_da_lfs_all_rwcts_callback(void *data);
@@ -3317,7 +3323,7 @@ static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
     if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
     {
         castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
-        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0);
+        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0, 0);
         castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
     }
 
@@ -3732,7 +3738,7 @@ static int castle_da_t0_extents_alloc(struct castle_double_array    *da,
     /* All T0 extents successfully allocated.
      *
      * Link the data extent. */
-    castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0);
+    castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0, 0);
     castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
 
     castle_extent_transaction_end();
@@ -8755,10 +8761,11 @@ struct castle_data_extent * castle_data_extent_get(c_ext_id_t ext_id)
 static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
 {
     int i;
+    struct castle_data_extent *data_ext;
 
     for (i=0; i<ct->nr_data_exts; i++)
     {
-        struct castle_data_extent *data_ext = castle_data_exts_hash_get(ct->data_exts[i]);
+        data_ext = castle_data_exts_hash_get(ct->data_exts[i]);
 
         BUG_ON(data_ext == NULL);
 
@@ -8766,6 +8773,10 @@ static void castle_data_extent_stats_commit(struct castle_component_tree *ct)
         data_ext->chkpt_nr_drain_bytes  = atomic64_read(&data_ext->nr_drain_bytes);
         data_ext->chkpt_nr_entries      = atomic64_read(&data_ext->nr_entries);
     }
+
+    data_ext = castle_data_exts_hash_get(ct->data_ext_free.ext_id);
+    if (data_ext)
+        data_ext->used_bytes = atomic64_read(&ct->data_ext_free.used);
 }
 
 static void castle_ct_stats_commit(struct castle_component_tree *ct)
@@ -8787,10 +8798,11 @@ static void castle_ct_stats_commit(struct castle_component_tree *ct)
  * @return  0   SUCCESS
  *         <0   ERROR CODE
  */
-int castle_data_ext_add(c_ext_id_t                    ext_id,
-                        uint64_t                      nr_entries,
-                        uint64_t                      nr_bytes,
-                        uint64_t                      nr_drain_bytes)
+static int castle_data_ext_add(c_ext_id_t                    ext_id,
+                               uint64_t                      nr_entries,
+                               uint64_t                      nr_bytes,
+                               uint64_t                      nr_drain_bytes,
+                               uint64_t                      used_bytes)
 {
     struct castle_data_extent *data_ext =
                     castle_alloc(sizeof(struct castle_data_extent));
@@ -8807,6 +8819,7 @@ int castle_data_ext_add(c_ext_id_t                    ext_id,
     data_ext->chkpt_nr_entries      = nr_entries;
     data_ext->chkpt_nr_bytes        = nr_bytes;
     data_ext->chkpt_nr_drain_bytes  = nr_drain_bytes;
+    data_ext->used_bytes            = used_bytes;
     atomic64_set(&data_ext->nr_entries, nr_entries);
     atomic64_set(&data_ext->nr_bytes, nr_bytes);
     atomic64_set(&data_ext->nr_drain_bytes, nr_drain_bytes);
@@ -8850,7 +8863,7 @@ static void castle_data_ext_size_get(c_ext_id_t ext_id, uint64_t *nr_bytes,
     *nr_entries         = atomic64_read(&data_ext->nr_entries);
 }
 
-void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct)
+static void castle_ct_data_ext_link(c_ext_id_t ext_id, struct castle_component_tree *ct)
 {
     struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
 
@@ -9014,6 +9027,7 @@ static int castle_data_ext_writeback(struct castle_data_extent *data_ext,
     mentry.nr_entries       = data_ext->chkpt_nr_entries;
     mentry.nr_bytes         = data_ext->chkpt_nr_bytes;
     mentry.nr_drain_bytes   = data_ext->chkpt_nr_drain_bytes;
+    mentry.used_bytes       = data_ext->used_bytes;
 
     castle_mstore_entry_insert(store, &mentry, sizeof(struct castle_dext_list_entry));
 
@@ -9036,7 +9050,7 @@ static int castle_data_exts_read(void)
         BUG_ON(mentry_size != sizeof(struct castle_dext_list_entry));
 
         castle_data_ext_add(mentry.ext_id, mentry.nr_entries, mentry.nr_bytes,
-                            mentry.nr_drain_bytes);
+                            mentry.nr_drain_bytes, mentry.used_bytes);
 
         castle_printk(LOG_INFO, "Reading data extent of %llu bytes and %llu entries\n",
                                  mentry.nr_bytes, mentry.nr_entries);

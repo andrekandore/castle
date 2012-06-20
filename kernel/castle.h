@@ -1170,6 +1170,7 @@ struct castle_data_extent {
     uint64_t            chkpt_nr_entries;
     uint64_t            chkpt_nr_bytes;
     uint64_t            chkpt_nr_drain_bytes;
+    uint64_t            used_bytes;
     struct list_head    hash_list;
     struct kobject      kobj;
 };
@@ -1392,9 +1393,10 @@ struct castle_dext_list_entry {
     /*          8 */ uint64_t    nr_entries;
     /*         16 */ uint64_t    nr_bytes;
     /*         24 */ uint64_t    nr_drain_bytes;
-    /*         32 */
+    /*         32 */ uint64_t    used_bytes;
+    /*         40 */
 } PACKED;
-STATIC_BUG_ON(sizeof(struct castle_dext_list_entry) != 32);
+STATIC_BUG_ON(sizeof(struct castle_dext_list_entry) != 40);
 
 struct castle_dext_map_list_entry {
     /* align:   8 */

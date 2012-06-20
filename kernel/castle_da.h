@@ -296,12 +296,6 @@ int  castle_da_vertree_compr_set        (c_da_t da_id, uint32_t enable);
 int  castle_da_insert_rate_set          (c_da_t da_id, uint32_t insert_rate);
 int  castle_da_read_rate_set            (c_da_t da_id, uint32_t read_rate);
 void castle_da_write_rate_check         (struct castle_double_array *da, uint32_t length);
-int  castle_data_ext_add                (c_ext_id_t ext_id,
-                                         uint64_t   nr_entries,
-                                         uint64_t   nr_bytes,
-                                         uint64_t   nr_drain_bytes);
-void castle_ct_data_ext_link            (c_ext_id_t ext_id,
-                                         struct castle_component_tree *ct);
 struct castle_component_tree* castle_ct_alloc(struct castle_double_array *da,
                                               int level, tree_seq_t seq,
                                               uint32_t nr_data_exts,
