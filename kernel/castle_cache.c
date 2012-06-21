@@ -6853,7 +6853,7 @@ err_out:
  */
 static int castle_cache_flush(void *unused)
 {
-    int exiting, to_flush, last_flush, i, prio, aggressive;
+    int exiting, to_flush, last_flush, prio, aggressive;
     atomic_t in_flight = ATOMIC(0);
     c2_ext_dirtytree_t *dirtytree;
 
@@ -6872,14 +6872,18 @@ static int castle_cache_flush(void *unused)
                 (exiting ? (atomic_read(&in_flight) == 0)
                          : (atomic_read(&in_flight) <= last_flush / 20)));
 
+        /* All outstanding IOs have completed and we are exiting.  Any data that
+         * is necessary will have now been checkpointed, so we can exit now
+         * without flushing any outstanding dirty data to disk. */
+        if (unlikely(exiting))
+            break;
+
         /* Calculate how many pages need flushing.  This function sleeps with an
          * interruptible timeout, waking up if a sufficient number of pages are
          * ready for flushing, otherwise MIN_FLUSH_FREQ times per second. */
-        to_flush   = _castle_cache_flush_pages_calculate(exiting);
+        to_flush   = _castle_cache_flush_pages_calculate(0 /*exiting*/);
         last_flush = to_flush;
-        if (unlikely(exiting && to_flush == 0))
-            break; /* only way out */
-        else if (unlikely(to_flush == 0))
+        if (to_flush == 0)
             continue; /* wait until we have something to flush */
 
         /* Here we will flush the extent hinted by CLOCK. */
@@ -6936,12 +6940,8 @@ aggressive:
         }
     }
 
-    /* Exiting the flush thread. We shouldn't need locks to check these lists now. */
-    for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
-    {
-        BUG_ON(atomic_read(&castle_cache_extent_dirtylist_sizes[i]) != 0);
-        BUG_ON(!list_empty(&castle_cache_extent_dirtylists[i]));
-    }
+    /* Flush thread is exiting.  Dirty data may still exist, but no references
+     * may be held.  No outstanding IO should be in flight. */
     BUG_ON(atomic_read(&in_flight) != 0);
 
     return EXIT_SUCCESS;
@@ -7013,8 +7013,13 @@ static void castle_cache_hashes_fini(void)
                     castle_printk(LOG_DEBUG, "Locked from: %s:%d\n", c2b->file, c2b->line);
 #endif
             }
-            BUG_ON(c2b_dirty(c2b));
 
+            if (c2b_dirty(c2b))
+            {
+                get_c2b(c2b);
+                clean_c2b(c2b, 1 /*clean_c2ps*/, 0 /*checklocked*/);
+                put_c2b(c2b);
+            }
             atomic_dec(&castle_cache_clean_blks);
             if (test_clear_c2b_clock(c2b))
             {
