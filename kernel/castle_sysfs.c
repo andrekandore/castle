@@ -270,6 +270,17 @@ static ssize_t da_io_stats_show(struct kobject *kobj,
     return strlen(buf);
 }
 
+static ssize_t da_compressed_show(struct kobject *kobj,
+                                  struct attribute *attr,
+                                  char *buf)
+{
+    struct castle_double_array *da = container_of(kobj, struct castle_double_array, kobj);
+
+    sprintf(buf, "%d\n", test_bit(CASTLE_DA_COMPR_ENABLED, &da->flags));
+
+    return strlen(buf);
+}
+
 static ssize_t da_size_show(struct kobject *kobj,
                             struct attribute *attr,
                             char *buf)
@@ -735,12 +746,16 @@ __ATTR(array_list, S_IRUGO|S_IWUSR, da_array_list_show, NULL);
 static struct castle_sysfs_entry da_io_stats =
 __ATTR(io_stats, S_IRUGO|S_IWUSR, da_io_stats_show, NULL);
 
+static struct castle_sysfs_entry da_compressed =
+__ATTR(compressed, S_IRUGO|S_IWUSR, da_compressed_show, NULL);
+
 static struct attribute *castle_da_attrs[] = {
     &da_version.attr,
     &da_size.attr,
     &da_tree_list.attr,
     &da_array_list.attr,
     &da_io_stats.attr,
+    &da_compressed.attr,
     NULL,
 };
 
@@ -916,6 +931,17 @@ static ssize_t ct_nr_rwcts_show(struct kobject *kobj,
     return sprintf(buf, "0x%llx\n", ct->nr_rwcts);
 }
 
+static ssize_t ct_compressed_show(struct kobject *kobj,
+                                  struct attribute *attr,
+                                  char *buf)
+{
+    struct castle_component_tree *ct = container_of(kobj, struct castle_component_tree, kobj);
+
+    sprintf(buf, "%d\n", castle_compr_type_get(ct->tree_ext_free.ext_id) == C_COMPR_VIRTUAL);
+
+    return strlen(buf);
+}
+
 static struct castle_sysfs_entry ct_size =
 __ATTR(size, S_IRUGO|S_IWUSR, ct_size_show, NULL);
 
@@ -934,6 +960,9 @@ __ATTR(data_time, S_IRUGO|S_IWUSR, ct_data_time_show, NULL);
 static struct castle_sysfs_entry ct_nr_rwcts =
 __ATTR(nr_rw_arrays, S_IRUGO|S_IWUSR, ct_nr_rwcts_show, NULL);
 
+static struct castle_sysfs_entry ct_compressed =
+__ATTR(compressed, S_IRUGO|S_IWUSR, ct_compressed_show, NULL);
+
 static struct attribute *castle_ct_attrs[] = {
     &ct_size.attr,
     &ct_daid.attr,
@@ -941,6 +970,7 @@ static struct attribute *castle_ct_attrs[] = {
     &ct_data_extents.attr,
     &ct_data_time.attr,
     &ct_nr_rwcts.attr,
+    &ct_compressed.attr,
     NULL,
 };
 
