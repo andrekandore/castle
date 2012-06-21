@@ -3314,7 +3314,9 @@ static void castle_back_stream_in_start(void *data)
         err = -EAGAIN;
         goto err2;
     }
+    read_lock(&attachment->col.da->lock);
     col_da_nr_trees = attachment->col.da->nr_trees;
+    read_unlock(&attachment->col.da->lock);
     if(col_da_nr_trees >= castle_stream_in_headroom_cts)
     {
         castle_printk(LOG_WARN,
