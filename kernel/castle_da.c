@@ -8949,6 +8949,7 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
     {
         struct castle_dext_map_list_entry mentry;
         c_ext_id_t ext_id = ct->data_exts[i];
+        struct castle_data_extent *data_ext = castle_data_exts_hash_get(ext_id);
 
         /* Data extent should be alive. */
         BUG_ON(castle_data_exts_hash_get(ext_id) == NULL);
@@ -8961,7 +8962,7 @@ static int castle_ct_data_exts_writeback(struct castle_component_tree *ct,
 
         /* Mark the extent for flush. We want flush only the data extents that are linked to
          * checkpointable trees. It is fine to mark same data extent multiple times. */
-        castle_extent_last_consistant_byte_set(ext_id, 0);
+        castle_extent_last_consistant_byte_set(ext_id, data_ext->used_bytes);
     }
 
     return 0;
