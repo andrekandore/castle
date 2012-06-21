@@ -313,8 +313,6 @@ long                        castle_extents_chunks_remapped = 0;
 static int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
                                  int remap_idx);
 
-static atomic_t             castle_extents_ref_count = ATOMIC(1);
-
 /* Number of virtual masks, that are not yet ready to be promoted. */
 static atomic_t             castle_extent_stale_virtual_masks = ATOMIC(0);
 
@@ -328,15 +326,12 @@ static int                  min_rda_lvl = RDA_2; /* Keep track of minimum RDA us
 
 static void castle_extents_virt_masks_check(void *unused);
 
-static DECLARE_WORK(castle_virt_masks_check_work, castle_extents_virt_masks_check,
-                    &castle_extents_ref_count);
+static DECLARE_WORK(castle_virt_masks_check_work, castle_extents_virt_masks_check, NULL);
+
 static struct timer_list castle_virt_masks_check_timer;
 
 static void castle_virt_masks_check_timer_fire(unsigned long first)
 {
-    /* Don't want the module to exit while the work is scheduled. */
-    BUG_ON(atomic_inc_return(&castle_extents_ref_count) == 1);
-
     /* Timeout any existing DA CTs proxy structures. */
     schedule_work(&castle_virt_masks_check_work);
 
@@ -1952,8 +1947,9 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     c_mstore_t *castle_extents_mstore = store;
 
     /* Shouldn't be any outstanding deletions before last checkpoint. */
-    if(castle_last_checkpoint_ongoing && (atomic_read(&ext->link_cnt) == 0))
-        castle_printk(LOG_DEBUG, "%s::ext %p ext_id %d\n", __FUNCTION__, ext, ext->ext_id);
+    if(atomic_read(&ext->link_cnt) == 0)
+        castle_printk(LOG_DEBUG, "Checkpointing a dead extent %p ext_id %llu\n",
+                                  ext, ext->ext_id);
 
     if (LOGICAL_EXTENT(ext->ext_id))
         return 0;
@@ -1979,19 +1975,6 @@ int castle_extents_writeback(void)
 
     if (!extent_init_done)
         return 0;
-
-    /**
-     * Start last checkpoint of extents only when the extents state is stable..
-     *
-     *      1. All dead extents are destroyed.
-     *      2. All extents have only one valid/live mask.
-     *      3. All virtual extent masks are promoted to comrpessed extents.
-     */
-    if (castle_last_checkpoint_ongoing)
-    {
-        /* Release live reference on extents - make the way for last checkpoint. */
-        atomic_dec(&castle_extents_ref_count);
-    }
 
     castle_extents_mstore = castle_mstore_init(MSTORE_EXTENTS);
     if(!castle_extents_mstore)
@@ -3692,10 +3675,6 @@ static void castle_extent_resource_release(void *data)
     debug("Completed deleting ext: %lld\n", ext_id);
 
     castle_extents_sb->nr_exts--;
-
-    /* Release the reference on extents. Now, it is safe to do the last checkpoint and
-     * then exit. */
-    atomic_dec(&castle_extents_ref_count);
 }
 
 uint32_t castle_extent_kfactor_get(c_ext_id_t ext_id)
@@ -4734,18 +4713,7 @@ int castle_extent_unlink(c_ext_id_t ext_id)
 
     /* Reduce the link count and check if this is the last link. */
     if (atomic_dec_return(&ext->link_cnt) == 0)
-    {
         debug_ext_ref("%s::extent %lld\n", __FUNCTION__, ext_id);
-#if 0
-        /* All merges and request would have completed before setting castle_last_checkpoint_ongoing.
-         * There shouldn't be any free()/unlink() after that. */
-        BUG_ON(castle_last_checkpoint_ongoing);
-#endif
-
-        /* Take a reference on extents. Without this, it is possible to do the last checkpoint
-         * on extents and exit with this extent remaining dead. */
-        BUG_ON(atomic_inc_return(&castle_extents_ref_count) == 1);
-    }
 
     /* There should be at least one mask. */
     BUG_ON(list_empty(&ext->mask_list));
