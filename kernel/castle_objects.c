@@ -367,13 +367,10 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         if(last_copy)
         {
             /* Zero-pad till the end of the page boundary */
-            int mod_cp = copy_length % C_BLK_SIZE;
+            uint32_t used_offset = data_c2b_offset + copy_length;
+            unsigned int mod_cp = used_offset % C_BLK_SIZE;
             if(mod_cp)
-            {
-                debug("%s::zero padding %u bytes.\n",
-                    __FUNCTION__, (C_BLK_SIZE - mod_cp));
                 memset(data_c2b_buffer + copy_length, 0, (C_BLK_SIZE - mod_cp));
-            }
         }
 
         data_length     -= copy_length;
@@ -388,7 +385,8 @@ static int castle_object_data_write(struct castle_object_replace *replace)
         {
             c2_block_t *new_data_c2b;
             c_ext_pos_t new_data_cep;
-            castle_printk(LOG_DEBUG, "Run out of buffer space, allocating a new one.\n");
+            castle_printk(LOG_DEBUG, "%s:run out of buffer space for %llu byte object, allocating a new one.\n",
+                __FUNCTION__, data_length);
             new_data_cep = castle_object_write_next_cep(data_c2b->cep, data_c2b_length);
             if (EXT_POS_COMP(new_data_cep, data_c2b->cep) <= 0)
             {
