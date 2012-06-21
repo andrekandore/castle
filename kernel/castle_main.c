@@ -2067,6 +2067,7 @@ static void __exit castle_exit(void)
     FAULT(FINI_FAULT);
     /* Now, make sure no more IO can be made, internally or externally generated */
     castle_double_array_merges_fini();  /* Completes all internal i/o - merges. */
+    castle_extents_last_chkpt_prepare();
     castle_extents_process_fini();
     castle_checkpoint_fini();
     /* Note: Changes from here are not persistent. */
