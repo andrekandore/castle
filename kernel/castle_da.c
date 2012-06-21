@@ -7237,49 +7237,6 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         BUG_ON(EXT_POS_INVAL(out_tree->internal_ext_free));
         BUG_ON(EXT_POS_INVAL(out_tree->tree_ext_free));
 
-        /* For the sake of the sanity of the compression code, pad the data extent up to
-           compression block size (probably 64k) alignment. */
-        if(castle_compr_type_get(out_tree->data_ext_free.ext_id) == C_COMPR_VIRTUAL)
-        {
-            c_byte_off_t compr_block_size = castle_compr_block_size_get(out_tree->data_ext_free.ext_id);
-            c_byte_off_t bytes_used       = atomic64_read(&out_tree->data_ext_free.used);
-            c_byte_off_t block_used_mod   = bytes_used % compr_block_size;
-
-            /* Our math only works if bytes_used is 4k aligned, which it always should be */
-            BUG_ON(bytes_used % C_BLK_SIZE);
-
-            castle_printk(LOG_DEBUG, "%s::[merge %u] compression block size %llu bytes, data ext bytes used %llu.\n",
-                __FUNCTION__, merge->id, compr_block_size, bytes_used);
-
-            if (block_used_mod)
-            {
-                c2_block_t  *c2b;
-                c_ext_pos_t  new_cep;
-                c_byte_off_t bytes_pad = compr_block_size - block_used_mod;
-                int blocks_pad;
-
-                BUG_ON(bytes_pad % C_BLK_SIZE);
-                blocks_pad = bytes_pad >> C_BLK_SHIFT;
-
-                castle_printk(LOG_DEBUG, "%s::[merge %u] padding %llu bytes (%u blocks) on data ext %u for compression.\n",
-                    __FUNCTION__, merge->id, bytes_pad, blocks_pad, out_tree->data_ext_free.ext_id);
-
-                BUG_ON(castle_ext_freespace_get(&out_tree->data_ext_free,
-                                                 bytes_pad,
-                                                 0,
-                                                &new_cep) < 0);
-                BUG_ON( (new_cep.offset + bytes_pad) % compr_block_size != 0);
-                c2b = castle_cache_block_get(new_cep, blocks_pad, MERGE_OUT);
-                write_lock_c2b(c2b);
-                update_c2b(c2b);
-                memset(c2b_buffer(c2b), 0, bytes_pad);
-                set_c2b_immutable(c2b);
-                dirty_c2b(c2b);
-                write_unlock_c2b(c2b);
-                put_c2b(c2b);
-            }
-        }
-
         castle_da_ct_marshall(&merge_mstore->out_tree, out_tree);
         merge_mstore->is_new_key         = merge->out_tree_constr->is_new_key;
         merge_mstore->skipped_count      = merge->skipped_count;
