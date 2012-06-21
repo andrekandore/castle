@@ -2015,6 +2015,7 @@ static void castle_back_iter_start(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
         !castle_attachment_user_timestamping_check(attachment))
@@ -2075,7 +2076,6 @@ static void castle_back_iter_start(void *data)
     stateful_op->iterator.end_key = end_key;
     stateful_op->iterator.nr_keys = 0;
     stateful_op->iterator.nr_bytes = 0;
-    castle_back_stateful_op_attach(stateful_op, attachment);
 
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
@@ -3156,6 +3156,7 @@ static void castle_back_big_put(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
 #ifdef DEBUG
     debug("key: \n");
@@ -3166,7 +3167,6 @@ static void castle_back_big_put(void *data)
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
-    castle_back_stateful_op_attach(stateful_op, attachment);
 
     /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.big_put.value_len;
@@ -3567,6 +3567,7 @@ static void castle_back_timestamped_big_put(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
 #ifdef DEBUG
     debug("key: \n");
@@ -3578,7 +3579,6 @@ static void castle_back_timestamped_big_put(void *data)
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
-    castle_back_stateful_op_attach(stateful_op, attachment);
 
     /* Length of the complete value. */
     stateful_op->replace.value_len = op->req.timestamped_big_put.value_len;
@@ -4211,10 +4211,10 @@ static void castle_back_big_get(void *data)
         err = -ENOTCONN;
         goto err1;
     }
+    castle_back_stateful_op_attach(stateful_op, attachment);
 
     stateful_op->tag = CASTLE_RING_BIG_GET;
     stateful_op->curr_op = op;
-    castle_back_stateful_op_attach(stateful_op, attachment);
 
     stateful_op->pull.pull_continue = castle_back_big_get_continue;
 
