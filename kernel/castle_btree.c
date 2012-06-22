@@ -1780,6 +1780,9 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
 
     if (did_io)
     {
+        /* If I/O was needed, we are about to requeue, make sure this is remembered. */
+        c_iter->running_async = 1;
+
         /* Put on to the workqueue.  Choose a workqueue which corresponds to how
          * deep we are in the btree.
          * A single queue cannot be used because a request blocked on lock_c2b()
@@ -1866,7 +1869,6 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     /* Continue the traverse, scheduling and waiting for IO if necessary. */
     if (write_locked)
     {
-        c_iter->running_async = 1;
         BUG_ON(_castle_cache_block_read(c2b,
                                         castle_btree_iter_path_traverse_endio,
                                         c_iter));
