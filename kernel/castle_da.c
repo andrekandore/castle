@@ -3204,201 +3204,29 @@ static void castle_da_lfs_victim_count_inc(struct castle_double_array *da)
     castle_da_get(da);
 }
 
-/**
- * Set structure for Low Free Space (LFS) handler. This functions sets the size of each
- * extent that got to be created by the LFS handler when more space is available. LFS handler
- * would allocate space and fill the extent ids in the same structure.
- *
- * @param [inout] LFS Structure.
- * @param [in] Size of Internal tree extent size (in chunks).
- * @param [in] Size of B-Tree extent size (in chunks).
- * @param [in] Size of Medium Object extent size (in chunks).
- *
- * @also castle_da_lfs_ct_init
- * @also castle_da_lfs_ct_reset
- * @also castle_da_lfs_ct_space_alloc
- * @also castle_da_lfs_ct_init_tree
- */
-static void castle_da_lfs_ct_init(struct castle_da_lfs_ct_t *lfs,
-                                  c_chk_cnt_t internal_tree_size,
-                                  c_chk_cnt_t tree_size,
-                                  c_chk_cnt_t data_size,
-                                  int rwct)
+static int castle_da_lfs_ct_space_alloc(struct castle_immut_tree_construct *tree_constr,
+                                        int                                 growable,
+                                        c_chk_cnt_t                         internal_ext_size,
+                                        c_chk_cnt_t                         tree_ext_size,
+                                        c_chk_cnt_t                         data_ext_size,
+                                        c_ext_event_callback_t              lfs_callback)
 {
-    /* Setting up the structure, there shouldn't be any reserved space. */
-    BUG_ON(lfs->space_reserved);
-
-    /* Save whether we are allocating RWCT. */
-    lfs->rwct = rwct;
-
-    /* Shouldn't see any valid ext_ids. */
-    BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) ||
-           !EXT_ID_INVAL(lfs->tree_ext.ext_id) ||
-           !EXT_ID_INVAL(lfs->data_ext.ext_id));
-    BUG_ON(lfs->internal_ext.size || lfs->tree_ext.size || lfs->data_ext.size);
-
-    /* Set-up LFS structure, assuming space allocation will fail. */
-    lfs->tree_ext.size = tree_size;
-    lfs->data_ext.size = data_size;
-    lfs->internal_ext.size = internal_tree_size;
-    lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
-}
-
-/**
- * Reset the LFS structure.
- *
- * @param [inout] LFS Structure.
- *
- * @also castle_da_lfs_ct_init
- * @also castle_da_lfs_ct_space_alloc
- * @also castle_da_lfs_ct_init_tree
- */
-static void castle_da_lfs_ct_reset(struct castle_da_lfs_ct_t *lfs)
-{
-    lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
-    lfs->internal_ext.size = lfs->tree_ext.size = lfs->data_ext.size = 0;
-    lfs->space_reserved = 0;
-    lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
-
-    /* Make sure all writes are completed, before next thread tries to do some checks
-     * during lfs_init. */
-    wmb();
-}
-
-/**
- * Use the space allocated by LFS handler in CT. Make sure LFS structure has extents of same
- * size required by CT and set up CT.
- *
- * @param [out] Component Tree to be set.
- * @param [in] LFS structure with reserved space (allocated extents).
- * @param [in] Size of Internal tree extent size (in chunks).
- * @param [in] Size of B-Tree extent size (in chunks).
- * @param [in] Size of Medium Object extent size (in chunks).
- *
- * @also castle_da_lfs_ct_init
- * @also castle_da_lfs_ct_reset
- * @also castle_da_lfs_ct_space_alloc
- */
-static int castle_da_lfs_ct_init_tree(struct castle_component_tree *ct,
-                                       struct castle_da_lfs_ct_t *lfs,
-                                       c_chk_cnt_t internal_tree_size,
-                                       c_chk_cnt_t tree_size,
-                                       c_chk_cnt_t data_size)
-{
-    /* We shouldn't be here, if the space is not already reserved. */
-    BUG_ON(!lfs->space_reserved);
-
-    /* Space is already reserved, we should have had valid extents already. */
-    BUG_ON(EXT_ID_INVAL(lfs->internal_ext.ext_id));
-    BUG_ON(EXT_ID_INVAL(lfs->tree_ext.ext_id));
-
-    /* Sizes of extents should match. */
-    if (tree_size > lfs->tree_ext.size ||
-        data_size > lfs->data_ext.size ||
-        internal_tree_size > lfs->internal_ext.size)
-    {
-        /* Reserved space is not enough. Free this space. And try to allocate again.
-         * Note: This can be made better by freeing only unmatched extents. */
-        castle_extent_free(lfs->internal_ext.ext_id);
-        castle_extent_free(lfs->tree_ext.ext_id);
-        castle_extent_free(lfs->data_ext.ext_id);
-
-        castle_da_lfs_ct_reset(lfs);
-
-        return -1;
-    }
-
-    /* Setup extent IDs. */
-    ct->internal_ext_free.ext_id = lfs->internal_ext.ext_id;
-    ct->tree_ext_free.ext_id     = lfs->tree_ext.ext_id;
-    ct->data_ext_free.ext_id     = lfs->data_ext.ext_id;
-
-    /* Setup extent freespaces. */
-    castle_ext_freespace_init(&ct->internal_ext_free,
-                               ct->internal_ext_free.ext_id);
-    castle_ext_freespace_init(&ct->tree_ext_free,
-                               ct->tree_ext_free.ext_id);
-
-    /* Add the new data extent to list of medium objects. */
-    if (!EXT_ID_INVAL(ct->data_ext_free.ext_id))
-    {
-        castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
-        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0, 0);
-        castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
-    }
-
-    return 0;
-}
-
-/**
- * Low Freespace handler for Component Tree extents. Gets called by extents code, when more
- * space is available.
- *
- * @param [inout] lfs           - Low Free Space structure.
- * @param [in]    is_realloc    - Is re-allocation (previous allocation failed due to
- *                                low free space).
- * @param [in]    lfs_callback  - Callback to be used in case of low freespace.
- * @param [in]    lfs_data      - Data pointer to be used by callback.
- * @param [in]    use_ssd       - Use SSD for Internal nodes.
- * @param [in]    growable      - Growable tree extent and data extent.
- *
- * @also castle_da_lfs_ct_init
- * @also castle_da_lfs_ct_reset
- * @also castle_da_lfs_ct_space_alloc
- * @also castle_da_lfs_ct_init_tree
- */
-static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
-                                        int                        is_realloc,
-                                        c_ext_event_callback_t     lfs_callback,
-                                        void                      *lfs_data,
-                                        int                        growable)
-{
-    struct castle_double_array *da = lfs->da;
+    struct castle_component_tree *ct = tree_constr->tree;
+    struct castle_double_array *da = ct->da;
     c_ext_id_t internal_ext_id, tree_ext_id, data_ext_id;
-    unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED,
-                  compr_ext_flags;
-
-    BUG_ON(is_realloc);
+    unsigned long compr_ext_flags, growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED;
 
     if (growable)
         growable_ext_flags |= CASTLE_EXT_FLAG_GROWABLE;
+
     compr_ext_flags = growable_ext_flags;
-    if (!castle_da_versioning_check(da)
-            && test_bit(CASTLE_DA_COMPR_ENABLED, &da->flags))
-        /* Compressed extents if unversioned and DA compression bit set. */
+
+    /* Compressed extents if unversioned and DA compression bit set. */
+    if (!castle_da_versioning_check(da) && test_bit(CASTLE_DA_COMPR_ENABLED, &da->flags))
         compr_ext_flags |= CASTLE_EXT_FLAG_COMPR_COMPRESSED;
 
-    /* da_lfs_ct functions are being used only by merge code. */
-    BUG_ON(lfs->rwct);
-
-    /* If the DA is dead already, no need to handle the event anymore. */
-    BUG_ON(da == NULL);
-
-    if (castle_da_deleted(da) && is_realloc)
-    {
-        castle_printk(LOG_DEBUG, "Skipping LFS for da: %u\n", da->id);
-
-        if (atomic_dec_and_test(&da->lfs_victim_count))
-            castle_da_merge_restart(da, NULL);
-
-        castle_da_put(da);
-
-        return 0;
-    }
-
-    /* Function shouldn't have been called, if space is already reserved. */
-    BUG_ON(lfs->space_reserved);
-
-    debug("Allocating space for a ct for da: %u, and extents of size - %u, %u, %u\n",
-          lfs->da_id,
-          lfs->internal_ext.size,
-          lfs->tree_ext.size,
-          lfs->data_ext.size);
-
     /* Size of extents to be created should have been set. */
-    BUG_ON(!lfs->internal_ext.size || !lfs->tree_ext.size);
-    BUG_ON(!EXT_ID_INVAL(lfs->internal_ext.ext_id) || !EXT_ID_INVAL(lfs->tree_ext.ext_id) ||
-           !EXT_ID_INVAL(lfs->data_ext.ext_id));
+    BUG_ON(!internal_ext_size || !tree_ext_size);
 
     internal_ext_id = tree_ext_id = data_ext_id = INVAL_EXT_ID;
 
@@ -3406,137 +3234,106 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     castle_extent_transaction_start();
 
     /* Attempt to allocate an SSD extent for internal nodes. */
-    lfs->internals_on_ssds = 1;
-    lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
-                                                   da->id,
-                                                   EXT_T_INTERNAL_NODES,
-                                                   lfs->internal_ext.size,
-                                                   CASTLE_EXT_FLAG_MUTEX_LOCKED);
+    internal_ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
+                                          da->id,
+                                          EXT_T_INTERNAL_NODES,
+                                          internal_ext_size,
+                                          CASTLE_EXT_FLAG_MUTEX_LOCKED);
 
-    if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
+    if (EXT_ID_INVAL(internal_ext_id))
     {
         /* FAILED to allocate internal node SSD extent.
          * ATTEMPT to allocate internal node HDD extent. */
-        lfs->internals_on_ssds = 0;
-        lfs->internal_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
-                                                       da->id,
-                                                       EXT_T_INTERNAL_NODES,
-                                                       lfs->internal_ext.size,
-                                                       CASTLE_EXT_FLAG_MUTEX_LOCKED);
-        if (EXT_ID_INVAL(lfs->internal_ext.ext_id))
+        internal_ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                              da->id,
+                                              EXT_T_INTERNAL_NODES,
+                                              internal_ext_size,
+                                              CASTLE_EXT_FLAG_MUTEX_LOCKED);
+        if (EXT_ID_INVAL(internal_ext_id))
         {
             /* FAILED to allocate internal node HDD extent. */
-            castle_printk(LOG_WARN, "Merge failed due to space constraint for internal node tree.\n");
+            castle_printk(LOG_WARN, "Merge failed due to low space for internal node tree.\n");
             goto no_space;
         }
     }
     else
     {
+        tree_constr->internals_on_ssds = 1;
+
         /* SUCCEEDED allocating internal node SSD extent.
          * ATTEMPT to allocate leaf node SSD extent. */
         if(castle_use_ssd_leaf_nodes)
-        {
-            lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
-                                                       da->id,
-                                                       EXT_T_LEAF_NODES,
-                                                       lfs->tree_ext.size,
-                                                       growable_ext_flags);
-            castle_printk(LOG_DEBUG, "%s:: ssd extent %d\n", __FUNCTION__,
-                                     lfs->tree_ext.ext_id);
-        }
+            tree_ext_id = castle_extent_alloc(castle_get_ssd_rda_lvl(),
+                                              da->id,
+                                              EXT_T_LEAF_NODES,
+                                              tree_ext_size,
+                                              growable_ext_flags);
     }
 
-    lfs->leafs_on_ssds = 1;
-    if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
+    if (EXT_ID_INVAL(tree_ext_id))
     {
         /* FAILED to allocate leaf node SSD extent.
          * ATTEMPT to allocate leaf node HDD extent. */
-        lfs->leafs_on_ssds = 0;
+        tree_ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                          da->id,
+                                          EXT_T_LEAF_NODES,
+                                          tree_ext_size,
+                                          compr_ext_flags);
 
-        lfs->tree_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
-                                                   da->id,
-                                                   EXT_T_LEAF_NODES,
-                                                   lfs->tree_ext.size,
-                                                   compr_ext_flags);
-        castle_printk(LOG_DEBUG, "%s:: tree extent %d\n", __FUNCTION__,
-                                 lfs->tree_ext.ext_id);
-
-        if (EXT_ID_INVAL(lfs->tree_ext.ext_id))
+        if (EXT_ID_INVAL(tree_ext_id))
         {
             /* FAILED to allocate leaf node HDD extent. */
-            castle_printk(LOG_WARN, "Extents allocation failed due to space constraint for "
-                                    "leaf node tree.\n");
+            castle_printk(LOG_WARN, "Merge failed due to low space for leaf node tree.\n");
+            goto no_space;
+        }
+    }
+    else
+        tree_constr->leafs_on_ssds = 1;
+
+    /* Allocate an extent for medium objects of merged tree for the size equal to
+     * sum of both the trees. */
+    if (data_ext_size)
+    {
+        data_ext_id = castle_extent_alloc(castle_get_rda_lvl(),
+                                          da->id,
+                                          EXT_T_MEDIUM_OBJECTS,
+                                          data_ext_size,
+                                          growable_ext_flags);
+        if (EXT_ID_INVAL(data_ext_id))
+        {
+            castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
             goto no_space;
         }
     }
 
-    if (lfs->data_ext.size == 0)
-        goto skip_data_ext;
-
-    /* Allocate an extent for medium objects of merged tree for the size equal to
-     * sum of both the trees. */
-
-    lfs->data_ext.ext_id = castle_extent_alloc(castle_get_rda_lvl(),
-                                               da->id,
-                                               EXT_T_MEDIUM_OBJECTS,
-                                               lfs->data_ext.size,
-                                               growable_ext_flags);
-
-    castle_printk(LOG_DEBUG, "%s:: data extent %d\n", __FUNCTION__,
-                             lfs->data_ext.ext_id);
-
-    if (EXT_ID_INVAL(lfs->data_ext.ext_id))
-    {
-        castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
-        goto no_space;
-    }
-
-skip_data_ext:
-    /* Mark it as space reserved. */
-    lfs->space_reserved = 1;
-
-    /* Make sure all writes are completed, before decrementing victim count. */
-    wmb();
-
-    /* If it's a reallocation (last allocation failed due to low free space), reduce the count of lfs
-     * victims in DA; If there are no more victims left for DA, then restart merges. */
-    if (is_realloc && atomic_dec_and_test(&da->lfs_victim_count))
-        castle_da_merge_restart(da, NULL);
-
     /* End extent transaction. */
     castle_extent_transaction_end();
 
-    /* Note: After this point don't access da pointer. It is possible da_destroy_complete()
-     * is racing. */
-    if (is_realloc)
-        castle_da_put(da);
+    /* Setup extent freespaces. */
+    castle_ext_freespace_init(&ct->internal_ext_free, ct->internal_ext_free.ext_id);
+    castle_ext_freespace_init(&ct->tree_ext_free, ct->tree_ext_free.ext_id);
+
+    /* Add the new data extent to list of medium objects. */
+    if (data_ext_size)
+    {
+        castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
+        castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0, 0);
+        castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
+    }
 
     return 0;
 
 no_space:
     /* Take a copy of ext IDs. */
-    internal_ext_id = lfs->internal_ext.ext_id;
-    tree_ext_id = lfs->tree_ext.ext_id;
-    BUG_ON(!EXT_ID_INVAL(lfs->data_ext.ext_id));
-
     if (lfs_callback)
     {
-        /* Reset ext ids. */
-        lfs->internal_ext.ext_id = lfs->tree_ext.ext_id = lfs->data_ext.ext_id = INVAL_EXT_ID;
-        lfs->leafs_on_ssds = lfs->internals_on_ssds = 0;
-
         /* Register callback with extents. */
         BUG_ON(castle_extent_lfs_callback_add(1, /* Already in transaction. */
                                               lfs_callback,
-                                              lfs_data));
+                                              da));
 
-        /* If the allocation is not a reallocation, update victim count. */
-        if (!is_realloc)
-            castle_da_lfs_victim_count_inc(da);
+        castle_da_lfs_victim_count_inc(da);
     }
-    /* If there is no callback, no need to keep sizes in this LFS structure. */
-    else
-        castle_da_lfs_ct_reset(lfs);
 
     /* End extent transaction. */
     castle_extent_transaction_end();
@@ -3548,7 +3345,7 @@ no_space:
     if (!EXT_ID_INVAL(tree_ext_id))
         castle_extent_free(tree_ext_id);
 
-    debug("Failed to allocate from realloc\n");
+    BUG_ON(!EXT_ID_INVAL(data_ext_id));
 
     return -ENOSPC;
 }
@@ -3594,14 +3391,8 @@ static void castle_da_lfs_all_rwcts_callback(void *data)
  *
  * @param   data    castle_double_array pointer
  *
- * Called as a result of a T0 creation failure during
- * castle_da_lfs_ct_space_alloc().  Gets called asynchronously when more
- * freespace is available.
- *
  * This callback does not create a new T0 - we wait for a subsequent write
  * request to do this via castle_da_rwct_acquire().
- *
- * @also castle_da_lfs_ct_space_alloc
  */
 static void castle_da_lfs_rwct_callback(void *data)
 {
@@ -3615,12 +3406,10 @@ static void castle_da_lfs_rwct_callback(void *data)
 }
 
 /**
- * Low Freespace event handler function for merge extents. Will be called by extent code
+ * Low Freespace event handler function for L1 merge extents. Will be called by extent code
  * when more space is available.
  *
- * @param [inout] data - void * for lfs structure
- *
- * @also castle_da_lfs_ct_space_alloc
+ * @param [inout] data - void * for da structure
  */
 static void castle_da_lfs_l1_merge_ct_callback(void *data)
 {
@@ -3867,9 +3656,7 @@ static int castle_immut_tree_space_alloc(struct castle_immut_tree_construct *tre
                                          c_byte_off_t                        tree_size,
                                          c_byte_off_t                        data_size,
                                          c_byte_off_t                        bloom_size,
-                                         struct castle_da_lfs_ct_t          *lfs,
                                          c_ext_event_callback_t              lfs_callback,
-                                         void                               *lfs_data,
                                          int                                 growable)
 {
     struct castle_component_tree *ct = tree_constr->tree;
@@ -3878,48 +3665,23 @@ static int castle_immut_tree_space_alloc(struct castle_immut_tree_construct *tre
     BUG_ON(!EXT_ID_INVAL(ct->internal_ext_free.ext_id) ||
            !EXT_ID_INVAL(ct->tree_ext_free.ext_id));
 
-__again:
-    BUG_ON(lfs->space_reserved);
-    /* If the space is not already reserved for this tree, allocate it from freespace. */
-    if (!lfs->space_reserved)
+    if (growable)
     {
-        /* Initialize the lfs structure with required extent sizes. */
-        /* Note: Also, add a growth safety margin */
-        castle_da_lfs_ct_init(lfs,
-                              CHUNK(internal_tree_size),
-                              CHUNK(tree_size) + (growable? (MERGE_OUTPUT_TREE_GROWTH_RATE) : 0),
-                              (!data_size)? 0:
-                              CHUNK(data_size) + (growable ? (MERGE_OUTPUT_DATA_GROWTH_RATE) : 0),
-                              0 /* Not a T0. */);
-
-        /* Allocate space from freespace. */
-        ret = castle_da_lfs_ct_space_alloc(lfs,
-                                           0,                   /* First allocation. */
-                                           lfs_callback,
-                                           lfs_data,
-                                           growable);           /* Extents growable */
-
-        /* If failed to allocate space, return error. lfs structure is already set.
-         * Low freespace handler would allocate space, when more freespace is available. */
-        if (ret)
-            return ret;
+        tree_size += (MERGE_OUTPUT_TREE_GROWTH_RATE * C_CHK_SIZE);
+        if (data_size)
+            data_size += (MERGE_OUTPUT_DATA_GROWTH_RATE * C_CHK_SIZE);
     }
 
-    /* Successfully allocated space. Initialize the component tree with alloced extents.
-     * castle_da_lfs_ct_init_tree() would fail if the space reserved by lfs handler is not
-     * enough for CT. */
-    if (castle_da_lfs_ct_init_tree(ct,
-                                   lfs,
-                                   CHUNK(internal_tree_size),
-                                   CHUNK(tree_size),
-                                   CHUNK(data_size)))
-        goto __again;
 
-    tree_constr->internals_on_ssds = lfs->internals_on_ssds;
-    tree_constr->leafs_on_ssds = lfs->leafs_on_ssds;
-
-    /* Done with lfs structure; reset it. */
-    castle_da_lfs_ct_reset(lfs);
+    /* Allocate space from freespace. */
+    ret = castle_da_lfs_ct_space_alloc(tree_constr,
+                                       growable,
+                                       CHUNK(internal_tree_size),
+                                       CHUNK(tree_size),
+                                       CHUNK(data_size),
+                                       lfs_callback);
+    if (ret)
+        return ret;
 
     /* Allocate Bloom filters. */
     if ((ret = castle_bloom_create(&ct->bloom,
@@ -3942,9 +3704,7 @@ __again:
 static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
 {
     c_byte_off_t internal_tree_size, tree_size, data_size, bloom_size;
-    struct castle_da_lfs_ct_t _lfs, *lfs;
-    c_ext_event_callback_t lfs_callback;
-    void *lfs_data;
+    c_ext_event_callback_t lfs_callback = NULL;
     int ret;
 
     castle_da_merge_output_size(merge, &internal_tree_size,
@@ -3974,28 +3734,14 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     /* Handle Low Freespace gracefully, for L1 merges - fail the merge and also register
      * for notification when more space available. */
     if (merge->level == 1)
-    {
-        lfs             = &_lfs;
-        lfs_callback    = castle_da_lfs_l1_merge_ct_callback;
-        lfs_data        = merge->da;
-        lfs->da         = merge->da;
-    }
-    /* For other merges just fail the merge. */
-    else
-    {
-        lfs             = &_lfs;
-        lfs_callback    = NULL;
-        lfs_data        = NULL;
-        lfs->da         = merge->da;
-    }
-    castle_da_lfs_ct_reset(lfs);
+        lfs_callback = castle_da_lfs_l1_merge_ct_callback;
 
     ret = castle_immut_tree_space_alloc(merge->out_tree_constr,
                                         internal_tree_size,
                                         tree_size,
                                         data_size,
                                         bloom_size,
-                                        lfs, lfs_callback, lfs_data,
+                                        lfs_callback,
                                         merge->out_tree_constr->checkpointable);
     if (ret)
     {
@@ -9902,7 +9648,6 @@ void castle_double_arrays_pre_writeback(void)
  *
  * @param   da          Doubling array to create T0 CTs for
  * @param   in_tran     Whether CASTLE_TRANSACTION_LOCK is held
- * @param   lfs_check   Whether to perform LFS checks before attempting allocations
  * @param   lfs_type    Type of LFS allocation (determines LFS CB)
  *
  * @also castle_double_array_start()
@@ -13307,7 +13052,6 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                           c_chk_cnt_t                    data_ext_size)
 {
     struct castle_immut_tree_construct *constr;
-    struct castle_da_lfs_ct_t lfs;
     int ret = 0;
     int nr_rwcts;
 
@@ -13339,15 +13083,12 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     if (constr->tree == NULL)
         goto err_out;
 
-    lfs.da = da;
-    castle_da_lfs_ct_reset(&lfs);
-
     ret = castle_immut_tree_space_alloc(constr,
                                         internal_ext_size * C_CHK_SIZE,
                                         tree_ext_size * C_CHK_SIZE,
                                         data_ext_size * C_CHK_SIZE,
                                         item_count,
-                                        &lfs, NULL, NULL,
+                                        NULL,
                                         1 /* growable */);
 
     if (ret)

@@ -2318,21 +2318,6 @@ struct castle_da_cts_proxy_all_invalidate {
     int                             proxy;          /**< Number of elements in proxies[].       */
 };
 
-/* Low free space structure being used by each merge in DA. */
-struct castle_da_lfs_ct_t {
-    struct castle_double_array *da;                 /**< Doubling array.                        */
-    uint8_t                     space_reserved;     /**< Reserved space from low space handler. */
-    uint8_t                     rwct;               /**< Whether allocating RWCT or not.        */
-
-    /* Following members for use by LFS_VCT_T_MERGE only. */
-    struct {
-        c_chk_cnt_t     size;               /**< Size of the extent to be reserved.     */
-        c_ext_id_t      ext_id;             /**< ID to be set after space is reserved.  */
-    } internal_ext, tree_ext, data_ext;
-    int                         leafs_on_ssds;
-    int                         internals_on_ssds;
-};
-
 /* Possible states of merge serialisation control atomics in da->levels[].merge.serdes,
    which indicate the state of the serialised state (struct dmserlist_entry) mstore_entry */
 typedef enum {
