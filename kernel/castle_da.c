@@ -3358,6 +3358,8 @@ static int castle_da_lfs_ct_space_alloc(struct castle_da_lfs_ct_t *lfs,
     unsigned long growable_ext_flags = CASTLE_EXT_FLAG_MUTEX_LOCKED,
                   compr_ext_flags;
 
+    BUG_ON(is_realloc);
+
     if (growable)
         growable_ext_flags |= CASTLE_EXT_FLAG_GROWABLE;
     compr_ext_flags = growable_ext_flags;
@@ -3632,13 +3634,15 @@ static void castle_da_lfs_rwct_callback(void *data)
  *
  * @also castle_da_lfs_ct_space_alloc
  */
-static void castle_da_lfs_merge_ct_callback(void *data)
+static void castle_da_lfs_l1_merge_ct_callback(void *data)
 {
-    castle_da_lfs_ct_space_alloc(data,
-                                 1,     /* Reallocation. */
-                                 castle_da_lfs_merge_ct_callback,
-                                 data,
-                                 0);    /* Extents not growable. */
+    struct castle_double_array *da = data;
+
+    castle_printk(LOG_WARN, "L1 merge low freespace callback invoked.\n");
+    if (atomic_dec_and_test(&da->lfs_victim_count))
+        castle_da_merge_restart(da, NULL);
+
+    castle_da_put(da);
 }
 
 /**
@@ -3887,6 +3891,7 @@ static int castle_immut_tree_space_alloc(struct castle_immut_tree_construct *tre
            !EXT_ID_INVAL(ct->tree_ext_free.ext_id));
 
 __again:
+    BUG_ON(lfs->space_reserved);
     /* If the space is not already reserved for this tree, allocate it from freespace. */
     if (!lfs->space_reserved)
     {
@@ -3983,8 +3988,8 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
     if (merge->level == 1)
     {
         lfs             = &merge->da->l1_merge_lfs;
-        lfs_callback    = castle_da_lfs_merge_ct_callback;
-        lfs_data        = lfs;
+        lfs_callback    = castle_da_lfs_l1_merge_ct_callback;
+        lfs_data        = merge->da;
     }
     /* For other merges just fail the merge. */
     else
