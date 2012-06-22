@@ -3310,13 +3310,13 @@ static int castle_da_lfs_ct_space_alloc(struct castle_immut_tree_construct *tree
     castle_extent_transaction_end();
 
     /* Setup extent freespaces. */
-    castle_ext_freespace_init(&ct->internal_ext_free, ct->internal_ext_free.ext_id);
-    castle_ext_freespace_init(&ct->tree_ext_free, ct->tree_ext_free.ext_id);
+    castle_ext_freespace_init(&ct->internal_ext_free, internal_ext_id);
+    castle_ext_freespace_init(&ct->tree_ext_free, tree_ext_id);
 
     /* Add the new data extent to list of medium objects. */
     if (data_ext_size)
     {
-        castle_ext_freespace_init(&ct->data_ext_free, ct->data_ext_free.ext_id);
+        castle_ext_freespace_init(&ct->data_ext_free, data_ext_id);
         castle_data_ext_add(ct->data_ext_free.ext_id, 0, 0, 0, 0);
         castle_ct_data_ext_link(ct->data_ext_free.ext_id, ct);
     }
