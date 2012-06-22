@@ -15,7 +15,8 @@ c_vl_okey_t *castle_object_okey_copy         (c_vl_okey_t *obj_key);
 
 int          castle_object_get               (struct castle_object_get *get,
                                               struct castle_attachment *attachment,
-                                              int cpu_index);
+                                              int cpu_index,
+                                              int seq_id);
 int          castle_object_iter_init         (struct castle_attachment *attachment,
                                               int get_all,
                                               c_vl_bkey_t *start_key,
@@ -32,13 +33,15 @@ int          castle_object_iter_finish       (castle_object_iterator_t *iter, in
 int          castle_object_replace           (struct castle_object_replace *replace,
                                               struct castle_attachment *attachment,
                                               int cpu_index,
-                                              int tombstone);
+                                              int tombstone,
+                                              int seq_id);
 int          castle_object_replace_continue  (struct castle_object_replace *replace);
 int          castle_object_replace_cancel    (struct castle_object_replace *replace);
 void         castle_object_pull_finish       (struct castle_object_pull *pull);
 int          castle_object_pull              (struct castle_object_pull *pull,
                                               struct castle_attachment *attachment,
-                                              int cpu_index);
+                                              int cpu_index,
+                                              int seq_id);
 void         castle_object_chunk_pull        (struct castle_object_pull *pull,
                                               void *buf, size_t len);
 int          castle_object_batch_in_stream   (struct  castle_attachment *attachment,

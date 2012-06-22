@@ -920,7 +920,8 @@ err_out:
 int castle_object_replace(struct castle_object_replace *replace,
                           struct castle_attachment *attachment,
                           int cpu_index,
-                          int tombstone)
+                          int tombstone,
+                          int seq_id)
 {
     struct castle_btree_type *btree;
     void *key;
@@ -978,7 +979,7 @@ int castle_object_replace(struct castle_object_replace *replace,
     c_bvec->cvt_get        = castle_object_replace_cvt_get;
     c_bvec->queue_complete = castle_object_replace_queue_complete;
     c_bvec->orig_complete  = NULL;
-    c_bvec->seq_id         = atomic_inc_return(&castle_req_seq_id);
+    c_bvec->seq_id         = seq_id;
     atomic_set(&c_bvec->reserv_nodes, 0);
 
     /* Save c_bvec in the replace. */
@@ -986,12 +987,8 @@ int castle_object_replace(struct castle_object_replace *replace,
     CVT_INVALID_INIT(replace->cvt);
     replace->data_c2b = NULL;
 
-    trace_CASTLE_REQUEST_BEGIN(c_bvec->seq_id, CASTLE_RING_REPLACE);
-
     /* Queue up in the DA. */
     castle_double_array_queue(c_bvec);
-
-    trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
 
     return 0;
 
@@ -1526,7 +1523,8 @@ void castle_object_get_complete(struct castle_bio_vec *c_bvec,
  */
 int castle_object_get(struct castle_object_get *get,
                       struct castle_attachment *attachment,
-                      int cpu_index)
+                      int cpu_index,
+                      int seq_id)
 {
     struct castle_btree_type *btree;
     void *key;
@@ -1566,9 +1564,7 @@ int castle_object_get(struct castle_object_get *get,
     c_bvec->val_put         = castle_object_value_release;
     c_bvec->submit_complete = castle_object_get_complete;
     c_bvec->orig_complete   = NULL;
-    c_bvec->seq_id          = atomic_inc_return(&castle_req_seq_id);
-
-    trace_CASTLE_REQUEST_BEGIN(c_bvec->seq_id, CASTLE_RING_GET);
+    c_bvec->seq_id          = seq_id;
 
     /* in the beginning, we will be willing to resolve timestamps or counters, but upon
        retrieval of the first candidate return value, we will pick one or the other. */
@@ -1577,8 +1573,6 @@ int castle_object_get(struct castle_object_get *get,
 
     /* @TODO: add bios to the debugger! */
     castle_double_array_submit(c_bvec);
-
-    trace_CASTLE_REQUEST_RELEASE(c_bvec->seq_id);
 
     return 0;
 
@@ -1736,7 +1730,8 @@ static void castle_object_pull_continue(struct castle_bio_vec *c_bvec, int err, 
  */
 int castle_object_pull(struct castle_object_pull *pull,
                        struct castle_attachment *attachment,
-                       int cpu_index)
+                       int cpu_index,
+                       int seq_id)
 {
     struct castle_btree_type *btree;
     void *key;
@@ -1770,6 +1765,7 @@ int castle_object_pull(struct castle_object_pull *pull,
 
     c_bvec = c_bio->c_bvecs;
     c_bvec->key             = key;
+    c_bvec->seq_id          = seq_id;
     c_bvec->cpu_index       = cpu_index;
     c_bvec->cpu             = castle_double_array_request_cpu(c_bvec->cpu_index);
     c_bvec->val_get         = castle_object_value_acquire;

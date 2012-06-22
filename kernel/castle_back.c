@@ -143,6 +143,8 @@ struct castle_back_op
         struct castle_object_replace replace;
         struct castle_object_get     get;
     };
+
+    int                             seq_id;         /**< Sequence ID used for tracing.      */
 };
 
 struct castle_back_iterator
@@ -1015,6 +1017,9 @@ static int castle_back_reply(struct castle_back_op *op,
 
     RING_PUSH_RESPONSES_AND_CHECK_NOTIFY(back_ring, notify);
 
+    /* The op is about to be freed up. Notify, whoever is interested. */
+    trace_CASTLE_REQUEST_END(op->seq_id);
+
     /* Put op at the back of the freelist. */
     list_add_tail(&op->list, &conn->free_ops);
 
@@ -1240,9 +1245,8 @@ static void castle_back_replace_data_copy(struct castle_object_replace *replace,
  * @also castle_object_replace()
  * @also castle_back_remove()
  */
-static void castle_back_replace(void *data)
+static void castle_back_replace(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
 
@@ -1283,7 +1287,8 @@ static void castle_back_replace(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
-    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0, op->seq_id);
+
     if (err)
         goto err2;
 
@@ -1294,10 +1299,10 @@ err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_replace, struct castle_back_op);
 
-static void castle_back_timestamped_replace(void *data)
+static void castle_back_timestamped_replace(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
 
@@ -1340,7 +1345,8 @@ static void castle_back_timestamped_replace(void *data)
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
     op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
-    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0, op->seq_id);
+
     if (err)
         goto err2;
 
@@ -1351,10 +1357,10 @@ err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_timestamped_replace, struct castle_back_op);
 
-static void castle_back_counter_replace(void *data)
+static void castle_back_counter_replace(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
 
@@ -1397,7 +1403,7 @@ static void castle_back_counter_replace(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = op->key;  /* key will be freed by replace_complete() */
 
-    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0);
+    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 0, op->seq_id);
     if (err)
         goto err2;
 
@@ -1408,6 +1414,7 @@ err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_counter_replace, struct castle_back_op);
 
 static void castle_back_remove_complete(struct castle_object_replace *replace, int err)
 {
@@ -1442,9 +1449,8 @@ static void castle_back_remove_complete(struct castle_object_replace *replace, i
  * @also castle_object_replace()
  * @also castle_back_replace()
  */
-static void castle_back_remove(void *data)
+static void castle_back_remove(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     int err;
 
     op->attachment = castle_attachment_get(op->req.remove.collection_id, WRITE);
@@ -1465,7 +1471,11 @@ static void castle_back_remove(void *data)
     op->replace.has_user_timestamp = 0;
     op->replace.key = op->key;  /* key will be freed by remove_complete() */
 
-    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
+    err = castle_object_replace(&op->replace,
+                                op->attachment,
+                                op->cpu_index,
+                                1 /*tombstone*/,
+                                op->seq_id);
     if (err)
         goto err2;
 
@@ -1475,10 +1485,10 @@ err2: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_remove, struct castle_back_op);
 
-static void castle_back_timestamped_remove(void *data)
+static void castle_back_timestamped_remove(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     int err;
 
     op->attachment = castle_attachment_get(op->req.timestamped_remove.collection_id, WRITE);
@@ -1500,7 +1510,11 @@ static void castle_back_timestamped_remove(void *data)
     op->replace.user_timestamp = op->req.timestamped_replace.user_timestamp;
     op->replace.key = op->key;  /* key will be freed by remove_complete() */
 
-    err = castle_object_replace(&op->replace, op->attachment, op->cpu_index, 1 /*tombstone*/);
+    err = castle_object_replace(&op->replace,
+                                op->attachment,
+                                op->cpu_index,
+                                1 /*tombstone*/,
+                                op->seq_id);
     if (err)
         goto err2;
 
@@ -1510,6 +1524,7 @@ err2: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_timestamped_remove, struct castle_back_op);
 
 int castle_back_get_reply_continue(struct castle_object_get *get,
                                    int err,
@@ -1625,9 +1640,8 @@ err:
  *
  * @also castle_object_get()
  */
-static void castle_back_get(void *data)
+static void castle_back_get(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
 
@@ -1667,7 +1681,7 @@ static void castle_back_get(void *data)
         goto err2;
     }
 
-    err = castle_object_get(&op->get, op->attachment, op->cpu_index);
+    err = castle_object_get(&op->get, op->attachment, op->cpu_index, op->seq_id);
     if (err)
         goto err2;
 
@@ -1678,6 +1692,8 @@ err1: castle_attachment_put(op->attachment);
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_get, struct castle_back_op);
+
 
 /**** ITERATORS ****/
 
@@ -1984,9 +2000,8 @@ err:
  * @also castle_object_iter_init()
  * @also castle_back_iter_next()
  */
-static void castle_back_iter_start(void *data)
+static void castle_back_iter_start(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     struct castle_attachment *attachment;
@@ -2080,8 +2095,6 @@ static void castle_back_iter_start(void *data)
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
-    trace_CASTLE_REQUEST_BEGIN(stateful_op->seq_id, stateful_op->tag);
-
     /* For incremental backup we want to return tombstones also. */
     if (stateful_op->flags & CASTLE_RING_FLAG_INC_BACKUP)
         stateful_op->flags |= CASTLE_RING_FLAG_RET_TOMBSTONE;
@@ -2120,6 +2133,8 @@ err1: /* No one could have added another op to queue as we haven't returns token
       castle_back_put_stateful_op(conn, stateful_op);
 err0: castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_iter_start, struct castle_back_op);
+
 
 /**
  * Free any memory allocated by castle_buffer_kvp_get().
@@ -2702,9 +2717,8 @@ err:
  * @also castle_back_request_process()
  * @also _castle_back_iter_next()
  */
-static void castle_back_iter_next(void *data)
+static void castle_back_iter_next(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_stateful_op *stateful_op;
 
     stateful_op = castle_back_find_stateful_op(op->conn,
@@ -2721,6 +2735,7 @@ static void castle_back_iter_next(void *data)
 
     _castle_back_iter_next(op, stateful_op, 0 /*fastpath*/);
 }
+DEFINE_WQ_TRACE_FN(castle_back_iter_next, struct castle_back_op);
 
 /**
  * Tear down iterator state.
@@ -2865,9 +2880,8 @@ err:
  * @also castle_back_request_process()
  * @also _castle_back_iter_finish()
  */
-static void castle_back_iter_finish(void *data)
+static void castle_back_iter_finish(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_stateful_op *stateful_op;
 
     stateful_op = castle_back_find_stateful_op(op->conn,
@@ -2886,6 +2900,8 @@ static void castle_back_iter_finish(void *data)
 
     _castle_back_iter_finish(op, stateful_op, 0 /*fastpath*/);
 }
+DEFINE_WQ_TRACE_FN(castle_back_iter_finish, struct castle_back_op);
+
 
 /**** BIG PUT ****/
 
@@ -2940,9 +2956,6 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
 
     castle_attachment_put(attachment);
 }
-
-
-static void castle_back_put_chunk_continue(void *data);
 
 static void castle_back_stateful_call_queued(struct castle_back_stateful_op *stateful_op)
 {
@@ -3116,9 +3129,18 @@ static void castle_back_big_put_data_copy(struct castle_object_replace *replace,
  * @also castle_object_replace()
  * @also castle_back_put_chunk()
  */
-static void castle_back_big_put(void *data)
+static void castle_back_put_chunk_continue(struct castle_back_stateful_op *stateful_op)
 {
-    struct castle_back_op *op = data;
+    castle_object_replace_continue(&stateful_op->replace);
+
+    /* To prevent #3144. */
+    might_resched();
+}
+DEFINE_WQ_TRACE_FN(castle_back_put_chunk_continue, struct castle_back_stateful_op);
+
+
+static void castle_back_big_put(struct castle_back_op *op)
+{
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
@@ -3164,6 +3186,7 @@ static void castle_back_big_put(void *data)
 #endif
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
+    stateful_op->seq_id = op->seq_id;
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
@@ -3193,13 +3216,16 @@ static void castle_back_big_put(void *data)
     stateful_op->replace.has_user_timestamp = 0;
 
     /* Work structure to run every queued op. Every put_chunk gets queued. */
-    INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
+    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0],
+                               castle_back_put_chunk_continue,
+                               stateful_op);
 
     /* Call castle_object layer to insert (k,v) pair. */
     err = castle_object_replace(&stateful_op->replace,
                                 attachment,
                                 op->cpu_index,
-                                0 /*tombstone*/);
+                                0 /*tombstone*/,
+                                stateful_op->seq_id);
     if (err)
         goto err2;
 
@@ -3223,6 +3249,7 @@ err0: castle_free(op->key);
       /* To prevent #3144. */
       might_resched();
 }
+DEFINE_WQ_TRACE_FN(castle_back_big_put, struct castle_back_op);
 
 static c_chk_cnt_t castle_back_stream_in_tree_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op)
 {
@@ -3260,9 +3287,8 @@ static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(struct ca
 }
 
 static void castle_back_stream_in_continue(void *data);
-static void castle_back_stream_in_start(void *data)
+static void castle_back_stream_in_start(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     c_chk_cnt_t tree_ext_size;
@@ -3410,10 +3436,10 @@ err0:
     /* To prevent #3144. */
     might_resched();
 }
+DEFINE_WQ_TRACE_FN(castle_back_stream_in_start, struct castle_back_op);
 
-static void castle_back_stream_in_next(void *data)
+static void castle_back_stream_in_next(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     int err;
@@ -3473,10 +3499,10 @@ err0:
     /* To prevent #3144. */
     might_resched();
 }
+DEFINE_WQ_TRACE_FN(castle_back_stream_in_next, struct castle_back_op);
 
-static void castle_back_stream_in_finish(void *data)
+static void castle_back_stream_in_finish(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_stateful_op *stateful_op;
     int err;
 
@@ -3522,6 +3548,7 @@ err0:
     /* To prevent #3144. */
     might_resched();
 }
+DEFINE_WQ_TRACE_FN(castle_back_stream_in_finish, struct castle_back_op);
 
 /**
  * Begin stateful op put of big value at specified key,version in DA, with a timestamp.
@@ -3529,9 +3556,8 @@ err0:
  * @also castle_object_replace()
  * @also castle_back_put_chunk()
  */
-static void castle_back_timestamped_big_put(void *data)
+static void castle_back_timestamped_big_put(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
@@ -3578,6 +3604,7 @@ static void castle_back_timestamped_big_put(void *data)
 
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_BIG_PUT;
+    stateful_op->seq_id = op->seq_id;
     stateful_op->queued_size = 0;
     /* big_put is the first op, followed by series of put_chunks. */
     stateful_op->curr_op = op;
@@ -3609,13 +3636,18 @@ static void castle_back_timestamped_big_put(void *data)
             op->req.timestamped_big_put.user_timestamp;
 
     /* Work structure to run every queued op. Every put_chunk gets queued. */
-    INIT_WORK(&stateful_op->work[0], castle_back_put_chunk_continue, stateful_op);
+    CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0],
+                               castle_back_put_chunk_continue,
+                               stateful_op);
+
 
     /* Call castle_object layer to insert (k,v) pair. */
     err = castle_object_replace(&stateful_op->replace,
                                 attachment,
                                 op->cpu_index,
-                                0 /*tombstone*/);
+                                0 /*tombstone*/,
+                                stateful_op->seq_id);
+
     if (err)
         goto err2;
 
@@ -3634,10 +3666,10 @@ err1: /* Safe as no-one could have queued up an op - we have not returned token 
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_timestamped_big_put, struct castle_back_op);
 
-static void castle_back_put_chunk(void *data)
+static void castle_back_put_chunk(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     int err;
@@ -3706,16 +3738,8 @@ err0: castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
     /* To prevent #3144. */
     might_resched();
 }
+DEFINE_WQ_TRACE_FN(castle_back_put_chunk, struct castle_back_op);
 
-static void castle_back_put_chunk_continue(void *data)
-{
-    struct castle_back_stateful_op *stateful_op = data;
-
-    castle_object_replace_continue(&stateful_op->replace);
-
-    /* To prevent #3144. */
-    might_resched();
-}
 
 /**
  * Perform stream in on stateful_op->curr_op->buf.
@@ -4184,9 +4208,8 @@ static void castle_back_big_get_continue(struct castle_object_pull *pull,
     spin_unlock(&stateful_op->lock);
 }
 
-static void castle_back_big_get(void *data)
+static void castle_back_big_get(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     int err;
     struct castle_attachment *attachment;
@@ -4229,7 +4252,7 @@ static void castle_back_big_get(void *data)
 
     stateful_op->pull.key = op->key;
 
-    err = castle_object_pull(&stateful_op->pull, attachment, op->cpu_index);
+    err = castle_object_pull(&stateful_op->pull, attachment, op->cpu_index, op->seq_id);
     if (err)
         goto err2;
 
@@ -4247,10 +4270,10 @@ err1: /* Safe as no one will have queued up a op - we haven't returned token yet
 err0: castle_free(op->key);
       castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_big_get, struct castle_back_op);
 
-static void castle_back_get_chunk(void *data)
+static void castle_back_get_chunk(struct castle_back_op *op)
 {
-    struct castle_back_op *op = data;
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
     int err;
@@ -4314,6 +4337,7 @@ static void castle_back_get_chunk(void *data)
 err1: castle_back_buffer_put(conn, op->buf);
 err0: castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
+DEFINE_WQ_TRACE_FN(castle_back_get_chunk, struct castle_back_op);
 
 /******************************************************************
  * Castle device functions
@@ -4387,6 +4411,8 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
      * It won't matter that the op ends up on the wrong CPU because it will
      * return before hitting the DA. */
     op->cpu_index = conn->cpu_index;
+    op->seq_id = atomic_inc_return(&castle_req_seq_id);
+    trace_CASTLE_REQUEST_START(op->seq_id, op->req.tag);
 
     CVT_INVALID_INIT(op->replace.cvt);
     switch (op->req.tag)
@@ -4396,51 +4422,32 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
          * Have CPU affinity based on hash of the key.  They must hit the
          * correct CPU (op->cpu) and CT (op->cpu_index). */
 
-        case CASTLE_RING_STREAM_IN_START: /* iterator, round-robin CPU selection */
-            op->cpu_index = conn->cpu_index;
-            INIT_WORK(&op->work, castle_back_stream_in_start, op);
-            break;
-
-        case CASTLE_RING_STREAM_IN_NEXT:
-            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
-                                                                  op->req.stream_in_next.token,
-                                                                  CASTLE_RING_STREAM_IN_START);
-            INIT_WORK(&op->work, castle_back_stream_in_next, op);
-            break;
-
-        case CASTLE_RING_STREAM_IN_FINISH:
-            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
-                                                                  op->req.stream_in_finish.token,
-                                                                  CASTLE_RING_STREAM_IN_START);
-            INIT_WORK(&op->work, castle_back_stream_in_finish, op);
-            break;
-
         case CASTLE_RING_TIMESTAMPED_REMOVE:
             if ((err = castle_back_key_copy_get(conn, op->req.timestamped_remove.key_ptr,
                                                 op->req.timestamped_remove.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_timestamped_remove, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_timestamped_remove, op);
             break;
 
         case CASTLE_RING_REMOVE:
             if ((err = castle_back_key_copy_get(conn, op->req.remove.key_ptr,
                                                 op->req.remove.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_remove, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_remove, op);
             break;
 
         case CASTLE_RING_TIMESTAMPED_REPLACE:
             if ((err = castle_back_key_copy_get(conn, op->req.timestamped_replace.key_ptr,
                                                 op->req.timestamped_replace.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_timestamped_replace, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_timestamped_replace, op);
             break;
 
         case CASTLE_RING_REPLACE:
             if ((err = castle_back_key_copy_get(conn, op->req.replace.key_ptr,
                                                 op->req.replace.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_replace, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_replace, op);
             break;
 
         case CASTLE_RING_COUNTER_REPLACE:
@@ -4466,14 +4473,14 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             if ((err = castle_back_key_copy_get(conn, op->req.counter_replace.key_ptr,
                                                 op->req.counter_replace.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_counter_replace, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_counter_replace, op);
             break;
 
         case CASTLE_RING_GET:
             if ((err = castle_back_key_copy_get(conn, op->req.get.key_ptr,
                                                 op->req.get.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_get, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_get, op);
             break;
 
         /* Stateful op initialisers
@@ -4491,26 +4498,40 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             if ((err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
                                                 op->req.timestamped_big_put.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_timestamped_big_put, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_timestamped_big_put, op);
             break;
 
         case CASTLE_RING_BIG_PUT: /* put, key-hash CPU-affinity */
             if ((err = castle_back_key_copy_get(conn, op->req.big_put.key_ptr,
                                                 op->req.big_put.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_big_put, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_big_put, op);
+            break;
+
+        case CASTLE_RING_PUT_CHUNK:
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
+                                                                  op->req.put_chunk.token,
+                                                                  CASTLE_RING_BIG_PUT);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_put_chunk, op);
             break;
 
         case CASTLE_RING_BIG_GET: /* get, key-hash CPU-affinity */
             if ((err = castle_back_key_copy_get(conn, op->req.big_get.key_ptr,
                                                 op->req.big_get.key_len, &op->key)))
                 goto err;
-            INIT_WORK(&op->work, castle_back_big_get, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_big_get, op);
+            break;
+
+        case CASTLE_RING_GET_CHUNK:
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
+                                                                  op->req.get_chunk.token,
+                                                                  CASTLE_RING_BIG_GET);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_get_chunk, op);
             break;
 
         case CASTLE_RING_ITER_START: /* iterator, round-robin CPU selection */
             op->cpu_index = conn->cpu_index;
-            INIT_WORK(&op->work, castle_back_iter_start, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_iter_start, op);
             break;
 
         /* Stateful op continuations
@@ -4521,28 +4542,33 @@ static void castle_back_request_process(struct castle_back_conn *conn, struct ca
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_next.token,
                                                                   CASTLE_RING_ITER_START);
-            INIT_WORK(&op->work, castle_back_iter_next, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_iter_next, op);
             break;
 
         case CASTLE_RING_ITER_FINISH:
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
                                                                   op->req.iter_finish.token,
                                                                   CASTLE_RING_ITER_START);
-            INIT_WORK(&op->work, castle_back_iter_finish, op);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_iter_finish, op);
             break;
 
-        case CASTLE_RING_PUT_CHUNK:
-            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
-                                                                  op->req.put_chunk.token,
-                                                                  CASTLE_RING_BIG_PUT);
-            INIT_WORK(&op->work, castle_back_put_chunk, op);
+        case CASTLE_RING_STREAM_IN_START: /* iterator, round-robin CPU selection */
+            op->cpu_index = conn->cpu_index;
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_stream_in_start, op);
             break;
 
-        case CASTLE_RING_GET_CHUNK:
+        case CASTLE_RING_STREAM_IN_NEXT:
             op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
-                                                                  op->req.get_chunk.token,
-                                                                  CASTLE_RING_BIG_GET);
-            INIT_WORK(&op->work, castle_back_get_chunk, op);
+                                                                  op->req.stream_in_next.token,
+                                                                  CASTLE_RING_STREAM_IN_START);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_stream_in_next, op);
+            break;
+
+        case CASTLE_RING_STREAM_IN_FINISH:
+            op->cpu_index = castle_back_stateful_op_cpu_index_get(conn,
+                                                                  op->req.stream_in_finish.token,
+                                                                  CASTLE_RING_STREAM_IN_START);
+            CASTLE_INIT_WORK_AND_TRACE(&op->work, castle_back_stream_in_finish, op);
             break;
 
         default:
