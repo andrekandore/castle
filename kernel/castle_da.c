@@ -3298,7 +3298,7 @@ static int castle_da_lfs_ct_space_alloc(struct castle_immut_tree_construct *tree
                                           da->id,
                                           EXT_T_MEDIUM_OBJECTS,
                                           data_ext_size,
-                                          growable_ext_flags);
+                                          compr_ext_flags);
         if (EXT_ID_INVAL(data_ext_id))
         {
             castle_printk(LOG_WARN, "Merge failed due to space constraint for data\n");
