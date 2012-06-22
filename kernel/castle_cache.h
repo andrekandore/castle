@@ -64,6 +64,10 @@ typedef struct castle_cache_extent_dirtytree {
                                                      next_virt_off data.                        */
     c_byte_off_t        next_compr_mutable_off; /**< Start offset for where to get next mutable
                                                      compressed c2b.                            */
+    c_byte_off_t        virt_consistent_off_2;  /**< Virtual offset required to reach disk for
+                                                     crash consistency.                         */
+    c_byte_off_t        virt_consistent_off_1;  /**< Virtual offset required to reach disk for
+                                                     crash consistency.                         */
 } c2_ext_dirtytree_t;
 
 struct castle_cache_page;
@@ -326,6 +330,10 @@ void                       castle_cache_dirtytree_demote   (c2_ext_dirtytree_t *
  */
 int c2b_accessed_assign(c2_block_t *c2b, int val);
 int c2b_accessed(c2_block_t *c2b);
+/**********************************************************************************************
+ * Compression.
+ */
+void castle_cache_last_consistent_byte_set(c_ext_id_t ext_id, c_byte_off_t offset);
 /**********************************************************************************************
  * Cache init/fini.
  */

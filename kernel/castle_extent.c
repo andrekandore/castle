@@ -1432,6 +1432,8 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->next_virt_mutable_off  = 0;
     ext->dirtytree->next_compr_off         = 0;
     ext->dirtytree->next_compr_mutable_off = 0;
+    ext->dirtytree->virt_consistent_off_1  = 0;
+    ext->dirtytree->virt_consistent_off_2  = 0;
     ext->global_mask = EMPTY_MASK_RANGE;
 
     set_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
@@ -3905,7 +3907,7 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
     BUG_ON(!test_bit(CASTLE_EXT_COMPR_COMPRESSED_BIT, &comp_ext->flags));
     BUG_ON(comp_blk_bytes > C_COMPR_BLK_SZ);
 
-    /* Compression maps are immutable, can't overwrite exist ones. */
+    /* Compression maps are immutable, can't overwrite existing ones. */
     if (virt_cep.offset < atomic64_read(&virt_ext->next_comp_byte))
         castle_printk(LOG_ERROR, "%s: Invalid compr_map_set on "cep_fmt_str_nl,
                                   __FUNCTION__, cep2str(virt_cep));
@@ -3994,6 +3996,8 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
         return;
     }
 
+    BUG_ON(used_bytes % PAGE_SIZE);
+
     /* Get inclusive offset. */
     compr_offset = used_bytes - 1;
 
@@ -4013,11 +4017,24 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
 
     /* Set dirty tree offsets. */
     mutex_lock(&virt_ext->dirtytree->compr_mutex);
-    virt_ext->dirtytree->next_virt_off          = roundup(used_bytes, C_COMPR_BLK_SZ);
+    virt_ext->dirtytree->next_virt_off          = used_bytes;
     virt_ext->dirtytree->next_virt_mutable_off  = virt_ext->dirtytree->next_virt_off;
-    virt_ext->dirtytree->next_compr_off         = roundup(comp_cep.offset + comp_blk_size,
+    if (used_bytes % C_COMPR_BLK_SZ)
+    {
+        /* Last written data was sub-compr_unit_size. */
+        BUG_ON(comp_blk_size != C_COMPR_BLK_SZ);
+        virt_ext->dirtytree->next_compr_off     = comp_cep.offset + (used_bytes % C_COMPR_BLK_SZ);
+    }
+    else
+        /* Whole compr_unit_size amount of data written out. */
+        virt_ext->dirtytree->next_compr_off     = roundup(comp_cep.offset + comp_blk_size,
                                                           C_BLK_SIZE);
+    debug_compr("Calculated next_compr_off=%lu for ext_id=%lu used_bytes=%lu "
+            "comp_blk_size=%lu comp_cep.offset=%lu used_bytes_mod=%lu dirtytree=%p\n",
+            virt_ext->dirtytree->next_compr_off, virt_ext->ext_id, used_bytes,
+            comp_blk_size, comp_cep.offset, used_bytes%C_COMPR_BLK_SZ, virt_ext->dirtytree);
     virt_ext->dirtytree->next_compr_mutable_off = virt_ext->dirtytree->next_compr_off;
+    BUG_ON(virt_ext->dirtytree->next_compr_mutable_off % C_BLK_SIZE);
     mutex_unlock(&virt_ext->dirtytree->compr_mutex);
 }
 

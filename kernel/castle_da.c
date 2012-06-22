@@ -9056,6 +9056,10 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     castle_ext_freespace_marshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_marshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_marshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
+    castle_cache_last_consistent_byte_set(ct->tree_ext_free.ext_id,
+                                          atomic64_read(&ct->tree_ext_free.used));
+    castle_cache_last_consistent_byte_set(ct->data_ext_free.ext_id,
+                                          atomic64_read(&ct->data_ext_free.used));
 
     if (CT_BLOOM_EXISTS(ct))
         castle_bloom_marshall(&ct->bloom, ctm);

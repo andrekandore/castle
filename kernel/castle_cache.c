@@ -43,7 +43,6 @@
                                                         FLE, __LINE__ , __func__, ##_a);
 #endif
 
-#define COMPR_DEBUG
 #ifndef COMPR_DEBUG
 #define compr_debug(_f, _a...)  ((void) 0)
 #else
@@ -1559,6 +1558,12 @@ void update_c2b(c2_block_t *c2b)
     set_c2b_uptodate(c2b);
 }
 
+inline void update_c2b_maybe(c2_block_t *c2b)
+{
+    if (unlikely(!c2b_uptodate(c2b)))
+        update_c2b(c2b);
+}
+
 struct bio_info {
     int                 rw;
     struct bio          *bio;
@@ -2894,7 +2899,7 @@ endio:
     return 0;
 }
 
-static void _c2_virtual_extent_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree);
+static void _c2_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree);
 
 /**
  * Stop the decompression thread and free the per-cpu decompression buffers.
@@ -2905,7 +2910,7 @@ static void castle_cache_compr_fini(void)
     int i;
 
     /* Destroy any outstanding flush and straddle c2bs. */
-    castle_extent_for_each_virt_ext(_c2_virtual_extent_compress_c2bs_put);
+    castle_extent_for_each_virt_ext(_c2_compress_c2bs_put);
 
     kthread_stop(castle_cache_decompress_thread);
 
@@ -5555,12 +5560,12 @@ void castle_cache_debug_fini(void)
 /*******************************************************************************
  * Compression.
  *
- * Primary entry-point is c2_virtual_extent_compress().
+ * Primary entry-point is castle_cache_compress().
  *
  * See also comments for castle_cache_extent_dirtytree{} which stores relevant
  * offsets required for compression in the VIRTUAL extent.
  *
- * See _c2_virtual_extent_compress_c2bs_get() comments for details on the layout
+ * See _c2_compress_c2bs_get() comments for details on the layout
  * of the flush and straddle c2bs.
  */
 
@@ -5573,9 +5578,136 @@ void castle_cache_debug_fini(void)
         })
 
 /**
+ * Should we try and compress c2b?
+ *
+ * A c2b can be compressed if:
+ *
+ * 1) Compression is enabled (CASTLE_CACHE_USE_LZO)
+ * 2) v_c2b is a full compr_unit_size c2b
+ * 3) v_c2b does not lie in either of the compr_unit_size ranges specified by
+ *    dirtytree->virt_consistent_off_1, dirtytree->virt_consistent_off_2
+ */
+static inline int COMPR_C2B_COMPRESS(c2_ext_dirtytree_t *dirtytree, c2_block_t *v_c2b)
+{
+#if CASTLE_CACHE_USE_LZO
+    c_byte_off_t start_off, end_off, unit_start, unit_end;
+
+    if (unlikely(v_c2b->nr_pages << PAGE_SHIFT < dirtytree->compr_unit_size))
+        return 0;
+
+    /* Does v_c2b lie in a virt_consistent_off compression unit? */
+    start_off = v_c2b->cep.offset;
+    end_off   = start_off + (v_c2b->nr_pages << PAGE_SHIFT);
+
+    /* Check virt_consistent_off_1 if is is not compr_unit_size-aligned. */
+    if (dirtytree->virt_consistent_off_1 % dirtytree->compr_unit_size)
+    {
+        /* virt_consistent_off_2 is rotated to virt_consistent_off_1 when a
+         * new offset is specified so if off_1 is assigned, so must off_2. */
+        BUG_ON(!dirtytree->virt_consistent_off_2);
+        unit_start  = dirtytree->virt_consistent_off_1;
+        unit_start -= unit_start % dirtytree->compr_unit_size;
+        unit_end    = unit_start + dirtytree->compr_unit_size;
+        if (start_off >= unit_start && end_off <= unit_end)
+            return 0;
+    }
+
+    /* Check virt_consistent_off_2 if is is not compr_unit_size-aligned. */
+    if (dirtytree->virt_consistent_off_2 % dirtytree->compr_unit_size)
+    {
+        unit_start  = dirtytree->virt_consistent_off_2;
+        unit_start -= unit_start % dirtytree->compr_unit_size;
+        unit_end    = unit_start + dirtytree->compr_unit_size;
+        if (start_off >= unit_start && end_off <= unit_end)
+            return 0;
+    }
+
+    /* v_c2b can be compressed. */
+    return 1;
+#else
+
+    /* Compression is disabled. */
+    return 0;
+#endif
+}
+
+
+/**
+ * Advise cache of next offset required to reach disk for crash consistency.
+ *
+ * @param   ext_id  Extent
+ * @param   offset  Crash consistent offset
+ *
+ * To allow compressed extents where the data granularity is sub-compr_unit_size
+ * (e.g. medium objects) we have to be careful when compressing to allow
+ * recovery from crashes.
+ *
+ * Merge serialisation (necessary for crash consistency) will pick a particular
+ * offset in all of its extents that much reach disk.  When we deserialise a
+ * merge on recovery from a crash we expect to be able to append data
+ * immediately after the offset we specified during serialisation.  If that
+ * offset was not compr_unit_size-aligned but we had compressed a full
+ * compr_unit_size (i.e. more than required for crash consistency) worth of
+ * data, this would not be possible as compressed extents are immutable and
+ * append-only.
+ *
+ * Clients must therefore inform the cache of their required crash consistent
+ * offsets.  If, during compression, we enocunter data that lies within these
+ * advised offsets we are careful not to compress the data but simply memcpy()
+ * it into the compressed extent instead.  By doing this we can safely recover
+ * and continue appending in the event of recovery after a crash.
+ *
+ * If the offset advised by the consumer is aligned to a compr_unit_size
+ * boundary, we can compress as normal and no special action needs to be taken.
+ *
+ * It is necessary to store a maximum of two of these offsets at a time,
+ * virt_consistent_off_1 and virt_consistent_off_2.  This is because a merge
+ * being serialised could be disjoint from its data being compressed and flushed
+ * to disk.
+ */
+void castle_cache_last_consistent_byte_set(c_ext_id_t ext_id, c_byte_off_t offset)
+{
+    c2_ext_dirtytree_t *dirtytree;
+
+    if (EXT_ID_INVAL(ext_id))
+        return;
+
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
+    BUG_ON(!dirtytree);
+
+    mutex_lock(&dirtytree->compr_mutex);
+
+    /* We must not have already flushed beyond specified offset. */
+    BUG_ON(dirtytree->next_virt_off > offset);
+    /* If we have already compressed to specified offset which is not
+     * compr_unit_size-aligned, the data must be stored uncompressed. */
+    if (dirtytree->next_virt_off == offset
+            && offset % dirtytree->compr_unit_size)
+    {
+        c_ext_pos_t ignored;
+        c_byte_off_t map_sz, base_off;
+        base_off = offset - (offset % dirtytree->compr_unit_size);
+        map_sz   = castle_compr_map_get(CEP(dirtytree->ext_id, base_off),
+                                       &ignored);
+        BUG_ON(map_sz != dirtytree->compr_unit_size);
+    }
+    /* If virt_consistent_off_1 is set and the consumer has provided a new
+     * consistent offset, all data prior to virt_consistent_off_1 must have
+     * been compressed. */
+    BUG_ON(dirtytree->virt_consistent_off_1 > dirtytree->next_virt_mutable_off);
+
+    dirtytree->virt_consistent_off_1 = dirtytree->virt_consistent_off_2;
+    dirtytree->virt_consistent_off_2 = offset;
+
+    mutex_unlock(&dirtytree->compr_mutex);
+
+    castle_extent_dirtytree_put(dirtytree);
+}
+
+/**
  * Destroys flush and straddle c2bs from COMPRESSED extent.
  */
-static void _c2_virtual_extent_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree)
+static void _c2_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree)
 {
     if (dirtytree->c_flush_c2b)
     {
@@ -5590,20 +5722,21 @@ static void _c2_virtual_extent_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree)
 }
 
 /**
- * Get compression unit-sized c2b starting at next_virt_off, if one exists.
- *
- * A read-lock is taken on the c2b to be returned and all c2bs finishing in the
- * specified range are marked as clean.
- *
- * @TODO implement force!
+ * Get virtual c2b for compression starting at next_virt_off, if data exists.
  *
  * @param   dirtytree   Dirtytree to select c2bs from
- * @param   force       If dirty c2bs exist after next_virt_off, return a
- *                      compression unit c2b regardless of whether a full
- *                      compression unit of dirty data is available
+ * @param   force       Returns a c2b smaller than dirtytree->compr_unit_size if
+ *                      that much data is not available
+ *
+ * A read-lock is taken on the c2b to be returned and all c2bs finishing in the
+ * specified range are marked clean.
+ *
+ * If dirtytree->next_virt_off is not compr_unit_size-aligned (e.g. previous
+ * call force-got a sub-compr_unit_size c2b) then another sub-compr_unit_size
+ * c2b will be returned.
  */
-static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
-                                                               int force)
+static c2_block_t * _c2_compress_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
+                                                int force)
 {
     struct rb_node *parent;
     c2_block_t *c2b = NULL, *ret_c2b = NULL;
@@ -5611,11 +5744,14 @@ static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_
     c2_block_t *c2bs[CASTLE_CACHE_COMPR_BATCH_SIZE];
     int c2bs_idx = 0;
 
-    /* Calculate exclusive end_off for compression unit c2b. */
-    BUG_ON(dirtytree->next_virt_off % dirtytree->compr_unit_size);
+    /* Calculate exclusive end_off up to the end of the compression unit. */
     start_off = dirtytree->next_virt_off;
     end_off   = start_off + dirtytree->compr_unit_size;
+    end_off  -= start_off % dirtytree->compr_unit_size;
     seen_off  = 0;
+
+    compr_debug("Searching for v_c2b start_off=%lu end_off=%lu force=%d ext_id=%lu dirtytree=%p\n",
+            start_off, end_off, force, dirtytree->ext_id, dirtytree);
 
     /* Verify c2bs with pages between start_off and end_off are immutable and
      * all pages in the range are covered by at least one c2b. */
@@ -5664,17 +5800,17 @@ static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_
      * the end of the extent. */
     if (seen_off && (seen_off >= end_off || force))
     {
+        c_byte_off_t size;
         c_ext_pos_t cep;
-
-        /* TODO: support force for non-compr_unit_size multiples */
-        BUG_ON(force && seen_off < end_off);
 
         cep.ext_id = dirtytree->ext_id;
         cep.offset = start_off;
-        ret_c2b = castle_cache_block_get(cep,
-                                         dirtytree->compr_unit_size >> PAGE_SHIFT,
-                                         MERGE_OUT);
-        BUG_ON(!force && !c2b_uptodate(ret_c2b));
+        if (likely(seen_off >= end_off))
+            size   = end_off  - start_off; /* full compr_unit_size c2b */
+        else
+            size   = seen_off - start_off; /* sub-compr_unit_size c2b */
+        ret_c2b = castle_cache_block_get(cep, size >> PAGE_SHIFT, MERGE_OUT);
+        BUG_ON(!c2b_uptodate(ret_c2b));
         BUG_ON(test_set_c2b_flushing(ret_c2b));
 
         /* Because all c2bs in this batch are immutable, only rebuild and the
@@ -5683,18 +5819,25 @@ static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_
          * to block and go to sleep waiting for a read-lock here. */
         read_lock_c2b(ret_c2b);
 
-        /* Mark all c2bs ending within the range as clean.  We don't clean the
-         * underlying c2ps as clean here - that will be done on ret_c2b by the
-         * caller once the c2b has been compressed. */
-        while (--c2bs_idx >= 0)
-        {
-            c2b = c2bs[c2bs_idx];
-            clean_c2b(c2b, 0 /*clean_c2ps*/, 0 /*checklocked*/);
-            put_c2b(c2b);
-        }
-
         /* Caller to update dirtytree->next_virt_off. */
     }
+
+    /* Put references on c2bs taken while traversing the dirtytree.  If we are
+     * going to return a c2b, mark the c2bs clean.  We don't clean the
+     * underlying c2ps clean here - that will be done on ret_c2b by the caller
+     * once the c2b has been compressed. */
+    while (--c2bs_idx >= 0)
+    {
+        c2b = c2bs[c2bs_idx];
+        if (ret_c2b)
+            clean_c2b(c2b, 0 /*clean_c2ps*/, 0 /*checklocked*/);
+        put_c2b(c2b);
+    }
+
+    compr_debug("Got c2b=%p offset=%lu end_off=%lu(nr_pages=%d) seen_off=%lu dirtytree=%p\n",
+            ret_c2b, ret_c2b?ret_c2b->cep.offset:0,
+            ret_c2b?(ret_c2b->cep.offset+ret_c2b->nr_pages<<PAGE_SHIFT):0,
+            ret_c2b?ret_c2b->nr_pages:0, seen_off, dirtytree);
 
     return ret_c2b;
 }
@@ -5713,7 +5856,7 @@ static c2_block_t * _c2_virtual_extent_compress_compr_unit_get(c2_ext_dirtytree_
  * @return  0       Flush/straddle c2bs flushed
  * @return -ENOENT  Flush/straddle c2bs empty
  */
-static int _c2_virtual_extent_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
+static int _c2_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
 {
     c2_block_t  *c_c2b;
     c_ext_pos_t  c_cep;
@@ -5732,6 +5875,7 @@ static int _c2_virtual_extent_compress_force_dirty(c2_ext_dirtytree_t *dirtytree
     size         = dirtytree->next_compr_off - c_cep.offset;
     c_c2b        = castle_cache_block_get(c_cep, size >> PAGE_SHIFT, MERGE_OUT);
     write_lock_c2b(c_c2b);
+    update_c2b_maybe(c_c2b);
     dirty_c2b(c_c2b);
     write_unlock_c2b(c_c2b);
     dirtytree->next_compr_mutable_off = c2b_end_off(c_c2b);
@@ -5745,48 +5889,95 @@ static int _c2_virtual_extent_compress_force_dirty(c2_ext_dirtytree_t *dirtytree
 /**
  * Compress c2b_buffer(v_c2b) and store it in c_buf.
  *
- * @param   v_c2b   Data to compress
- * @param   c_buf   Destination for compressed data
- * @param   c_rem   Bytes remaining in c_buf
+ * @param   dirtytree   Dirtytree we are filling compressed c2bs for
+ * @param   v_c2b       Data to compress
+ * @param   c_buf       Pointer to destination for compressed data
+ * @param   c_rem       Pointer to bytes remaining in c_buf
+ * @param   c_work_buf  Per-CPU decompression buffer
  *
- * If c2b_buffer(v_c2b) stays the same size or expands during compression
+ * If v_c2b is smaller than dirtytree->compr_unit_size, c_buf is padded to a
+ * page boundary and the contents of v_c2b are copied into c_buf without any
+ * attempts at compression.
+ *
+ * If c2b_buffer(v_c2b) stays the same size or expands during compression we
  * discard the compressed data and memcpy() instead.
  *
- * @return  Bytes used in c_buf
+ * @return  Bytes of data stored in c_buf
+ *          NOTE: Also updates c_buf and c_rem
  */
-static c_byte_off_t _c2_virtual_extent_compress_fill(c2_block_t *v_c2b,
-                                                     void       *c_buf,
-                                                     size_t      c_rem,
-                                                     void       *c_work_buf)
+static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
+                                   c2_block_t    *v_c2b,
+                                   void         **c_buf,
+                                   c_byte_off_t  *c_rem,
+                                   void          *c_work_buf)
 {
-    c_byte_off_t    size;
-    size_t          c_used;
+    c_byte_off_t    v_size,     /* size of data in v_c2b                */
+                    c_padding;  /* bytes to pad c_buf to block align    */
+    size_t          c_used = 0; /* bytes of data stored in c_buf        */
 
-    /* Populate COMPRESSED c2b with locks held. */
-    BUG_ON(c_rem < C_CHK_SIZE / 2);
-    size = v_c2b->nr_pages << PAGE_SHIFT;
-    BUG_ON(c_rem < lzo1x_worst_compress(size) || c_rem < size);
+    v_size = v_c2b->nr_pages << PAGE_SHIFT;
 
-#if CASTLE_CACHE_USE_LZO
-    BUG_ON(lzo1x_1_compress(c2b_buffer(v_c2b),
-                            v_c2b->nr_pages << PAGE_SHIFT,
-                            c_buf,
-                           &c_used,
-                            c_work_buf));
-    if (unlikely(c_used >= v_c2b->nr_pages << PAGE_SHIFT))
+    BUG_ON(v_size > dirtytree->compr_unit_size);
+
+    if (COMPR_C2B_COMPRESS(dirtytree, v_c2b))
     {
-        /* Data expanded or stayed the same size during compression.
-         * To prevent the unlikely event that we overrun the extent, memcpy()
-         * the data in and adjust c_used accordingly. */
-        memcpy(c_buf, c2b_buffer(v_c2b), v_c2b->nr_pages << PAGE_SHIFT);
-        c_used = v_c2b->nr_pages << PAGE_SHIFT;
+        BUG_ON(*c_rem < C_CHK_SIZE / 2);
+        BUG_ON(*c_rem < lzo1x_worst_compress(v_size));
+        BUG_ON(lzo1x_1_compress(c2b_buffer(v_c2b),
+                                v_size,
+                               *c_buf,
+                               &c_used,
+                                c_work_buf));
     }
-#else
-    memcpy(c_buf, c2b_buffer(v_c2b), v_c2b->nr_pages << PAGE_SHIFT);
-    c_used = v_c2b->nr_pages << PAGE_SHIFT;
-#endif
 
-    return c_used;
+    if (c_used && c_used < v_size)
+    {
+        /* Create map with compressed data size. */
+        castle_compr_map_set(v_c2b->cep,
+                             CEP(dirtytree->compr_ext_id, dirtytree->next_compr_off),
+                             c_used);
+        goto out;
+    }
+
+    /*
+     * We are going to memcpy() data into c_buf.
+     *
+     * We are doing this because of one of the following reasons:
+     *
+     * COMPR_C2B_COMPRESS returned false:
+     *      1) Compression is disabled
+     *      2) v_c2b is a sub-compr_unit_size c2b
+     *      3) v_c2b lies within a crash consistent compression unit
+     * COMPR_C2B_COMPRESS returned true:
+     *      4) Data expanded during compression
+     *
+     */
+
+    /* Block align c_buf so it is suitable for uncompressed data. */
+    c_padding = C_BLK_SIZE - dirtytree->next_compr_off % C_BLK_SIZE;
+   *c_buf += c_padding;
+   *c_rem -= c_padding;
+    BUG_ON(*c_rem < dirtytree->compr_unit_size);
+    dirtytree->next_compr_off += c_padding;
+    BUG_ON(dirtytree->next_compr_off % C_BLK_SIZE);
+
+    /* memcpy() data into block-aligned c_buf. */
+    memcpy(*c_buf, c2b_buffer(v_c2b), v_size);
+    c_used = v_size;
+
+    /* Create full compr_unit_size map if v_c2b is compr_unit_size-aligned. */
+    if (v_c2b->cep.offset % dirtytree->compr_unit_size == 0)
+        castle_compr_map_set(v_c2b->cep,
+                             CEP(dirtytree->compr_ext_id, dirtytree->next_compr_off),
+                             dirtytree->compr_unit_size);
+    else
+        BUG_ON(v_size == dirtytree->compr_unit_size);
+
+out:
+    /* Update offsets and counters for compressed data. */
+   *c_buf                     += c_used;
+   *c_rem                     -= c_used;
+    dirtytree->next_compr_off += c_used;
 }
 
 /**
@@ -5810,8 +6001,8 @@ static c_byte_off_t _c2_virtual_extent_compress_fill(c2_block_t *v_c2b,
  * the same offset as the flush c2b, whichever is larger, and runs until the
  * midpoint of the following chunk.
  */
-static void _c2_virtual_extent_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
-                                                 int create)
+static void _c2_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
+                                  int create)
 {
     c_ext_pos_t c_cep;
     c_byte_off_t size;
@@ -5883,11 +6074,11 @@ static void _c2_virtual_extent_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
  * @param   force           [in]    Whether to force compress all c2bs in dirtytree.
  * @param   compressed_p    [out]   How many VIRTUAL pages were compressed
  */
-static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
-                                       c_byte_off_t        end_off,
-                                       int                 max_pgs,
-                                       int                 force,
-                                       int                *compressed_p)
+static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
+                                  c_byte_off_t        end_off,
+                                  int                 max_pgs,
+                                  int                 force,
+                                  int                *compressed_p)
 {
     c2_block_t  *v_c2b,             /* VIRTUAL c2b (compression-unit aligned and sized).        */
                 *c_c2b = NULL;      /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
@@ -5895,9 +6086,8 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
     c_byte_off_t c_rem = 0;         /* Bytes remaining in c_buf.                                */
     void        *c_work_buf;        /* LZO working buffer space (per-CPU).                      */
     int          compressed = 0;    /* Number of compressed pages (VIRTUAL).                    */
-    int          create = 1;        /* For _c2_virtual_extent_compress_c2bs_get().              */
+    int          create = 1;        /* For _c2_compress_c2bs_get().                             */
     c_byte_off_t size;              /* Transient, for calculations.                             */
-    size_t       c_used;            /* Transient, Bytes used by LZO/memcpy().                   */
 
     BUG_ON(end_off && (!force || max_pgs));
 
@@ -5925,7 +6115,7 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
             /* Create flush and straddle c2bs, if they don't already exist. */
             if (unlikely(create))
             {
-                _c2_virtual_extent_compress_c2bs_get(dirtytree, create);
+                _c2_compress_c2bs_get(dirtytree, create);
                 create = 0;
             }
 
@@ -5943,8 +6133,8 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
         }
         BUG_ON(!c_buf);
 
-        /* Try and get a VIRTUAL compression-unit sized c2b. */
-        v_c2b = _c2_virtual_extent_compress_compr_unit_get(dirtytree, force);
+        /* Try and get source VIRTUAL c2b for compression. */
+        v_c2b = _c2_compress_compr_unit_get(dirtytree, force);
         if (unlikely(!v_c2b))
         {
             int didnt_flush;
@@ -5953,14 +6143,15 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
             if (!force)
                 break;
 
-            didnt_flush = _c2_virtual_extent_compress_force_dirty(dirtytree);
+            didnt_flush = _c2_compress_force_dirty(dirtytree);
             if (end_off && didnt_flush)
             {
                 /* No compressed data was available to flush and we have not
                  * yet compressed up to end_off (we would have exited at the
                  * next_virt_mutable_off >= end_off test above). */
-                castle_printk(LOG_ERROR, "Failed to compress to end_off %lu.\n",
-                        end_off);
+                castle_printk(LOG_ERROR, "Failed to compress ext_id=%lu to "
+                        "end_off=%lu dirtytree=%p\n",
+                        dirtytree->ext_id, end_off, dirtytree);
                 BUG();
             }
             BUG_ON(!COMPR_C2BS_EMPTY(dirtytree));
@@ -5968,26 +6159,15 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
             break; /* Flush/straddle c2bs destroyed on the way out. */
         }
 
-        /* Take locks on c2bs and compress into COMPRESSED c2b.
+        /* Take c2b locks, compress and set maps.
          *
-         * _c2_virtual_extent_compress_compr_unit_get() returned v_c2b with a
+         * _c2_compress_compr_unit_get() returned v_c2b with a
          * read-lock taken, so don't try and get it again here. */
         write_lock_c2b(c_c2b);
-        if (unlikely(!c2b_uptodate(c_c2b)))
-            update_c2b(c_c2b);
-        c_used = _c2_virtual_extent_compress_fill(v_c2b, c_buf, c_rem, c_work_buf);
-        BUG_ON(!c_used); /* must have occupied some space */
-        BUG_ON(c_used >= v_c2b->nr_pages << PAGE_SHIFT);
+        update_c2b_maybe(c_c2b);
+        _castle_cache_compress(dirtytree, v_c2b, &c_buf, &c_rem, c_work_buf);
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(v_c2b);
-
-        /* Set maps and update offsets. */
-        castle_compr_map_set(v_c2b->cep,
-                             CEP(c_c2b->cep.ext_id, dirtytree->next_compr_off),
-                             c_used);
-        c_buf                     += c_used;
-        c_rem                     -= c_used;
-        dirtytree->next_compr_off += c_used;
 
         /* Rotate buffers, dirty compressed data. */
         if (c_rem <= C_CHK_SIZE / 2)
@@ -5998,6 +6178,7 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
                  * the next write will be beyond the end offset of c_flush_c2b.
                  * This means c_flush_c2b is full of compressed data. */
                 write_lock_c2b(dirtytree->c_flush_c2b);
+                update_c2b_maybe(dirtytree->c_flush_c2b);
                 dirty_c2b(dirtytree->c_flush_c2b);
                 write_unlock_c2b(dirtytree->c_flush_c2b);
                 dirtytree->next_compr_mutable_off = c2b_end_off(dirtytree->c_flush_c2b);
@@ -6007,7 +6188,7 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
                     dirtytree->next_virt_mutable_off = dirtytree->next_virt_off;
 
                 /* Advance flush and straddle c2bs. */
-                _c2_virtual_extent_compress_c2bs_get(dirtytree, 0 /*create*/);
+                _c2_compress_c2bs_get(dirtytree, 0 /*create*/);
             }
 
             /* Force c_c2b, c_buf and c_rem to be recalculated. */
@@ -6027,7 +6208,7 @@ static void c2_virtual_extent_compress(c2_ext_dirtytree_t *dirtytree,
     if (COMPR_C2BS_EMPTY(dirtytree))
     {
         BUG_ON(dirtytree->next_virt_off != dirtytree->next_virt_mutable_off);
-        _c2_virtual_extent_compress_c2bs_put(dirtytree);
+        _c2_compress_c2bs_put(dirtytree);
     }
 
     put_cpu_var(castle_cache_compress_buf);
@@ -6178,11 +6359,11 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     compr_type = castle_compr_type_get(dirtytree->ext_id);
     if (compr_type == C_COMPR_VIRTUAL)
     {
-        c2_virtual_extent_compress(dirtytree,   /* dirtytree    */
-                                   0,           /* end_off      */
-                                   0,           /* max_pgs      */
-                                   waitlock,    /* force        */
-                                   NULL);       /* compressed_p */
+        castle_cache_compress(dirtytree,   /* dirtytree    */
+                              0,           /* end_off      */
+                              0,           /* max_pgs      */
+                              waitlock,    /* force        */
+                              NULL);       /* compressed_p */
         return;
     }
 
@@ -6353,11 +6534,11 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
         compr_debug("dirtytree=%p compressing to end_off=%lu\n",
                 dirtytree, end_off);
 
-        c2_virtual_extent_compress(dirtytree,   /* dirtytree    */
-                                   end_off,     /* end_off      */
-                                   0,           /* max_pgs      */
-                                   1,           /* force        */
-                                   NULL);       /* compressed_p */
+        castle_cache_compress(dirtytree,   /* dirtytree    */
+                              end_off,     /* end_off      */
+                              0,           /* max_pgs      */
+                              1,           /* force        */
+                              NULL);       /* compressed_p */
 
         /* Continue to flush COMPRESSED extent.
          *
@@ -6538,8 +6719,8 @@ next_c2b:
          * extents may have data from the eviction range compressed but not yet
          * dirtied.  If it exists, force flush it. */
         mutex_lock(&dirtytree->compr_mutex);
-        _c2_virtual_extent_compress_force_dirty(dirtytree);
-        _c2_virtual_extent_compress_c2bs_put(dirtytree);
+        _c2_compress_force_dirty(dirtytree);
+        _c2_compress_c2bs_put(dirtytree);
         mutex_unlock(&dirtytree->compr_mutex);
     }
 }
