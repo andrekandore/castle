@@ -3560,18 +3560,6 @@ no_space:
  * Instead, check the freespace condition of DA after taking bit-lock.
  */
 
-static void castle_da_lfs_ct_cleanup(struct castle_da_lfs_ct_t *lfs)
-{
-    if (!lfs->space_reserved)
-        return;
-
-    castle_extent_free(lfs->internal_ext.ext_id);
-    castle_extent_free(lfs->tree_ext.ext_id);
-    castle_extent_free(lfs->data_ext.ext_id);
-
-    castle_da_lfs_ct_reset(lfs);
-}
-
 /**
  * Low freespace event handler for creation of all T0 RWCTs.
  *
@@ -3987,9 +3975,10 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
      * for notification when more space available. */
     if (merge->level == 1)
     {
-        lfs             = &merge->da->l1_merge_lfs;
+        lfs             = &_lfs;
         lfs_callback    = castle_da_lfs_l1_merge_ct_callback;
         lfs_data        = merge->da;
+        lfs->da         = merge->da;
     }
     /* For other merges just fail the merge. */
     else
@@ -3998,8 +3987,8 @@ static int castle_da_merge_extents_alloc(struct castle_da_merge *merge)
         lfs_callback    = NULL;
         lfs_data        = NULL;
         lfs->da         = merge->da;
-        castle_da_lfs_ct_reset(lfs);
     }
+    castle_da_lfs_ct_reset(lfs);
 
     ret = castle_immut_tree_space_alloc(merge->out_tree_constr,
                                         internal_tree_size,
@@ -8356,10 +8345,6 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     da->cts_proxy       = NULL;
     atomic_set(&da->lfs_victim_count, 0);
 
-    /* Init LFS structure for Level-1 merge. */
-    da->l1_merge_lfs.da  = da;
-    castle_da_lfs_ct_reset(&da->l1_merge_lfs);
-
     init_waitqueue_head(&da->merge_waitq);
 
     for(i=0; i<MAX_DA_LEVEL-1; i++)
@@ -12503,9 +12488,6 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Shouldn't be any outstanding LFS victims. */
     BUG_ON(atomic_read(&da->lfs_victim_count));
-
-    /* Clean-up any space reserved by LFS victims in past. */
-    castle_da_lfs_ct_cleanup(&da->l1_merge_lfs);
 
     /* Invalidate DA CTs proxy structure. */
     castle_da_cts_proxy_invalidate(da);

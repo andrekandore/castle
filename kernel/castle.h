@@ -2390,7 +2390,6 @@ struct castle_double_array {
                                                          Protected by da->lock.                 */
     atomic_t                    lfs_victim_count;   /**< Number of queued LFS callbacks.
                                                          Non-zero value implies DA is in LFS.   */
-    struct castle_da_lfs_ct_t   l1_merge_lfs;       /**< LFS structure for level 1 merge.       */
     struct list_head            hash_list;
     atomic_t                    ref_cnt;
     atomic_t                    attachment_cnt;
