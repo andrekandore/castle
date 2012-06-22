@@ -4699,15 +4699,6 @@ static void castle_immut_tree_node_complete(struct castle_immut_tree_construct *
     if (tree_constr->node_complete)
         tree_constr->node_complete(tree_constr, node_c2b, depth, completing);
 
-    if ((depth == 0) &&
-        !castle_da_versioning_check(tree_constr->da) &&
-        tree_constr->merge &&
-        MERGE_CHECKPOINTABLE(tree_constr->merge) &&
-        !tree_constr->is_completing)
-    {
-        castle_da_versionless_merge_serialise(tree_constr->merge);
-    }
-
     set_c2b_immutable(node_c2b);
     put_c2b(node_c2b);
 
@@ -4748,6 +4739,7 @@ static void castle_da_merge_node_complete_cb(struct castle_immut_tree_construct 
 static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *tree_constr)
 {
     struct castle_immut_tree_level *level;
+    struct castle_immut_tree_level *level0 = tree_constr->levels;
     int i;
 
     debug("Checking if we need to complete nodes.");
@@ -4785,6 +4777,14 @@ static int castle_immut_tree_nodes_complete(struct castle_immut_tree_construct *
         return -EINVAL;
 
 out:
+    if(tree_constr->merge &&                          /* This is a merge */
+        !level0->node_c2b &&                          /* The leaf node is completed */
+        MERGE_CHECKPOINTABLE(tree_constr->merge) &&   /* The merge is checkpointable */
+        !tree_constr->is_completing &&                /* The merge is not completing now */
+        !castle_da_versioning_check(tree_constr->da)) /* The DA is not versioning */
+    {
+            castle_da_versionless_merge_serialise(tree_constr->merge);
+    }
     debug("We got as far as depth=%d\n", i);
 
     return 0;
@@ -7267,6 +7267,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         {
             struct castle_immut_tree_level *level = merge->out_tree_constr->levels + i;
             struct castle_immut_tree_level *level0 = merge->out_tree_constr->levels;
+            int found_an_occupied_level = 0;
 
             castle_printk(LOG_DEBUG, "%s::[merge %u] checking level %u.\n", __FUNCTION__, merge->id, i);
 
@@ -7291,7 +7292,8 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                 BUG_ON(!castle_da_versioning_check(merge->da) && (i==0));
 
                 /* Assert that occupied levels are contiguous */
-                BUG_ON( (i > 0) && (i - last_occupied_level != 1) );
+                BUG_ON( found_an_occupied_level && (i - last_occupied_level != 1) );
+                found_an_occupied_level = 1;
                 last_occupied_level = i;
 
                 BUG_ON(EXT_POS_INVAL(level->node_c2b->cep));
