@@ -112,6 +112,15 @@ void castle_control_create_with_opts(uint64_t size, c_da_opts_t opts, int *ret, 
     if (size)
     {
         castle_printk(LOG_ERROR, "Not supporting block devices any more.\n");
+        *ret = -ENOSYS;
+        goto err_out;
+    }
+
+    if( !(opts & CASTLE_DA_OPTS_NO_VERSIONING))
+    {
+        castle_printk(LOG_ERROR, "Creating a collection without the CASTLE_DA_OPTS_NO_VERSIONING "
+                    "option is not allowed because versioning is disabled in this release.\n");
+        *ret = -ENOSYS;
         goto err_out;
     }
 
@@ -172,9 +181,11 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
         return;
     }
 
-    castle_printk(LOG_WARN,
-                  "Use of deprecated interface: cloning version=%d.\n",
+    castle_printk(LOG_ERROR,
+                  "Use of disabled interface: cloning version=%d.\n",
                   version);
+    *ret = -ENOSYS;
+    return;
 
     if (castle_version_deleted(version))
     {
@@ -478,9 +489,11 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
     struct castle_attachment *ca = castle_attachment_get(collection, READ);
     c_ver_t ver, old_version;
 
-    castle_printk(LOG_WARN,
-                  "Use of deprecated interface: snapshotting collection id=%d.\n",
+    castle_printk(LOG_ERROR,
+                  "Use of disabled interface: snapshotting collection id=%d.\n",
                   collection);
+    *ret = -ENOSYS;
+    return;
     if(!ca)
     {
         *version = -1;

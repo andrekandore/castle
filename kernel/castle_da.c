@@ -8151,6 +8151,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     castle_printk(LOG_USERINFO, "Allocated DA=%d successfully with creation opts 0x%llx.\n",
             da_id, opts);
 
+    /* NO VERSIONING - EVER! */
+    BUG_ON(castle_da_versioning_check(da));
+
     return da;
 
 err_out:
