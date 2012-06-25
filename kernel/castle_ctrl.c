@@ -173,6 +173,13 @@ err_out:
  */
 void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
 {
+    castle_printk(LOG_ERROR,
+                  "Use of disabled interface: cloning version=%d.\n",
+                  version);
+    *ret = -ENOSYS;
+    return;
+
+#if 0
     if (version == 0)
     {
         castle_printk(LOG_WARN, "Do not clone version 0. Create a new volume.\n");
@@ -180,12 +187,6 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
         *ret   = -EINVAL;
         return;
     }
-
-    castle_printk(LOG_ERROR,
-                  "Use of disabled interface: cloning version=%d.\n",
-                  version);
-    *ret = -ENOSYS;
-    return;
 
     if (castle_version_deleted(version))
     {
@@ -207,6 +208,7 @@ void castle_control_clone(c_ver_t version, int *ret, c_ver_t *clone)
         *clone = 0;
     else
         *clone = version;
+#endif
 }
 
 void castle_control_fs_init(int *ret)
@@ -486,14 +488,15 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
                                         int *ret,
                                         c_ver_t *version)
 {
-    struct castle_attachment *ca = castle_attachment_get(collection, READ);
-    c_ver_t ver, old_version;
-
     castle_printk(LOG_ERROR,
                   "Use of disabled interface: snapshotting collection id=%d.\n",
                   collection);
     *ret = -ENOSYS;
     return;
+
+#if 0
+    struct castle_attachment *ca = castle_attachment_get(collection, READ);
+    c_ver_t ver, old_version;
     if(!ca)
     {
         *version = -1;
@@ -530,6 +533,7 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
 
     castle_events_collection_snapshot(ver, ca->col.id);
     castle_attachment_put(ca);
+#endif
 }
 
 /**
