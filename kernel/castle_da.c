@@ -13076,9 +13076,8 @@ castle_da_in_stream_start(struct castle_double_array    *da,
         goto err_out;
 
     /* Calculate nr_rwcts from tree_ext_size and data_ext_size. Its best-effort, anyway. */
-    nr_rwcts = tree_ext_size / MAX_DYNAMIC_TREE_SIZE;
-    if ((data_ext_size / MAX_DYNAMIC_DATA_SIZE) > nr_rwcts)
-        nr_rwcts = data_ext_size / MAX_DYNAMIC_DATA_SIZE;
+    nr_rwcts = max((int)max(1, (int)(tree_ext_size/MAX_DYNAMIC_TREE_SIZE)),
+            (int)(data_ext_size/MAX_DYNAMIC_DATA_SIZE));
 
     constr->tree = castle_ct_alloc(da,
                                    1,           /* Level - 1.               */
@@ -13117,6 +13116,8 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 {
     struct castle_double_array *da = constr->da;
     struct castle_component_tree *ct = constr->tree;
+
+    BUG_ON(ct->nr_rwcts < 1);
 
     CASTLE_TRANSACTION_BEGIN;
 
