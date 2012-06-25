@@ -6978,6 +6978,10 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
         BUG_ON(EXT_POS_INVAL(out_tree->tree_ext_free));
 
         castle_da_ct_marshall(&merge_mstore->out_tree, out_tree);
+        castle_cache_last_consistent_byte_set(out_tree->tree_ext_free.ext_id,
+                                              atomic64_read(&out_tree->tree_ext_free.used));
+        castle_cache_last_consistent_byte_set(out_tree->data_ext_free.ext_id,
+                                              atomic64_read(&out_tree->data_ext_free.used));
         merge_mstore->is_new_key         = merge->out_tree_constr->is_new_key;
         merge_mstore->skipped_count      = merge->skipped_count;
         merge_mstore->last_leaf_node_cep = INVAL_EXT_POS;
@@ -9059,10 +9063,6 @@ void castle_da_ct_marshall(struct castle_clist_entry *ctm,
     castle_ext_freespace_marshall(&ct->internal_ext_free, &ctm->internal_ext_free_bs);
     castle_ext_freespace_marshall(&ct->tree_ext_free, &ctm->tree_ext_free_bs);
     castle_ext_freespace_marshall(&ct->data_ext_free, &ctm->data_ext_free_bs);
-    castle_cache_last_consistent_byte_set(ct->tree_ext_free.ext_id,
-                                          atomic64_read(&ct->tree_ext_free.used));
-    castle_cache_last_consistent_byte_set(ct->data_ext_free.ext_id,
-                                          atomic64_read(&ct->data_ext_free.used));
 
     if (CT_BLOOM_EXISTS(ct))
         castle_bloom_marshall(&ct->bloom, ctm);
