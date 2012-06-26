@@ -1685,6 +1685,10 @@ typedef struct castle_iterator {
     int                           running_async;    /**< Has the iterator requeued and gone
                                                          asynchronous since it started, e.g. to
                                                          do I/O or avoid a stack overflow.      */
+    int                           running_sync;     /**< Temporary return variable used in
+                                                         castle_btree_iter_path_traverse_endio
+                                                         to notify the caller whether endio
+                                                         was synchronous. */
     struct castle_cache_block    *path[MAX_BTREE_DEPTH];
     int                           depth;
     int                           btree_levels;     /**< Private copy of ct->tree_depth, recorded

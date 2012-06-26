@@ -1742,6 +1742,7 @@ static void _castle_btree_iter_path_traverse(c_iter_t *c_iter)
 }
 DEFINE_WQ_TRACE_FN(_castle_btree_iter_path_traverse, c_iter_t);
 
+
 /**
  * IO completion callback handler for castle_btree_iter_path_traverse().
  *
@@ -1794,7 +1795,7 @@ static void castle_btree_iter_path_traverse_endio(c2_block_t *c2b, int did_io)
         queue_work(castle_wqs[c_iter->depth+MAX_BTREE_DEPTH], &c_iter->work);
     }
     else
-        __castle_btree_iter_path_traverse(c_iter);
+        c_iter->running_sync = 1;
 }
 
 /**
@@ -1869,11 +1870,19 @@ static int castle_btree_iter_path_traverse(c_iter_t *c_iter, c_ext_pos_t node_ce
     /* Continue the traverse, scheduling and waiting for IO if necessary. */
     if (write_locked)
     {
+        int running_sync;
+
+        c_iter->running_sync = 0;
         BUG_ON(_castle_cache_block_read(c2b,
                                         castle_btree_iter_path_traverse_endio,
                                         c_iter));
 
-        return 1; /* inform caller we issued async I/O */
+        running_sync = c_iter->running_sync;
+        c_iter->running_sync = 0;
+        if(running_sync)
+            return __castle_btree_iter_path_traverse(c_iter);
+        else
+            return 1; /* inform caller we issued async I/O */
     }
     else
     {
