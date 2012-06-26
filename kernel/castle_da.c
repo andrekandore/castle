@@ -4844,13 +4844,6 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
     /* Any operations on DA tree lists should be a transaction. */
     BUG_ON(!CASTLE_IN_TRANSACTION);
 
-    /* On error, there shouldn't be any parallel reads on it. */
-    if (out_tree && err)
-    {
-        BUG_ON(atomic_read(&out_tree->ref_count) != 1);
-        BUG_ON(atomic_read(&out_tree->write_ref_count) != 0);
-    }
-
     /* If the merge is aborting release extra reference on LO. This has no side effects, just
      * for the sake of more sanity checks at extents_fini(). */
     if (err == -ESHUTDOWN && out_tree)
@@ -12244,7 +12237,7 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Invalidate DA CTs proxy structure. */
     castle_da_cts_proxy_invalidate(da);
 
-    /* Destroy Component Trees. */
+    /* Delete CT sysfs entries from DA. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
         struct list_head *l, *lt;
@@ -12259,6 +12252,22 @@ void castle_da_destroy_complete(struct castle_double_array *da)
             BUG_ON(ct->merge || !MERGE_ID_INVAL(ct->merge_id));
 
             castle_sysfs_ct_del(ct);
+        }
+    }
+
+    /* Wait for all sysfs references to go away. */
+    castle_sysfs_da_del_check(da);
+
+    /* Destroy Component Trees. */
+    for(i=0; i<MAX_DA_LEVEL; i++)
+    {
+        struct list_head *l, *lt;
+
+        list_for_each_safe(l, lt, &da->levels[i].trees)
+        {
+            struct castle_component_tree *ct;
+
+            ct = list_entry(l, struct castle_component_tree, da_list);
 
             /* No outstanding merges and active attachments. Component Tree
              * shouldn't be referenced any-where. */
@@ -12280,8 +12289,6 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Destroy Version and Rebuild Version Tree. */
     castle_version_tree_delete(da->root_version);
-
-    castle_sysfs_da_del_check(da);
 
     /* Dealloc the DA. */
     castle_da_dealloc(da);
@@ -12441,10 +12448,6 @@ int castle_double_array_destroy(c_da_t da_id)
     castle_events_version_tree_destroyed(da->id);
 
     castle_sysfs_da_del(da);
-
-    /* Invalidate, if there are any outstanding proxy references. */
-    BUG_ON(da->cts_proxy && (atomic_read(&da->cts_proxy->ref_cnt) != 1));
-    castle_da_cts_proxy_invalidate(da);
 
     castle_printk(LOG_USERINFO, "Marking DA %u for deletion\n", da_id);
     /* Set the destruction bit, which will stop further merges. */
