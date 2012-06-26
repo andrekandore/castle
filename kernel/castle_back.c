@@ -3740,6 +3740,56 @@ err0: castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 }
 DEFINE_WQ_TRACE_FN(castle_back_put_chunk, struct castle_back_op);
 
+static int castle_back_stream_in_extent_growth_control(struct castle_back_stateful_op *stateful_op,
+                                                        int data_extent, /* else, tree extent */
+                                                        int blocks_needed)
+{
+    c_ext_free_t *ext_freespace;
+    int growth_rate;
+    c_chk_cnt_t extent_size_limit;
+    struct castle_immut_tree_construct *da_stream = stateful_op->stream_in.da_stream;
+
+    if (data_extent)
+    {
+        ext_freespace = &da_stream->tree->data_ext_free;
+        growth_rate = MERGE_OUTPUT_DATA_GROWTH_RATE;
+        extent_size_limit = stateful_op->stream_in.expected_dataext_chunks;
+    }
+    else
+    {
+        BUG(); /* we are not ready for this */
+        //ext_freespace = &da_stream->tree->tree_ext_free;
+        //growth_rate = MERGE_OUTPUT_TREE_GROWTH_RATE;
+        //extent_size_limit = stateful_op->stream_in.expected_btree_chunks;
+    }
+
+    if (castle_ext_freespace_available(&da_stream->tree->data_ext_free) < blocks_needed*C_BLK_SIZE)
+    {
+        /* Growth necessary */
+
+        /* Can this extent grow beyond it's current size? */
+        if( CHUNK(ext_freespace->ext_size + (growth_rate * C_BLK_SIZE)) > extent_size_limit )
+        {
+            /* Growth will exceed allocation */
+            castle_printk(LOG_ERROR,
+                    "%s::[op %llx] exhausted extent allocation; suggest complete current stream then retry.\n",
+                    __FUNCTION__, stateful_op->token);
+            return -ENOSPC;
+        }
+
+        /* Try to grow? */
+        if(castle_da_immut_tree_extent_grow(ext_freespace, blocks_needed * C_BLK_SIZE, growth_rate))
+        {
+            /* Growth failed because running low on freespace */
+            castle_printk(LOG_ERROR,
+                    "%s::[op %llx] failed to obtain freespace on extent; suggest complete current streams, wait, then retry.\n",
+                    __FUNCTION__, stateful_op->token);
+            return -ENOSPC;
+        }
+        /* Growth successful. */
+    }
+    return 0;
+}
 
 /**
  * Perform stream in on stateful_op->curr_op->buf.
@@ -3855,33 +3905,15 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                         __FUNCTION__, total_blocks, ext_space_needed);
 
                     /* Make room for the new medium-sized value... */
-                    if (castle_ext_freespace_available(&da_stream->tree->data_ext_free) < total_blocks*C_BLK_SIZE)
+                    err = castle_back_stream_in_extent_growth_control(stateful_op, 1, total_blocks);
+                    if(err)
                     {
-                        /* Growth necessary */
-                        if( CHUNK(da_stream->tree->data_ext_free.ext_size +
-                                (MERGE_OUTPUT_DATA_GROWTH_RATE * C_BLK_SIZE)) >
-                                        stateful_op->stream_in.expected_dataext_chunks )
-                        {
-                            /* Growth will exceed allocation */
-                            castle_printk(LOG_ERROR,
-                                    "%s::[op %llx] exhausted stream_in mo_chunk allocation; suggest complete current stream then retry.\n",
-                                    __FUNCTION__, stateful_op->token);
-                            err = -ENOSPC;
-                            goto err2;
-                        }
-
-                        if(castle_da_immut_tree_extent_grow(&da_stream->tree->data_ext_free,
-                                total_blocks * C_BLK_SIZE,
-                                MERGE_OUTPUT_DATA_GROWTH_RATE))
-                        {
-                            /* Growth failed because running low on freespace */
-                            castle_printk(LOG_ERROR,
-                                    "%s::[op %llx] failed to obtain freespace on data extent; suggest complete current streams, wait, then retry.\n",
-                                    __FUNCTION__, stateful_op->token);
-                            err = -ENOSPC;
-                            goto err2;
-                        }
+                        castle_printk(LOG_ERROR,
+                                    "%s::[op %llx] growth control failed with err %d.\n",
+                                    __FUNCTION__, stateful_op->token, err);
+                        goto err2;
                     }
+
                     if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
                                                         ext_space_needed,
                                                         0, /* was_preallocated */
