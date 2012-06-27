@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 46 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 47 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -35,6 +35,8 @@ extern "C" {
 #define CASTLE_STREAMING_ENTRY_HEADER_TYPE_TOMBSTONE   (4)
 
 #define MAX_INLINE_VAL_SIZE            512      /* In bytes */
+
+#define MAX_CONCURRENT_CONTROL_MERGES (32)
 
 typedef uint64_t castle_user_timestamp_t;
 
@@ -1194,6 +1196,7 @@ struct castle_fs_superblock_public {
     CASTLE_ERROR_CODE(112, C_ERR_MERGE_INVAL_ID, "Invalid merge ID.")                           \
     CASTLE_ERROR_CODE(113, C_ERR_MERGE_RUNNING, "Merge is already running.")                    \
     CASTLE_ERROR_CODE(114, C_ERR_MERGE_BACKUP_BARRIER, "Trying to merge beyond back-up barrier.")\
+    CASTLE_ERROR_CODE(114, C_ERR_MERGE_TOO_MANY, "Too many merges ongoing.")                    \
                                                                                                 \
     CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \

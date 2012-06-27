@@ -3373,6 +3373,7 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
     stateful_op->stream_in.expected_dataext_chunks = op->req.stream_in_start.medium_object_chunks +
                     (STREAM_IN_OUTPUT_DATA_GROWTH_RATE
                       - (op->req.stream_in_start.medium_object_chunks%STREAM_IN_OUTPUT_DATA_GROWTH_RATE));
+    //TODO@tr: make round-up macro for the above two
     stateful_op->stream_in.expected_entries =
             castle_back_stream_in_entries_wc_estimate(stateful_op->stream_in.expected_btree_chunks,
                                                       attachment->col.da->btree_type);

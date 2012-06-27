@@ -73,6 +73,7 @@ static struct list_head        *castle_da_hash       = NULL;
 static struct list_head        *castle_ct_hash       = NULL;
 static struct list_head        *castle_data_exts_hash= NULL;
        c_da_t                   castle_next_da_id    = 1;
+static atomic_t                 castle_ongoing_control_merges = ATOMIC(0);
 static atomic64_t               castle_next_tree_seq = ATOMIC64(0);
 static atomic64_t               castle_next_tree_data_age = ATOMIC64(0);
 static int                      castle_da_exiting    = 0;
@@ -6249,6 +6250,9 @@ static struct castle_da_merge* castle_da_merge_alloc(int                        
 
     if(MERGE_CHECKPOINTABLE(merge))
     {
+        /* If the following BUGs, then checkpoint may not be safe */
+        BUG_ON(atomic_read(&castle_ongoing_control_merges) > MAX_CONCURRENT_CONTROL_MERGES);
+
         /* When an iterator moves to a leaf node new node boundary, a new s.e.b is set. */
         BUG_ON(nr_trees <= 0);
         merge->shrinkable_extent_boundaries.tree =
@@ -12587,6 +12591,7 @@ static int castle_merge_run(void *_data)
 
     castle_free(merge_thread);
 
+    atomic_dec(&castle_ongoing_control_merges);
     atomic_dec(&castle_da_merge_thread_count);
 
     castle_da_put(da);
@@ -12725,6 +12730,15 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
 
     *merge_id = INVAL_MERGE_ID;
 
+    if (atomic_inc_return(&castle_ongoing_control_merges) > MAX_CONCURRENT_CONTROL_MERGES)
+    {
+        ret = C_ERR_MERGE_TOO_MANY;
+        castle_printk(LOG_USERINFO,
+            "Already %u control-initiated merges on-going; can't start another.\n",
+            MAX_CONCURRENT_CONTROL_MERGES);
+        goto err_out;
+    }
+
     if (merge_cfg->nr_arrays == 0)
     {
         ret = C_ERR_MERGE_0TREES;
@@ -12858,6 +12872,7 @@ int castle_merge_start(c_merge_cfg_t *merge_cfg, c_merge_id_t *merge_id, int lev
     return 0;
 
 err_out:
+    atomic_dec(&castle_ongoing_control_merges);
 
     if (da)
         castle_da_put(da);
