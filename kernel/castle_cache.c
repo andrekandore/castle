@@ -2478,10 +2478,11 @@ int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
         {
             debug("Asking extent manager for "cep_fmt_str_nl,
                     cep2str(cur_cep));
-            iochunks = castle_extent_map_get(cur_cep.ext_id,
-                                        CHUNK(cur_cep.offset),
-                                        chunks,
-                                        rw, cur_cep.offset);
+            iochunks = castle_extent_map_get(cur_cep.ext_id,        /* ext_id   */
+                                             CHUNK(cur_cep.offset), /* offset   */
+                                             chunks,                /* chk_map  */
+                                             rw,                    /* rw       */
+                                             cur_cep.offset);       /* boff     */
             BUG_ON((iochunks != 0) && (iochunks > k_factor*2));
             if (iochunks == 0)
                 /* Complete the IO by dropping our reference, return early. */
@@ -5675,6 +5676,10 @@ void castle_cache_last_consistent_byte_set(c_ext_id_t ext_id, c_byte_off_t offse
     dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
     BUG_ON(!dirtytree);
 
+    /* Don't store offsets for uncompressed extents. */
+    if (EXT_ID_INVAL(dirtytree->compr_ext_id))
+        goto out;
+
     mutex_lock(&dirtytree->compr_mutex);
 
     /* We must not have already flushed beyond specified offset. */
@@ -5701,6 +5706,7 @@ void castle_cache_last_consistent_byte_set(c_ext_id_t ext_id, c_byte_off_t offse
 
     mutex_unlock(&dirtytree->compr_mutex);
 
+out:
     castle_extent_dirtytree_put(dirtytree);
 }
 

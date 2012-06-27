@@ -4126,7 +4126,8 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
 uint32_t castle_extent_map_get(c_ext_id_t     ext_id,
                                c_chk_t        offset,
                                c_disk_chk_t  *chk_map,
-                               int            rw, c_byte_off_t boff)
+                               int            rw,
+                               c_byte_off_t boff)
 {
     c_ext_t *ext = castle_extents_hash_get(ext_id);
     int i, j;
