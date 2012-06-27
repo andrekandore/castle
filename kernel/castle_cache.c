@@ -5911,9 +5911,8 @@ static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                    c_byte_off_t  *c_rem,
                                    void          *c_work_buf)
 {
-    c_byte_off_t    v_size,     /* size of data in v_c2b                */
-                    c_padding;  /* bytes to pad c_buf to block align    */
-    size_t          c_used = 0; /* bytes of data stored in c_buf        */
+    c_byte_off_t v_size;        /* size of data in v_c2b            */
+    size_t       c_used = 0;    /* bytes of data stored in c_buf    */
 
     v_size = v_c2b->nr_pages << PAGE_SHIFT;
 
@@ -5954,11 +5953,15 @@ static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
      */
 
     /* Block align c_buf so it is suitable for uncompressed data. */
-    c_padding = C_BLK_SIZE - dirtytree->next_compr_off % C_BLK_SIZE;
-   *c_buf += c_padding;
-   *c_rem -= c_padding;
+    if (dirtytree->next_compr_off % C_BLK_SIZE)
+    {
+        c_byte_off_t c_padding; /* bytes to pad c_buf to block align */
+        c_padding = C_BLK_SIZE - dirtytree->next_compr_off % C_BLK_SIZE;
+       *c_buf += c_padding;
+       *c_rem -= c_padding;
+        dirtytree->next_compr_off += c_padding;
+    }
     BUG_ON(*c_rem < dirtytree->compr_unit_size);
-    dirtytree->next_compr_off += c_padding;
     BUG_ON(dirtytree->next_compr_off % C_BLK_SIZE);
 
     /* memcpy() data into block-aligned c_buf. */
