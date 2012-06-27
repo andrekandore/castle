@@ -202,11 +202,15 @@ typedef uint32_t block_t;
 #define MICRO_EXT_START                (60)
 #define MICRO_EXT_SIZE                 (1)   /* Don't change this */
 #define META_SPACE_SIZE                (100)
+#define BTREE_NODE_MSTORE_ALLOC_BLOCKS (                                                          \
+                    ((sizeof(struct castle_active_btree_node_entry)                              \
+                          + (HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE)) -1)/C_BLK_SIZE + 1)
+#define PER_MERGE_BTREE_NODES_MSTORE_ALLOC_BLOCKS (                                               \
+                (MAX_BTREE_DEPTH-DAM_SERDES_BTREE_NODE_MIN_LEVEL_MSTORE)                          \
+                    * BTREE_NODE_MSTORE_ALLOC_BLOCKS)
 #define MSTORE_SPACE_SIZE              (50 +                                                      \
-    + MAX_CONCURRENT_CONTROL_MERGES                                                               \
-    * ((((sizeof(struct castle_active_btree_node_entry)                                           \
-            +(HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE)) -1)                                     \
-        / C_CHK_SIZE) + 1))
+    + (MAX_CONCURRENT_CONTROL_MERGES*PER_MERGE_BTREE_NODES_MSTORE_ALLOC_BLOCKS*C_BLK_SIZE-1)      \
+            /C_CHK_SIZE + 1)
 #define FREE_SPACE_START               (100)
 #define FREESPACE_OFFSET               (2 * C_CHK_SIZE)
 #define FREESPACE_SIZE                 (20 * C_CHK_SIZE)

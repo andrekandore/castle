@@ -1849,6 +1849,10 @@ static int castle_extent_mstore_ext_create(void)
         i++;
     rcu_read_unlock();
 
+    castle_printk(LOG_INIT, "%s::allocated %llu blocks per node, %llu blocks in mstore for merge nodes\n",
+        __FUNCTION__,
+        BTREE_NODE_MSTORE_ALLOC_BLOCKS,
+        PER_MERGE_BTREE_NODES_MSTORE_ALLOC_BLOCKS);
     ext_size = MSTORE_SPACE_SIZE * i / k_factor;
 
     ext_id = castle_extent_alloc_and_grow(RDA_2, 0,
