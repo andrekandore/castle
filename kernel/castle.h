@@ -930,6 +930,10 @@ struct castle_btree_type {
                                  should always return a negative number
                                  except if also compared to invalid key
                                  in which case cmp should return zero   */
+    size_t   (*min_key_size)  (void);
+                              /* Returns a rough underestimate of the size of
+                                 the smallest possible key in the given
+                                 tree format. */
     size_t   (*max_entries)   (size_t size);
                               /* Returns a conservative estimate of the
                                  max number of entries which can fit in
@@ -2353,6 +2357,9 @@ typedef enum {
 #define MERGE_OUTPUT_TREE_GROWTH_RATE (10) /* BM said don't make this < 10 */
 /* rate at which output tree medium objects extent is grown; in chunks at a time. */
 #define MERGE_OUTPUT_DATA_GROWTH_RATE (10) /* BM said don't make this < 10 */
+
+#define STREAM_IN_OUTPUT_TREE_GROWTH_RATE (MERGE_OUTPUT_TREE_GROWTH_RATE)
+#define STREAM_IN_OUTPUT_DATA_GROWTH_RATE (MERGE_OUTPUT_DATA_GROWTH_RATE)
 
 #define MIN_DA_SERDES_LEVEL                 (2) /* merges below this level won't be serialised;
                                                    and therefore won't use partial merges       */

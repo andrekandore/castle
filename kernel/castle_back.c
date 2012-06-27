@@ -27,6 +27,7 @@
 #include "castle_systemtap.h"
 #include "castle_da.h"
 #include "castle_freespace.h"
+#include "castle_btree.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 
@@ -167,8 +168,10 @@ struct castle_back_iterator
 
 struct castle_back_stream_in
 {
-    c_collection_id_t     collection_id;           /**< Collection ID.                            */
     uint64_t              expected_entries;        /**< How many entries the user said to expect. */
+
+    c_chk_cnt_t           expected_btree_chunks;   /**< How many chunks the user said we would need
+                                                        for the btree leaf nodes extent.          */
     c_chk_cnt_t           expected_dataext_chunks; /**< How many chunks the user said we would need
                                                         for medium objects extent.                */
     uint64_t              received_entries;        /**< Entries provided so far.                  */
@@ -3251,39 +3254,41 @@ err0: castle_free(op->key);
 }
 DEFINE_WQ_TRACE_FN(castle_back_big_put, struct castle_back_op);
 
-static c_chk_cnt_t castle_back_stream_in_tree_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op)
+static uint64_t castle_back_stream_in_entries_wc_estimate(c_chk_cnt_t tree_ext_size,
+                                                          btree_t btree_type)
 {
-    struct castle_btree_type *btree;
-    int nodes;
-    c_chk_cnt_t tree_ext_size;
-    int wc_entries_per_node;
-
-    btree = castle_double_array_btree_type_get(stateful_op->attachment);
-    wc_entries_per_node = btree->max_entries(HDD_RO_TREE_LEAF_NODE_SIZE);
-    nodes = DIV_ROUND_UP(stateful_op->stream_in.expected_entries, wc_entries_per_node);
-    tree_ext_size = DIV_ROUND_UP(nodes*HDD_RO_TREE_LEAF_NODE_SIZE*PAGE_SIZE, C_CHK_SIZE);
-
-    return tree_ext_size;
-    //TODO@tr: fix this! atm we are basically ignoring it!
-    //TODO@tr: from LT: I changed this to HDD_RO_TREE_LEAF_NODE_SIZE, you may need to adjust
+    struct castle_btree_type *btree = castle_btree_type_get(btree_type);
+    /* The worst case situation is for leaf nodes on HDDs; that means minimum overhead expense */
+    uint32_t node_count = (tree_ext_size*C_CHK_SIZE) / (HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE);
+    uint32_t min_size_per_key = btree->min_key_size();
+    uint32_t keys_per_node = (HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE) / min_size_per_key;
+    return keys_per_node * node_count;
 }
 
-static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(struct castle_back_stateful_op *stateful_op,
-                                                                  c_chk_cnt_t tree_ext_size)
+static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(c_chk_cnt_t tree_ext_size,
+                                                                       btree_t btree_type)
 {
-    struct castle_btree_type *btree;
-    c_chk_cnt_t internal_ext_size;
+    struct castle_btree_type *btree = castle_btree_type_get(btree_type);
+    uint32_t max_leaf_nodes;
+    uint32_t max_entries_per_internal_node;
+    uint32_t level1_nodes;
+    uint32_t all_internal_nodes;
 
-    btree = castle_double_array_btree_type_get(stateful_op->attachment);
-    /* The following "inspired" by castle_da_merge_output_size, a true story */
-    internal_ext_size = tree_ext_size;
-    internal_ext_size /= (HDD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
-    internal_ext_size /= btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
-    internal_ext_size ++;
-    internal_ext_size *= (SSD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
-    internal_ext_size  = MASK_CHK_OFFSET(internal_ext_size + C_CHK_SIZE);
-    internal_ext_size *= 2;
-    return internal_ext_size;
+    /* The worst case situation is everything on SSDs; that would maximise the number of leaf nodes
+       and in the internal node extent it would maximize overheads. */
+    max_leaf_nodes = (tree_ext_size*C_CHK_SIZE) / (SSD_RO_TREE_LEAF_NODE_SIZE*C_BLK_SIZE);
+    BUG_ON(!max_leaf_nodes);
+    max_entries_per_internal_node = btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
+
+    /* There are (max_leaf_node) items; for a tree where each node can have
+       (max_entries_per_internal_node) children, how many nodes will we have? */
+
+    level1_nodes = ((max_leaf_nodes-1) / max_entries_per_internal_node) + 1;
+
+    /* the whole internal tree will have no more than 2x the nodes contained at the lowest level. */
+    all_internal_nodes = 2*level1_nodes;
+
+    return ((all_internal_nodes * SSD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE)-1) / C_CHK_SIZE + 1;
 }
 
 static void castle_back_stream_in_continue(void *data);
@@ -3291,16 +3296,15 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
 {
     struct castle_back_conn *conn = op->conn;
     struct castle_back_stateful_op *stateful_op;
-    c_chk_cnt_t tree_ext_size;
     c_chk_cnt_t internal_ext_size;
     struct castle_attachment *attachment;
     struct castle_immut_tree_construct *constr;
     int err = 0;
     int col_da_nr_trees;
 
-    if(!op->req.stream_in_start.entries_count)
+    if(!op->req.stream_in_start.btree_chunks)
     {
-        error("castle_back: rejecting request for stream_in of 0 objects.\n");
+        error("castle_back: rejecting request for stream_in with btree size 0.\n");
         err = -ECANCELED;
         goto err0;
     }
@@ -3354,26 +3358,28 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
         goto err2;
     }
 
-
     /* Initialize stateful op. */
     stateful_op->tag = CASTLE_RING_STREAM_IN_START;
     stateful_op->flags = op->req.flags;
     stateful_op->queued_size = 0;
+    stateful_op->stream_in.received_entries = 0;
+    stateful_op->stream_in.received_mobj_off = 0;
 
-    stateful_op->stream_in.collection_id
-                                    = op->req.stream_in_start.collection_id;
-    stateful_op->stream_in.expected_entries
-                                    = op->req.stream_in_start.entries_count;
-    stateful_op->stream_in.expected_dataext_chunks
-                                    = op->req.stream_in_start.medium_object_chunks;
-    stateful_op->stream_in.received_entries
-                                    = 0;
-    stateful_op->stream_in.received_mobj_off
-                                    = 0;
-
-    tree_ext_size     = castle_back_stream_in_tree_ext_size_wc_estimate(stateful_op);
-    internal_ext_size = castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op, tree_ext_size);
-    internal_ext_size = tree_ext_size; /* TODO@tr get rid of this! */
+    /* Initialise stateful op extent sizing */
+    /* Round up the growable extents */
+    stateful_op->stream_in.expected_btree_chunks   = op->req.stream_in_start.btree_chunks +
+                    (STREAM_IN_OUTPUT_TREE_GROWTH_RATE
+                      - (op->req.stream_in_start.btree_chunks%STREAM_IN_OUTPUT_TREE_GROWTH_RATE));
+    stateful_op->stream_in.expected_dataext_chunks = op->req.stream_in_start.medium_object_chunks +
+                    (STREAM_IN_OUTPUT_DATA_GROWTH_RATE
+                      - (op->req.stream_in_start.medium_object_chunks%STREAM_IN_OUTPUT_DATA_GROWTH_RATE));
+    stateful_op->stream_in.expected_entries =
+            castle_back_stream_in_entries_wc_estimate(stateful_op->stream_in.expected_btree_chunks,
+                                                      attachment->col.da->btree_type);
+    internal_ext_size =
+            castle_back_stream_in_internal_ext_size_wc_estimate(stateful_op->stream_in.expected_btree_chunks,
+                                                                attachment->col.da->btree_type);
+    BUG_ON(!internal_ext_size);
 
     castle_printk(LOG_DEBUG, "%s:: stream_in op on cpu %u, expected_entries: %lld, "
                 "expected_dataext_chunks: %ld, stateful_op:%p\n",
@@ -3383,12 +3389,12 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
                 stateful_op->stream_in.expected_dataext_chunks,
                 stateful_op);
 
-    /* FIXME: Do we need transaction lock here? */
+    /* TODO@tr: Do we need transaction lock here? */
     CASTLE_TRANSACTION_BEGIN;
     constr = castle_da_in_stream_start(stateful_op->attachment->col.da,
                                        stateful_op->stream_in.expected_entries,
                                        internal_ext_size,
-                                       tree_ext_size,
+                                       stateful_op->stream_in.expected_btree_chunks,
                                        stateful_op->stream_in.expected_dataext_chunks);
     CASTLE_TRANSACTION_END;
 
@@ -3397,7 +3403,7 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
         castle_printk(LOG_ERROR, "%s::castle_da_in_stream_start failed for "
                 "collection id 0x%x, expected entries %lld, expected MO chunks %lld\n",
                 __FUNCTION__,
-                stateful_op->stream_in.collection_id,
+                op->req.stream_in_start.collection_id,
                 stateful_op->stream_in.expected_entries,
                 stateful_op->stream_in.expected_dataext_chunks);
         err = -ENOSPC;
@@ -3752,15 +3758,14 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
     if (data_extent)
     {
         ext_freespace = &da_stream->tree->data_ext_free;
-        growth_rate = MERGE_OUTPUT_DATA_GROWTH_RATE;
+        growth_rate = STREAM_IN_OUTPUT_DATA_GROWTH_RATE;
         extent_size_limit = stateful_op->stream_in.expected_dataext_chunks;
     }
     else
     {
-        BUG(); /* we are not ready for this */
-        //ext_freespace = &da_stream->tree->tree_ext_free;
-        //growth_rate = MERGE_OUTPUT_TREE_GROWTH_RATE;
-        //extent_size_limit = stateful_op->stream_in.expected_btree_chunks;
+        ext_freespace = &da_stream->tree->tree_ext_free;
+        growth_rate = STREAM_IN_OUTPUT_TREE_GROWTH_RATE;
+        extent_size_limit = stateful_op->stream_in.expected_btree_chunks;
     }
 
     if (castle_ext_freespace_available(&da_stream->tree->data_ext_free) < blocks_needed*C_BLK_SIZE)
@@ -3772,15 +3777,15 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         {
             /* Growth will exceed allocation */
             castle_printk(LOG_ERROR,
-                    "%s::[op %llx] exhausted extent allocation; suggest complete current stream then retry.\n",
-                    __FUNCTION__, stateful_op->token);
+                    "%s::[op %llx] exhausted extent allocation (size: %lu chunks); suggest complete current stream then retry.\n",
+                    __FUNCTION__, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE);
             return -ENOSPC;
         }
 
         /* Try to grow? */
         if(castle_da_immut_tree_extent_grow(ext_freespace, blocks_needed * C_BLK_SIZE, growth_rate))
         {
-            /* Growth failed because running low on freespace */
+            /* Growth failed probably because running low on freespace */
             castle_printk(LOG_ERROR,
                     "%s::[op %llx] failed to obtain freespace on extent; suggest complete current streams, wait, then retry.\n",
                     __FUNCTION__, stateful_op->token);
@@ -3858,15 +3863,14 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         btree->key_print(LOG_DEVEL, key);
 #endif
 
-        /* Make room for the new entry... */
-        if(castle_da_immut_tree_extent_grow(&da_stream->tree->tree_ext_free,
-                castle_immut_tree_node_size_get(da_stream, 0) * C_BLK_SIZE,
-                MERGE_OUTPUT_TREE_GROWTH_RATE))
+        /* Make room for new entry... */
+        err = castle_back_stream_in_extent_growth_control(stateful_op, 0,
+                castle_immut_tree_node_size_get(da_stream, 0));
+        if(err)
         {
             castle_printk(LOG_ERROR,
-                    "%s::[op %llx] failed to obtain freespace on tree extent; suggest complete current streams, wait, then retry.\n",
-                    __FUNCTION__, stateful_op->token);
-            err = -ENOSPC;
+                        "%s::[op %llx] leaf node extent growth control failed with err %d.\n",
+                        __FUNCTION__, stateful_op->token, err);
             goto err2;
         }
 
@@ -3909,7 +3913,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     if(err)
                     {
                         castle_printk(LOG_ERROR,
-                                    "%s::[op %llx] growth control failed with err %d.\n",
+                                    "%s::[op %llx] data extent growth control failed with err %d.\n",
                                     __FUNCTION__, stateful_op->token, err);
                         goto err2;
                     }

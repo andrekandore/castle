@@ -972,6 +972,7 @@ struct castle_btree_type castle_vlba_tree = {
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
+    .min_key_size   = NULL,
     .max_entries    = castle_vlba_tree_max_entries,
     .min_size       = castle_vlba_tree_min_size,
     .need_split     = castle_vlba_tree_need_split,

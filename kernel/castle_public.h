@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 45 /* last updated by BM */
+#define CASTLE_PROTOCOL_VERSION 46 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -881,7 +881,7 @@ typedef struct castle_request_iter_start {
 
 typedef struct castle_request_stream_in_start {
     c_collection_id_t    collection_id;
-    uint64_t             entries_count;
+    uint32_t             btree_chunks;
     uint32_t             medium_object_chunks;
 } castle_request_stream_in_start_t;
 

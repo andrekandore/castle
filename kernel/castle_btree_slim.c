@@ -445,6 +445,12 @@ static size_t castle_slim_max_entries(size_t size)
     return (size * C_BLK_SIZE - SLIM_HEADER_MAX) / LEAF_ENTRY_MAX_SIZE;
 }
 
+static size_t castle_slim_min_key_size(void)
+{
+    return (sizeof(struct slim_leaf_entry)
+        + 2 /* norm_key_size */); /* this calc inspired by LEAF_ENTRY_BASE_SIZE. */
+}
+
 /**
  * Calculate a conservative estimate of the min node size into which the given number of entries
  * may fit.
@@ -1205,6 +1211,7 @@ struct castle_btree_type castle_slim_tree = {
     .min_key       = (void *) &SLIM_MIN_KEY,
     .max_key       = (void *) &SLIM_MAX_KEY,
     .inv_key       = (void *) &SLIM_INVAL_KEY,
+    .min_key_size  = castle_slim_min_key_size,
     .max_entries   = castle_slim_max_entries,
     .min_size      = castle_slim_min_size,
     .need_split    = castle_slim_need_split,

@@ -13065,10 +13065,6 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     int ret = 0;
     int nr_rwcts;
 
-    castle_printk(LOG_USERINFO, "%s::preparing for stream_in of %llu items "
-            "(internal ext size: %u, tree ext size: %u, data ext size: %u)\n",
-            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size);
-
     constr = castle_immut_tree_constr_alloc(castle_btree_type_get(da->btree_type),
                                             da,
                                             0,
@@ -13106,6 +13102,12 @@ castle_da_in_stream_start(struct castle_double_array    *da,
         constr->tree = NULL;
         goto err_out;
     }
+
+    castle_printk(LOG_USERINFO, "%s::preparing for stream_in of up to %llu items "
+            "(internal ext size: %u, tree ext size: %u, data ext size: %u, bloom ext size: %u)\n",
+            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size,
+            castle_extent_size_get(constr->tree->bloom.ext_id));
+
 
     return constr;
 
