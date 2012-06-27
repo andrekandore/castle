@@ -3614,7 +3614,7 @@ static void castle_da_merge_output_size(struct castle_da_merge *merge,
 
         for (j=0; j<ct->nr_data_exts; j++)
             if (castle_data_ext_should_drain(ct->data_exts[j], merge) >= 0)
-                data_size += atomic64_read(&castle_data_exts_hash_get(ct->data_exts[j])->nr_bytes);
+                data_size += castle_data_exts_hash_get(ct->data_exts[j])->used_bytes;
 
         bloom_size += atomic64_read(&merge->in_trees[i]->item_count);
     }
