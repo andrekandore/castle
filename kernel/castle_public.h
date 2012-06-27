@@ -1196,7 +1196,7 @@ struct castle_fs_superblock_public {
     CASTLE_ERROR_CODE(112, C_ERR_MERGE_INVAL_ID, "Invalid merge ID.")                           \
     CASTLE_ERROR_CODE(113, C_ERR_MERGE_RUNNING, "Merge is already running.")                    \
     CASTLE_ERROR_CODE(114, C_ERR_MERGE_BACKUP_BARRIER, "Trying to merge beyond back-up barrier.")\
-    CASTLE_ERROR_CODE(114, C_ERR_MERGE_TOO_MANY, "Too many merges ongoing.")                    \
+    CASTLE_ERROR_CODE(115, C_ERR_MERGE_TOO_MANY, "Too many merges ongoing.")                    \
                                                                                                 \
     CASTLE_ERROR_CODE(201, C_ERR_INVAL_DA, "Invalid version tree.")                             \
                                                                                                 \
