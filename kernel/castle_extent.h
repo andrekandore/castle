@@ -264,6 +264,8 @@ void                castle_extent_last_consistant_byte_set   (c_ext_id_t     ext
                                                               uint64_t       used_bytes);
 
 void                castle_extents_last_chkpt_prepare        (void);
+
+c_byte_off_t        castle_compr_nr_bytes_compressed_get     (c_ext_id_t     ext_id);
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
     BUG_ON(((_pool)->reserved_schks[_id] < 0) && (_pool)->freed_schks[_id]);                \

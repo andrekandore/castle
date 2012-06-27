@@ -3862,6 +3862,17 @@ c_byte_off_t castle_compr_block_size_get(c_ext_id_t ext_id)
     return C_COMPR_BLK_SZ;
 }
 
+/* Return number of bytes compressed so far in this extent. */
+c_byte_off_t castle_compr_nr_bytes_compressed_get(c_ext_id_t ext_id)
+{
+    c_ext_t *virt_ext = castle_extents_hash_get(ext_id);
+
+    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags))
+        return 0;
+
+    return atomic64_read(&virt_ext->next_comp_byte);
+}
+
 c_byte_off_t castle_compr_map_get(c_ext_pos_t virt_cep, c_ext_pos_t *comp_cep)
 {
     c_ext_t *virt_ext = castle_extents_hash_get(virt_cep.ext_id);
