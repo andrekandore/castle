@@ -13142,8 +13142,8 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     CASTLE_TRANSACTION_BEGIN;
 
     BUG_ON(atomic_read(&ct->ref_count)!=1);
-    castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %p (with %lld entries)\n",
-        __FUNCTION__, ct, atomic64_read(&ct->item_count));
+    castle_printk(LOG_INFO, "%s::finalizing stream-in tree %u (with %lld entries)\n",
+        __FUNCTION__, ct->seq, atomic64_read(&ct->item_count));
 
     /* Complete Output tree and get it ready to promote to DA. */
     castle_immut_tree_complete(constr);
@@ -13167,8 +13167,8 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 
     if (err || (atomic64_read(&ct->item_count)==0) )
     {
-        castle_printk(LOG_USERINFO, "%s::aborting stream-in tree %p/%d (with %lld entries)\n",
-            __FUNCTION__, ct, ct->seq, atomic64_read(&ct->item_count));
+        castle_printk(LOG_USERINFO, "%s::aborting stream-in tree %d (with %lld entries)\n",
+            __FUNCTION__, ct->seq, atomic64_read(&ct->item_count));
         castle_ct_put(ct, READ);
         constr->tree = NULL;
 
