@@ -2691,6 +2691,23 @@ static void castle_slaves_unplug(void)
  */
 
 /**
+ * Decompress a single block, checking all error conditions. Arguments are the same as
+ * those of lzo1x_decompress_safe().
+ */
+static void castle_cache_single_decompression_do(const unsigned char *src, c_byte_off_t src_len,
+                                                       unsigned char *dst, c_byte_off_t dst_len)
+{
+    size_t decompressed = dst_len;
+    int error = lzo1x_decompress_safe(src, src_len, dst, &decompressed);
+    if (error < 0)
+    {
+        castle_printk(LOG_ERROR, "decompression failed with error code %d\n", error);
+        BUG();
+    }
+    BUG_ON(decompressed != dst_len);
+}
+
+/**
  * Actually perform the decompression of a compressed c2b into a virtual c2b.
  *
  * @param   compr_c2b   The compressed c2b to use as the source of the decompression
@@ -2737,18 +2754,13 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
         }
         else if (virt_base == virt_off && virt_size >= compr_block_size)
         {
-            size_t decompressed = compr_block_size;
-            if (lzo1x_decompress_safe(compr_buf, compr_size, virt_buf, &decompressed) < 0 ||
-                decompressed != compr_block_size)
-                BUG();
+            castle_cache_single_decompression_do(compr_buf, compr_size, virt_buf, compr_block_size);
         }
         else
         {
             unsigned char *tmp_buf = get_cpu_var(castle_cache_decompress_buf);
-            size_t decompressed = CASTLE_CACHE_DECOMPRESS_BUF_SIZE;
-            if (lzo1x_decompress_safe(compr_buf, compr_size, tmp_buf, &decompressed) < 0 ||
-                decompressed != compr_block_size)
-                BUG();
+            BUG_ON(compr_block_size > CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
+            castle_cache_single_decompression_do(compr_buf, compr_size, tmp_buf, compr_block_size);
             memcpy(virt_buf, tmp_buf + (virt_off - virt_base), used);
             put_cpu_var(castle_cache_decompress_buf);
         }
