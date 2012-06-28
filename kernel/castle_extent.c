@@ -3863,8 +3863,7 @@ c_byte_off_t castle_compr_nr_bytes_compressed_get(c_ext_id_t ext_id)
 {
     c_ext_t *virt_ext = castle_extents_hash_get(ext_id);
 
-    if (!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags))
-        return 0;
+    BUG_ON(!test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags));
 
     return atomic64_read(&virt_ext->next_comp_byte);
 }
