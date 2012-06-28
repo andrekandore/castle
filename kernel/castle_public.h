@@ -38,6 +38,10 @@ extern "C" {
 
 #define MAX_CONCURRENT_CONTROL_MERGES (32)
 
+#if MAX_CONCURRENT_CONTROL_MERGES < 1
+#error "You probably want to allow some merges to happen"
+#endif
+
 typedef uint64_t castle_user_timestamp_t;
 
 struct castle_streaming_entry_header
