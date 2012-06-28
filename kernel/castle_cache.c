@@ -2700,12 +2700,13 @@ static void castle_slaves_unplug(void)
 static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *virt_c2b, int async)
 {
     c_ext_pos_t compr_cep, virt_cep;
-    c_byte_off_t compr_size, compr_block_size;
+    c_byte_off_t compr_size, compr_block_size, compr_limit;
     c_byte_off_t virt_size, virt_base, virt_off;
     size_t used;
     unsigned char *compr_buf, *virt_buf;
 
     compr_block_size = castle_compr_block_size_get(compr_c2b->cep.ext_id);
+    compr_limit      = castle_compr_nr_bytes_compressed_get(virt_c2b->cep.ext_id);
     virt_cep  = virt_c2b->cep;
     virt_size = virt_c2b->nr_pages * PAGE_SIZE;
     virt_off  = virt_cep.offset;
@@ -2714,17 +2715,22 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
 
     while (virt_size > 0)
     {
+        /* figure out how much we need to decompress next */
+        used = min(virt_size, compr_block_size - (virt_off - virt_base));
+        if (virt_off + used > compr_limit)
+            break; /* bail out if the rest hasn't been compressed yet */
+
         /* get map for the next compressed block */
         virt_cep.offset = virt_base;
         compr_size = castle_compr_map_get(virt_cep, &compr_cep);
         BUG_ON(compr_cep.ext_id != compr_c2b->cep.ext_id);
-        BUG_ON(compr_cep.offset < compr_c2b->cep.offset ||
-               compr_cep.offset + compr_size > compr_c2b->cep.offset + compr_c2b->nr_pages * PAGE_SIZE);
+        BUG_ON(compr_cep.offset < compr_c2b->cep.offset);
+        if (compr_cep.offset + compr_size > compr_c2b->cep.offset + compr_c2b->nr_pages * PAGE_SIZE)
+            break; /* bail out if we attempt to go past what we've requested */
         BUG_ON(compr_size > compr_block_size); /* if the block expands, we store it uncompressed */
         compr_buf = (unsigned char *) compr_c2b->buffer + (compr_cep.offset - compr_c2b->cep.offset);
 
         /* decompress the block */
-        used = min(virt_size, compr_block_size - (virt_off - virt_base));
         if (compr_size == compr_block_size /* block is stored uncompressed */)
         {
             memcpy(virt_buf, compr_buf + (virt_off - virt_base), used);
@@ -2753,6 +2759,11 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
         virt_off  += used;
         virt_buf  += used;
     }
+
+    /* if we didn't decompress the entire block, make sure the rest is already there */
+    BUG_ON((virt_size & (PAGE_SIZE - 1)) != 0);
+    for ( ; virt_size > 0; virt_size -= PAGE_SIZE)
+        BUG_ON(!c2p_uptodate(virt_c2b->c2ps[virt_c2b->nr_pages - (virt_size >> PAGE_SHIFT)]));
 
     put_c2b(compr_c2b);
     update_c2b(virt_c2b);
@@ -2862,8 +2873,9 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     if (virt_size + (virt_off - virt_base) > compr_block_size)
     {
         /* We need to be careful here not to ask for a mapping beyond the end of the
-         * extent. */
-        virt_cep.offset = roundup(virt_off + virt_size - compr_block_size, compr_block_size);
+         * extent, or beyond what has been compressed so far. */
+        virt_cep.offset = min(roundup(virt_off + virt_size - compr_block_size, compr_block_size),
+                              castle_compr_nr_bytes_compressed_get(virt_cep.ext_id) - compr_block_size);
         compr_size = castle_compr_map_get(virt_cep, &compr_cep);
         BUG_ON(compr_cep.ext_id != compr_ext_id);
     }
