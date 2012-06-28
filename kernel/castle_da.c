@@ -5302,12 +5302,12 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         BUG_ON(!cep_source_arr);
         if ( !EXT_POS_INVAL(cep_source_arr[i]) )
         {
+            castle_printk(LOG_DEVEL, "%s::[merge %d] scheduling shrink of "cep_fmt_str"\n",
+                    __FUNCTION__, merge->id, cep2str(cep_source_arr[i]));
             merge->in_tree_shrinkable_cep[cep_arr_index++] =
                 cep_source_arr[i];
             cep_source_arr[i] = INVAL_EXT_POS;
             BUG_ON(cep_arr_index > max_cep_arr_index);
-            castle_printk(LOG_DEVEL, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
-                    __FUNCTION__, merge, merge->id, cep2str(cep_source_arr[i]));
         }
     }
     /* then the data extents... */
