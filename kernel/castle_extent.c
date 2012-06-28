@@ -3899,8 +3899,8 @@ c_byte_off_t castle_compr_map_get(c_ext_pos_t virt_cep, c_ext_pos_t *comp_cep)
     read_unlock_c2b(map_c2b);
     put_c2b(map_c2b);
 
-    debug_compr_map("Getting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
-                     __cep2str(virt_cep), __cep2str(*comp_cep), blk_sz);
+//    debug_compr_map("Getting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
+//                     __cep2str(virt_cep), __cep2str(*comp_cep), blk_sz);
 
     return blk_sz;
 }
