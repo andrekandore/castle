@@ -6838,17 +6838,48 @@ static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
     }
     else
     {
+        int i;
         castle_printk(LOG_DEBUG, "%s::[merge %u, %p] making new SERDES snapshot.\n",
                 __FUNCTION__, merge->id, merge);
+
         CASTLE_TRANSACTION_BEGIN;
+
         castle_da_merge_marshall(merge, DAM_MARSHALL_ALL);
+
+        /* Commit and zero private stats to global crash-consistent tree. */
+        castle_version_states_commit(&merge->version_states);
+
+        /* Commit output tree stats. */
+        castle_ct_stats_commit(out_tree);
+
+        /* Commit input tree stats. */
+        for (i=0; i<merge->nr_trees; i++)
+            castle_ct_stats_commit(merge->in_trees[i]);
+
+        /* Commit cep shrink list */
+        memcpy(merge->serdes.shrinkable_cep,
+                merge->in_tree_shrinkable_cep,
+                sizeof(c_ext_pos_t) * (merge->nr_trees +merge->nr_drain_exts));
+
+        for(i=0; i < (merge->nr_trees + merge->nr_drain_exts); i++)
+        {
+            if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
+                continue;
+            castle_printk(LOG_DEBUG, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
+                    __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
+        }
+
+        /* Set up a new package for checkpoint */
+        castle_da_merge_mstore_package_deep_copy(&merge->serdes.checkpointable, &merge->serdes.live);
+
+        /* mark serialisation as checkpointable, and no longer updatable */
+        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
+
         CASTLE_TRANSACTION_END;
 
         /* mark serialisation as checkpointable, and no longer updatable */
         atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
 
-        /* Set up a new package for checkpoint */
-        castle_da_merge_mstore_package_deep_copy(&merge->serdes.checkpointable, &merge->serdes.live);
     }
 
 }
@@ -9453,7 +9484,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
                 if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]) &&
                    (merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE) != 0)
                 {
-                    castle_printk(LOG_DEBUG, "%s::calling shrink on cep "cep_fmt_str_nl,
+                    castle_printk(LOG_UNLIMITED, "%s::calling shrink on cep "cep_fmt_str_nl,
                             __FUNCTION__, cep2str(merge->serdes.shrinkable_cep[i]));
                     castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
                                          merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
