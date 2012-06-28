@@ -6871,19 +6871,14 @@ static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
                     __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
         }
 
+        /* mark serialisation as checkpointable, and no longer updatable */
+        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
+
         /* Set up a new package for checkpoint */
         castle_da_merge_mstore_package_deep_copy(&merge->serdes.checkpointable, &merge->serdes.live);
 
-        /* mark serialisation as checkpointable, and no longer updatable */
-        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
-
         CASTLE_TRANSACTION_END;
-
-        /* mark serialisation as checkpointable, and no longer updatable */
-        atomic_set(&merge->serdes.live.state, VALID_AND_FRESH_DAM_SERDES);
-
     }
-
 }
 
 /**

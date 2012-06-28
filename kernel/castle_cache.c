@@ -5701,6 +5701,12 @@ void castle_cache_last_consistent_byte_set(c_ext_id_t ext_id, c_byte_off_t offse
      * been compressed. */
     BUG_ON(dirtytree->virt_consistent_off_1 > dirtytree->next_virt_mutable_off);
 
+    debug("%s::ext_id: %u, off1: %llu, off2: %llu, new_off:%llu\n",
+        __FUNCTION__,
+        ext_id,
+        dirtytree->virt_consistent_off_1,
+       dirtytree->virt_consistent_off_2,
+       offset);
     dirtytree->virt_consistent_off_1 = dirtytree->virt_consistent_off_2;
     dirtytree->virt_consistent_off_2 = offset;
 
