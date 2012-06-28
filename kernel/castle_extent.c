@@ -1610,7 +1610,14 @@ static int castle_extent_hash_remove(c_ext_t *ext, void *unused)
         kmem_cache_free(castle_partial_schks_cache, schk);
     }
 
-    castle_free(mask);
+    list_for_each_safe(pos, tmp, &ext->mask_list)
+    {
+        c_ext_mask_t *cur_mask = list_entry(pos, c_ext_mask_t, list);
+
+        list_del(pos);
+        castle_free(cur_mask);
+    }
+
     castle_free(ext);
 
     return 0;
