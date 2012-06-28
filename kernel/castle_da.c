@@ -10035,9 +10035,9 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         merge->out_tree_constr->tree = out_tree;
         BUG_ON(!out_tree);
         BUG_ON(da_id != out_tree->da->id);
-        castle_printk(LOG_DEBUG, "%s::deserialising merge on da %d level %d with partially-"
-                                 "complete ct, seq %d\n",
-                                 __FUNCTION__, da_id, level, out_tree->seq);
+        castle_printk(LOG_UNLIMITED, "%s::deserialising merge %u on da %u with partially-"
+                                 "complete ct, seq %u\n",
+                                 __FUNCTION__, merge->id, da_id, out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
         /* the difference between unmarshalling a partially complete in-merge ct and a "normal" ct is
            unlike a normal ct, a partially complete in-merge ct does not get added to a DA through
