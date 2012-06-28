@@ -5905,8 +5905,12 @@ static int _c2_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
  * page boundary and the contents of v_c2b are copied into c_buf without any
  * attempts at compression.
  *
- * If c2b_buffer(v_c2b) stays the same size or expands during compression we
- * discard the compressed data and memcpy() instead.
+ * If v_c2b is compr_unit_sized we may still pad to a block boundary and copy
+ * the contents into c_buf if compressed c2b_buffer(v_c2b) is larger than
+ * (compr_unit_size-C_BLK_SIZE).  This is necessary to prevent a situation
+ * where a mix of compressed and uncompressed compression units are stored in
+ * the compressed extent in a way that a 1MB virtual c2b maps to a compressed
+ * c2b that is > 1MB.  See #5725 for more details.
  *
  * @return  Bytes of data stored in c_buf
  *          NOTE: Also updates c_buf and c_rem
@@ -5935,7 +5939,9 @@ static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                 c_work_buf));
     }
 
-    if (c_used && c_used < v_size)
+    /* Should only compress if v_size == compr_unit_size. */
+    BUG_ON(c_used && v_size < dirtytree->compr_unit_size);
+    if (c_used && c_used <= v_size - C_BLK_SIZE)
     {
         /* Create map with compressed data size. */
         castle_compr_map_set(v_c2b->cep,
