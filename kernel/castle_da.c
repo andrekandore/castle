@@ -12238,9 +12238,6 @@ void castle_da_destroy_complete(struct castle_double_array *da)
     /* Shouldn't be any outstanding LFS victims. */
     BUG_ON(atomic_read(&da->lfs_victim_count));
 
-    /* Invalidate DA CTs proxy structure. */
-    castle_da_cts_proxy_invalidate(da);
-
     /* Delete CT sysfs entries from DA. */
     for(i=0; i<MAX_DA_LEVEL; i++)
     {
@@ -12261,6 +12258,11 @@ void castle_da_destroy_complete(struct castle_double_array *da)
 
     /* Wait for all sysfs references to go away. */
     castle_sysfs_da_del_check(da);
+
+    BUG_ON(da->cts_proxy && atomic_read(&da->cts_proxy->ref_cnt) != 1);
+
+    /* Invalidate DA CTs proxy structure. */
+    castle_da_cts_proxy_invalidate(da);
 
     /* Destroy Component Trees. */
     for(i=0; i<MAX_DA_LEVEL; i++)
