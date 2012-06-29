@@ -466,7 +466,11 @@ static               LIST_HEAD(castle_cache_block_reservelist);     /**< Reserve
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_page_reservelist_wq);   /**< Reservelist c2p waiters  */
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_block_reservelist_wq);  /**< Reservelist c2b waiters  */
 
-#define CASTLE_CACHE_VMAP_PGS   256
+#define CASTLE_CACHE_VMAP_VIRT_PGS      256         /**< Max pages in VIRTUAL c2b                 */
+#define CASTLE_CACHE_VMAP_COMPR_PGS     CASTLE_CACHE_VMAP_VIRT_PGS + C_COMPR_MAX_PGS /**< Max pages
+                                                                                in COMPRESSED c2b */
+#define CASTLE_CACHE_VMAP_PGS           CASTLE_CACHE_VMAP_COMPR_PGS
+
 typedef struct page *castle_cache_vmap_pgs_t[CASTLE_CACHE_VMAP_PGS];
 DEFINE_PER_CPU(castle_cache_vmap_pgs_t, castle_cache_vmap_pgs);
 DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
@@ -3523,8 +3527,6 @@ static void castle_cache_block_init(c2_block_t *c2b,
 
     debug("Initing c2b for cep="cep_fmt_str", nr_pages=%d\n",
             cep2str(cep), nr_pages);
-    /* c2b should only be initialised if it's not used */
-    BUG_ON(nr_pages > CASTLE_CACHE_VMAP_PGS);
 #ifdef CASTLE_DEBUG
     /* On debug builds, unpoison the fields. */
     atomic_set(&c2b->count, 0);
@@ -3539,6 +3541,11 @@ static void castle_cache_block_init(c2_block_t *c2b,
        if they already exist in the hash. */
     uptodate   = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
     compressed = castle_compr_type_get(cep.ext_id) == C_COMPR_COMPRESSED;
+
+    /* Respect upper limits on maximum c2b size. */
+    BUG_ON( compressed && nr_pages > CASTLE_CACHE_VMAP_COMPR_PGS);
+    BUG_ON(!compressed && nr_pages > CASTLE_CACHE_VMAP_VIRT_PGS);
+
     /* Initialise c2b. */
     atomic_set(&c2b->remaining, 0);
     c2b->cep = cep;

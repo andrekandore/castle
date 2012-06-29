@@ -207,7 +207,8 @@ int                 castle_extent_lfs_callback_add           (int               
 
 /* Compressed extents API. */
 
-#define C_COMPR_MAX_BLOCK_SIZE (64 * 1024)
+#define C_COMPR_MAX_PGS         16                              /**< Compression-unit pages.    */
+#define C_COMPR_MAX_BLOCK_SIZE (C_COMPR_MAX_PGS << PAGE_SHIFT)  /**< Compression-unit bytes.    */
 STATIC_BUG_ON((C_COMPR_MAX_BLOCK_SIZE & (C_COMPR_MAX_BLOCK_SIZE-1)) != 0);
 STATIC_BUG_ON(C_CHK_SIZE % C_COMPR_MAX_BLOCK_SIZE != 0);
 
