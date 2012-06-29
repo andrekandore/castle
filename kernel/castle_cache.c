@@ -6588,21 +6588,29 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
         /* Continue to flush COMPRESSED extent.
          *
          * Only issue castle_compr_map_get() calls if offsets are supplied. */
-        if (start_off)
+        if (unlikely(start_off))
         {
+            /* Get start_off aligned to compression-unit. */
             virt_cep.ext_id = ext_id;
             virt_cep.offset = start_off - (start_off % dirtytree->compr_unit_size);
+
+            /* Get compressed start_off. */
             castle_compr_map_get(virt_cep, &comp_cep);
-            start_off = comp_cep.offset;
+            start_off       = comp_cep.offset;
         }
-        if (end_off)
+        if (likely(end_off))
         {
-            virt_cep.ext_id  = ext_id;
-            virt_cep.offset  = end_off - (end_off % dirtytree->compr_unit_size);
-            virt_cep.offset -= dirtytree->compr_unit_size;
+            /* Get end_off aligned to appropriate compression-unit. */
+            virt_cep.ext_id      = ext_id;
+            virt_cep.offset      = end_off - (end_off % dirtytree->compr_unit_size);
+            if (virt_cep.offset == end_off)
+                /* Get previous compression unit if compr_unit_size-aligned. */
+                virt_cep.offset -= dirtytree->compr_unit_size;
+
+            /* Get compressed end_off. */
             orig_end_off = end_off;
-            end_off  = castle_compr_map_get(virt_cep, &comp_cep);
-            end_off += comp_cep.offset;
+            end_off      = castle_compr_map_get(virt_cep, &comp_cep);
+            end_off     += comp_cep.offset;
         }
         compr_debug("start_off=%lu end_off=%lu compr_end_off=%lu\n",
                 start_off, orig_end_off, end_off);
