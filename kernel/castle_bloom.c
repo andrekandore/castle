@@ -120,7 +120,7 @@ int castle_bloom_create(castle_bloom_t *bf,
 
     /* Calculate space required by the bloom filter extent. */
     nodes_size  = BLOOM_INDEX_NODE_SIZE * ceiling(bf->num_chunks,
-                            btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES));
+                            btree->min_entries(BLOOM_INDEX_NODE_SIZE_PAGES));
     chunks_size = BLOOM_CHUNK_SIZE * bf->num_chunks;
     size        = nodes_size + chunks_size;
     /* size must be a whole number of chunks, see STATIC_BUG_ON()s below. */
@@ -235,7 +235,7 @@ static void castle_bloom_next_btree_node(castle_bloom_t *bf)
        filter construction; see castle_bloom_complete()), we can use it to assert the max possible
        value for num_btree_nodes. */
     BUG_ON(atomic_read(&bf->num_btree_nodes) == ceiling(bf->num_chunks,
-              bf->btree->max_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
+              bf->btree->min_entries(BLOOM_INDEX_NODE_SIZE_PAGES)));
 
     bf_bp->node_c2b = castle_cache_block_get(bf_bp->node_cep,
                                              BLOOM_INDEX_NODE_SIZE_PAGES,

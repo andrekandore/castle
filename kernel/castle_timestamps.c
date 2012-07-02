@@ -61,7 +61,7 @@ int castle_dfs_resolver_preconstruct(c_dfs_resolver *dfs_resolver, struct castle
     castle_printk(LOG_DEBUG, "%s::[%p] expecting max key stream of %u entries, "
             "which requires a node size of %u blocks.\n",
             __FUNCTION__, merge, max_entries, new_node_size);
-    BUG_ON(max_entries > merge->out_tree_constr->btree->max_entries(new_node_size));
+    BUG_ON(max_entries > merge->out_tree_constr->btree->min_entries(new_node_size));
 
     /* Allocate and init btree node buffer */
     dfs_resolver->buffer_node = castle_alloc(new_node_size * C_BLK_SIZE);

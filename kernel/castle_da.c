@@ -3632,7 +3632,7 @@ static void castle_da_merge_output_size(struct castle_da_merge *merge,
     /* ... number of leaf nodes ... */
     internal_tree_size /= (HDD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);
     /* ... number of level 1 nodes ... */
-    internal_tree_size /= merge->out_tree_constr->btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
+    internal_tree_size /= merge->out_tree_constr->btree->min_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
     internal_tree_size ++;
     /* ... size of level 1 ... */
     internal_tree_size *= (SSD_RO_TREE_INTERNAL_NODE_SIZE * C_BLK_SIZE);

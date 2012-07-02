@@ -209,6 +209,9 @@ struct slim_extern_val {
     /*         24 */
 } PACKED;
 
+#define LEAF_ENTRY_MIN_SIZE              (sizeof(struct slim_leaf_entry) +      \
+                                          sizeof(struct slim_inline_val) +      \
+                                          4) /* for the index entry */
 #define LEAF_ENTRY_MAX_SIZE              (sizeof(struct slim_leaf_entry) -      \
                                           sizeof(struct castle_norm_key) +      \
                                           sizeof(struct slim_inline_val) +      \
@@ -325,10 +328,12 @@ struct slim_header {
     /*         64 */
 } PACKED;
 
-/* half a kB limit on the total node header size; only needed for max_entries() */
+/* half a kB limit on the total node header size; only needed for min_entries() */
 /* note that this includes the size of the node-independent castle_btree_node   */
 #define SLIM_HEADER_MAX                  512
 #define SLIM_HEADER_PTR(node)            ((struct slim_header *) BTREE_NODE_PAYLOAD(node))
+
+STATIC_BUG_ON(sizeof(struct castle_btree_node) + sizeof(struct slim_header) > SLIM_HEADER_MAX);
 
 /*
  * Extent array manipulation for internal nodes.
@@ -437,18 +442,22 @@ static void intern_entry_extents_drop(struct slim_header *header, int low, int h
 #define NODE_ENTRY_PTR(node, i)          ((void *) ((char *) (node) + NODE_INDEX(node, i)))
 
 /**
+ * Calculate a conservative estimate of the min number of entries which can fit in a node.
+ * @param size      the size of the node, in pages
+ */
+static size_t castle_slim_min_entries(size_t size)
+{
+    return (size * C_BLK_SIZE - SLIM_HEADER_MAX) / LEAF_ENTRY_MAX_SIZE;
+}
+
+/**
  * Calculate a conservative estimate of the max number of entries which can fit in a node.
  * @param size      the size of the node, in pages
  */
 static size_t castle_slim_max_entries(size_t size)
 {
-    return (size * C_BLK_SIZE - SLIM_HEADER_MAX) / LEAF_ENTRY_MAX_SIZE;
-}
-
-static size_t castle_slim_min_key_size(void)
-{
-    return (sizeof(struct slim_leaf_entry)
-        + 2 /* norm_key_size */); /* this calc inspired by LEAF_ENTRY_BASE_SIZE. */
+    return (size * C_BLK_SIZE - sizeof(struct castle_btree_node) - sizeof(struct slim_header))
+        / LEAF_ENTRY_MIN_SIZE;
 }
 
 /**
@@ -462,7 +471,7 @@ static size_t castle_slim_min_size(size_t entries)
     return (DIV_ROUND_UP(((entries * LEAF_ENTRY_MAX_SIZE) + SLIM_HEADER_MAX), C_BLK_SIZE));
 }
 
-static int castle_slim_min_size_vs_max_entries_unit_test(void)
+static int castle_slim_min_size_vs_min_entries_unit_test(void)
 {
     int entries;
     /* Theoretically, a btree node may have to hold up to CASTLE_LIFETIME_VERSIONS_LIMIT items,
@@ -471,15 +480,15 @@ static int castle_slim_min_size_vs_max_entries_unit_test(void)
     for (entries = 0; entries <= CASTLE_LIFETIME_VERSIONS_LIMIT; entries++)
     {
         int min_node_size;
-        int max_entries;
+        int min_entries;
 
         min_node_size = castle_slim_min_size(entries);
-        max_entries = castle_slim_max_entries(min_node_size);
-        if (max_entries < entries)
+        min_entries = castle_slim_min_entries(min_node_size);
+        if (min_entries < entries)
         {
             castle_printk(LOG_ERROR, "%s::for entries=%d, got min_node_size=%d, "
-                "which got max_entries=%d; somethin ain't right...\n",
-                __FUNCTION__, entries, min_node_size, max_entries);
+                "which got min_entries=%d; somethin ain't right...\n",
+                __FUNCTION__, entries, min_node_size, min_entries);
             return -1;
         }
     }
@@ -491,7 +500,7 @@ int castle_slim_tree_unit_tests_do(void)
     int test_seq_id = 0;
     int err = 0;
 
-    test_seq_id++; if (0 != (err = castle_slim_min_size_vs_max_entries_unit_test()) ) goto fail;
+    test_seq_id++; if (0 != (err = castle_slim_min_size_vs_min_entries_unit_test()) ) goto fail;
 
     BUG_ON(err);
     castle_printk(LOG_INIT, "%s::%d tests passed.\n", __FUNCTION__, test_seq_id);
@@ -1211,7 +1220,7 @@ struct castle_btree_type castle_slim_tree = {
     .min_key       = (void *) &SLIM_MIN_KEY,
     .max_key       = (void *) &SLIM_MAX_KEY,
     .inv_key       = (void *) &SLIM_INVAL_KEY,
-    .min_key_size  = castle_slim_min_key_size,
+    .min_entries   = castle_slim_min_entries,
     .max_entries   = castle_slim_max_entries,
     .min_size      = castle_slim_min_size,
     .need_split    = castle_slim_need_split,

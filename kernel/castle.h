@@ -938,10 +938,10 @@ struct castle_btree_type {
                                  should always return a negative number
                                  except if also compared to invalid key
                                  in which case cmp should return zero   */
-    size_t   (*min_key_size)  (void);
-                              /* Returns a rough underestimate of the size of
-                                 the smallest possible key in the given
-                                 tree format. */
+    size_t   (*min_entries)   (size_t size);
+                              /* Returns a conservative estimate of the
+                                 min number of entries which can fill
+                                 a node of the given size (in blocks).  */
     size_t   (*max_entries)   (size_t size);
                               /* Returns a conservative estimate of the
                                  max number of entries which can fit in

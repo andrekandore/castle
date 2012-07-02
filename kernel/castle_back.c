@@ -3260,8 +3260,7 @@ static uint64_t castle_back_stream_in_entries_wc_estimate(c_chk_cnt_t tree_ext_s
     struct castle_btree_type *btree = castle_btree_type_get(btree_type);
     /* The worst case situation is for leaf nodes on HDDs; that means minimum overhead expense */
     uint32_t node_count = (tree_ext_size*C_CHK_SIZE) / (HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE);
-    uint32_t min_size_per_key = btree->min_key_size();
-    uint32_t keys_per_node = (HDD_RO_TREE_INTERNAL_NODE_SIZE*C_BLK_SIZE) / min_size_per_key;
+    uint32_t keys_per_node = btree->max_entries(HDD_RO_TREE_INTERNAL_NODE_SIZE);
     return keys_per_node * node_count;
 }
 
@@ -3278,7 +3277,7 @@ static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(c_chk_cnt
        and in the internal node extent it would maximize overheads. */
     max_leaf_nodes = (tree_ext_size*C_CHK_SIZE) / (SSD_RO_TREE_LEAF_NODE_SIZE*C_BLK_SIZE);
     BUG_ON(!max_leaf_nodes);
-    max_entries_per_internal_node = btree->max_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
+    max_entries_per_internal_node = btree->min_entries(SSD_RO_TREE_INTERNAL_NODE_SIZE);
 
     /* There are (max_leaf_node) items; for a tree where each node can have
        (max_entries_per_internal_node) children, how many nodes will we have? */

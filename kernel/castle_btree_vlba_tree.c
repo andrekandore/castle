@@ -76,16 +76,24 @@ struct castle_vlba_tree_node {
                 (sizeof(struct castle_vlba_tree_entry) +                    \
                  VLBA_KEY_LENGTH(&(_entry)->key) +                          \
                  VLBA_INLINE_VAL_LENGTH(_entry))
+#define MIN_VLBA_ENTRY_LENGTH                                               \
+                (sizeof(struct castle_vlba_tree_entry) +                    \
+                 sizeof(uint32_t)) /* for the index entry */
 #define MAX_VLBA_ENTRY_LENGTH                                               \
                 (sizeof(struct castle_vlba_tree_entry) +                    \
                  VLBA_TREE_MAX_KEY_SIZE +                                   \
                  MAX_INLINE_VAL_SIZE +                                      \
                  sizeof(uint32_t)) /* for the index entry */
-#define VLBA_TREE_MAX_ENTRIES(_size)                                        \
+#define VLBA_TREE_MIN_ENTRIES(_size)                                        \
                 (((_size) * C_BLK_SIZE -                                    \
                   sizeof(struct castle_btree_node) -                        \
                   sizeof(struct castle_vlba_tree_node))                     \
                  / MAX_VLBA_ENTRY_LENGTH)
+#define VLBA_TREE_MAX_ENTRIES(_size)                                        \
+                (((_size) * C_BLK_SIZE -                                    \
+                  sizeof(struct castle_btree_node) -                        \
+                  sizeof(struct castle_vlba_tree_node))                     \
+                 / MIN_VLBA_ENTRY_LENGTH)
 #define VLBA_ENTRY_PTR(__node, _vlba_node, _i)                              \
                 (EOF_VLBA_NODE(__node) - (_vlba_node)->key_idx[_i])
 #define VLBA_ENTRY_VAL_PTR(_entry)                                          \
@@ -94,8 +102,19 @@ struct castle_vlba_tree_node {
                  VLBA_KEY_LENGTH(&(_entry)->key))
 
 /**
- * Returns maximum number of entries that can be stored in a node of the specified size
+ * Returns the minimum number of entries which can fill up a node of the specified size
  * (assuming that the entries are the biggest possible).
+ *
+ * @param size     Size of the node in pages.
+ */
+static size_t castle_vlba_tree_min_entries(size_t size)
+{
+    return VLBA_TREE_MIN_ENTRIES(size);
+}
+
+/**
+ * Returns the maximum number of entries which can fit in a node of the specified size
+ * (assuming that the entries are the smallest possible).
  *
  * @param size     Size of the node in pages.
  */
@@ -972,7 +991,7 @@ struct castle_btree_type castle_vlba_tree = {
     .min_key        = (void *)&VLBA_TREE_MIN_KEY,
     .max_key        = (void *)&VLBA_TREE_MAX_KEY,
     .inv_key        = (void *)&VLBA_TREE_INVAL_KEY,
-    .min_key_size   = NULL,
+    .min_entries    = castle_vlba_tree_min_entries,
     .max_entries    = castle_vlba_tree_max_entries,
     .min_size       = castle_vlba_tree_min_size,
     .need_split     = castle_vlba_tree_need_split,
