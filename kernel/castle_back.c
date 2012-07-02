@@ -618,8 +618,8 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
     castle_back_conn_put(conn);
 }
 
-#define STATEFUL_OP_TIMEOUT_CHECK_INTERVAL 1 * HZ
-#define STATEFUL_OP_TIMEOUT 60 * HZ
+#define STATEFUL_OP_TIMEOUT_CHECK_INTERVAL (1 * HZ)
+#define STATEFUL_OP_TIMEOUT (600 * HZ)
 
 static void castle_back_stateful_op_timeout_check(unsigned long data);
 
