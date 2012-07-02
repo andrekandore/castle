@@ -488,9 +488,8 @@ static               LIST_HEAD(castle_cache_decompress_list);
 static atomic_t                castle_cache_decompress_list_size;
 
 #define CASTLE_CACHE_COMPRESS_BUF_SIZE      LZO1X_1_MEM_COMPRESS
-DEFINE_PER_CPU(unsigned char *, castle_cache_compress_buf);
 #define CASTLE_CACHE_DECOMPRESS_BUF_SIZE    C_COMPR_MAX_BLOCK_SIZE
-DEFINE_PER_CPU(unsigned char *, castle_cache_decompress_buf);
+DEFINE_PER_CPU(unsigned char *, castle_cache_compress_buf);
 
 static atomic_t                castle_cache_read_stats = ATOMIC_INIT(0); /**< Pgs read from disk  */
 static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pgs written to disk */
@@ -2762,11 +2761,11 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
         }
         else
         {
-            unsigned char *tmp_buf = get_cpu_var(castle_cache_decompress_buf);
+            unsigned char *tmp_buf = get_cpu_var(castle_cache_compress_buf);
             BUG_ON(compr_block_size > CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
             castle_cache_single_decompression_do(compr_buf, compr_size, tmp_buf, compr_block_size);
             memcpy(virt_buf, tmp_buf + (virt_off - virt_base), used);
-            put_cpu_var(castle_cache_decompress_buf);
+            put_cpu_var(castle_cache_compress_buf);
         }
 
         /* update accounting information */
@@ -2935,7 +2934,7 @@ static void _c2_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree);
  */
 static void castle_cache_compr_fini(void)
 {
-    unsigned char **compress_buf_ptr, **decompress_buf_ptr;
+    unsigned char **compress_buf_ptr;
     int i;
 
     /* Destroy any outstanding flush and straddle c2bs. */
@@ -2948,10 +2947,6 @@ static void castle_cache_compr_fini(void)
         compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
         if (*compress_buf_ptr)
             castle_free(*compress_buf_ptr);
-
-        decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
-        if (*decompress_buf_ptr)
-            castle_free(*decompress_buf_ptr);
     }
 }
 
@@ -2960,7 +2955,7 @@ static void castle_cache_compr_fini(void)
  */
 static int castle_cache_compr_init(void)
 {
-    unsigned char **compress_buf_ptr, **decompress_buf_ptr;
+    unsigned char **compress_buf_ptr;
     int i, ret = 0;
 
     atomic_set(&castle_cache_decompress_list_size, 0);
@@ -2970,19 +2965,11 @@ static int castle_cache_compr_init(void)
         if (cpu_possible(i))
         {
             compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
-            *compress_buf_ptr = castle_alloc(CASTLE_CACHE_COMPRESS_BUF_SIZE);
+            *compress_buf_ptr = castle_alloc(max((size_t) CASTLE_CACHE_COMPRESS_BUF_SIZE,
+                                                 (size_t) CASTLE_CACHE_DECOMPRESS_BUF_SIZE));
             if (!*compress_buf_ptr)
             {
                 castle_printk(LOG_INIT, "could not allocate per-CPU compression buffers.\n");
-                ret = -ENOMEM;
-                goto err;
-            }
-
-            decompress_buf_ptr = &per_cpu(castle_cache_decompress_buf, i);
-            *decompress_buf_ptr = castle_alloc(CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
-            if (!*decompress_buf_ptr)
-            {
-                castle_printk(LOG_INIT, "Could not allocate per-CPU decompression buffers.\n");
                 ret = -ENOMEM;
                 goto err;
             }
