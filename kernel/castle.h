@@ -2432,7 +2432,7 @@ struct castle_double_array {
     atomic64_t                  read_key_bytes;     /**< # of key bytes read since FS start.    */
     atomic64_t                  read_data_bytes;    /**< # of data bytes read since FS start.   */
 
-    struct timeval              prev_time;          /**< Last sample time.                      */
+    struct timespec             prev_time;          /**< Last sample time.                      */
     uint64_t                    write_rate;         /**< Max write rate set. (in bytes/usecs).  */
     uint64_t                    read_rate;          /**< Max read rate set. (in bytes/usecs).   */
     struct timer_list           write_throttle_timer;

@@ -7962,7 +7962,7 @@ void castle_double_array_inserts_enable(void)
  */
 void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_bytes)
 {
-    struct timeval cur_time;
+    struct timespec cur_time;
     uint64_t delta_time, throttle_time;
     extern int castle_no_ctrl_prog_insert_rate;
 
@@ -8002,10 +8002,10 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
     }
 
     /* Get current time. */
-    do_gettimeofday(&cur_time);
+    ktime_get_ts(&cur_time);
 
     /* Time since last recorded sample in micro seconds. */
-    delta_time    = (timeval_to_ns(&cur_time) - timeval_to_ns(&da->prev_time)) / 1000;
+    delta_time    = (timespec_to_ns(&cur_time) - timespec_to_ns(&da->prev_time)) / 1000;
 
     /* Find the time to throttle writes. */
     throttle_time = castle_da_throttle_time_get(da->sample_data_bytes, delta_time, da->write_rate);
@@ -8155,7 +8155,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     da->read_rate                   = 0;
     da->sample_rate                 = 1 * 1024 * 1024;
     da->sample_data_bytes           = 0;
-    do_gettimeofday(&da->prev_time);
+    ktime_get_ts(&da->prev_time);
     spin_lock_init(&da->rate_ctrl_lock);
 
     /* Setup rate control timer. */
