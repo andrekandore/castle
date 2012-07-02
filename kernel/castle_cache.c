@@ -5936,7 +5936,6 @@ static int _c2_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
  * @param   v_c2b       Data to compress
  * @param   c_buf       Pointer to destination for compressed data
  * @param   c_rem       Pointer to bytes remaining in c_buf
- * @param   c_work_buf  Per-CPU decompression buffer
  *
  * If v_c2b is smaller than dirtytree->compr_unit_size, c_buf is padded to a
  * page boundary and the contents of v_c2b are copied into c_buf without any
@@ -5955,11 +5954,10 @@ static int _c2_compress_force_dirty(c2_ext_dirtytree_t *dirtytree)
 static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                    c2_block_t    *v_c2b,
                                    void         **c_buf,
-                                   c_byte_off_t  *c_rem,
-                                   void          *c_work_buf)
+                                   c_byte_off_t  *c_rem)
 {
-    c_byte_off_t v_size;        /* size of data in v_c2b            */
-    size_t       c_used = 0;    /* bytes of data stored in c_buf    */
+    c_byte_off_t v_size;        /* size of data in v_c2b                */
+    size_t       c_used = 0;    /* bytes of data stored in c_buf        */
 
     v_size = v_c2b->nr_pages << PAGE_SHIFT;
 
@@ -5967,6 +5965,9 @@ static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
 
     if (COMPR_C2B_COMPRESS(dirtytree, v_c2b))
     {
+        void *c_work_buf;       /* LZO working buffer space (per-CPU)   */
+
+        c_work_buf = get_cpu_var(castle_cache_compress_buf);
         BUG_ON(*c_rem < C_CHK_SIZE / 2);
         BUG_ON(*c_rem < lzo1x_worst_compress(v_size));
         BUG_ON(lzo1x_1_compress(c2b_buffer(v_c2b),
@@ -5974,6 +5975,7 @@ static void _castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                *c_buf,
                                &c_used,
                                 c_work_buf));
+        put_cpu_var(castle_cache_compress_buf);
     }
 
     /* Should only compress if v_size == compr_unit_size. */
@@ -6136,7 +6138,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                 *c_c2b = NULL;      /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
     void        *c_buf = NULL;      /* Pointer to dirtytree->next_compr_off in c_c2b->buffer.   */
     c_byte_off_t c_rem = 0;         /* Bytes remaining in c_buf.                                */
-    void        *c_work_buf;        /* LZO working buffer space (per-CPU).                      */
     int          compressed = 0;    /* Number of compressed pages (VIRTUAL).                    */
     int          create = 1;        /* For _c2_compress_c2bs_get().                             */
     c_byte_off_t size;              /* Transient, for calculations.                             */
@@ -6148,8 +6149,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         mutex_lock(&dirtytree->compr_mutex);
     else if (!mutex_trylock(&dirtytree->compr_mutex))
         goto out;
-
-    c_work_buf = get_cpu_var(castle_cache_compress_buf);
 
     /* Sanity check stored offsets. */
     BUG_ON(dirtytree->next_compr_off < dirtytree->next_compr_mutable_off);
@@ -6217,7 +6216,7 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
          * read-lock taken, so don't try and get it again here. */
         write_lock_c2b(c_c2b);
         update_c2b_maybe(c_c2b);
-        _castle_cache_compress(dirtytree, v_c2b, &c_buf, &c_rem, c_work_buf);
+        _castle_cache_compress(dirtytree, v_c2b, &c_buf, &c_rem);
         write_unlock_c2b(c_c2b);
         read_unlock_c2b(v_c2b);
 
@@ -6263,7 +6262,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         _c2_compress_c2bs_put(dirtytree);
     }
 
-    put_cpu_var(castle_cache_compress_buf);
     mutex_unlock(&dirtytree->compr_mutex);
 
 out:
