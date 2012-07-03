@@ -1688,10 +1688,17 @@ static int __castle_btree_iter_path_traverse(c_iter_t *c_iter)
             BUG_ON(VERSION_INVAL(c_iter->version));
             castle_btree_lub_find(node, c_iter->next_key.key, c_iter->version, &index, NULL);
             iter_debug("Node index=%d\n", index);
-            if(index==-1)
+            if(index == -1)
             {
-                BUG_ON(node->used==0); /* empty node shouldn't have been part of the tree at all! */
-                index=node->used-1;    /* node didn't have LUB for next_key, so include all of it */
+                castle_printk(LOG_WARN, "Range query hit end of data in tree "
+                                        "(partition key?) for c_iter: %p\n",
+                                        c_iter);
+                /* Unlock the current node. */
+                read_unlock_node(c_iter->path[c_iter->depth]);
+                /* No need to reset running_async as the iterator is to terminate. */
+                castle_btree_iter_end(c_iter, c_iter->err, c_iter->running_async);
+
+                return 0;
             }
             iter_debug("ANCESTRAL_VERSIONS iter %p index=%d\n", c_iter, index);
             break;
