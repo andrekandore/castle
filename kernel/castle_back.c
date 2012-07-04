@@ -4074,8 +4074,8 @@ static void castle_back_stream_in_continue(void *data)
                be terminated after this op. */
             if(castle_back_stateful_op_completed_op(stateful_op))
             {
-                castle_printk(LOG_WARN, "%s::triggering premature completion of op 0x%llx\n",
-                    __FUNCTION__, stateful_op->token);
+                castle_printk(LOG_WARN, "%s::triggered premature completion of op 0x%llx\n",
+                    __FUNCTION__, token);
                 break;
             }
             spin_unlock(&stateful_op->lock);
