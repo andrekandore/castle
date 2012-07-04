@@ -70,7 +70,7 @@ enum c2b_state_bits {
     C2B_eio,                /**< Block failed to write to slave(s)                              */
     C2B_compressed,         /**< Block contains compressed data, is from on-disk compressed ext.*/
     C2B_immutable,          /**< Block contents are finalised and will not be modified further. */
-    C2B_evictlist,          /**< Block is on castle_cache_block_evictlist.                      */
+    C2B_evictlist,          /**< Block is on a partition evictlist.                             */
     C2B_clock,              /**< Block on castle_cache_block_clock (protected by _clock_lock).  */
     C2B_num_state_bits,     /**< Number of allocated c2b state bits (must be last).             */
 };
@@ -399,15 +399,24 @@ static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS;
 /**
  * Castle cache partition states.
  */
-typedef struct {
+typedef struct castle_cache_partition {
+    uint8_t             id;                 /**< Cache partition ID                               */
+    uint8_t             compr_id;           /**< Cache partition ID for compressed data           */
+    struct list_head    sort;               /**< Position on castle_cache_partitions              */
+
     atomic_t            max_pgs;            /**< Total pages available for this partition         */
     atomic_t            cur_pgs;            /**< Current pages used by this partition             */
     atomic_t            dirty_pgs;          /**< cur_pgs which are c2b_dirty()                    */
+    atomic_t            reserve_pgs;        /**< Pages guaranteed available for this partition    */
     uint16_t            use_pct;            /**< cur_pgs as a percentage of max_pgs               */
     uint16_t            dirty_pct;          /**< dirty_pgs as a percentage of cur_pgs             */
+
     uint8_t             use_clock;          /**< Should c2bs from this partition be in CLOCK?     */
-    uint8_t             id;                 /**< Cache partition ID                               */
-    struct list_head    sort;               /**< Position on castle_cache_partitions              */
+    uint8_t             use_evict;          /**< Should clean c2bs from this partition go onto
+                                                 the evictlist?                                   */
+    spinlock_t          evict_lock;         /**< Protects evictlist                               */
+    atomic_t            evict_size;         /**< Number of c2bs on evictlist                      */
+    struct list_head    evict_list;         /**< Eviction list for partition                      */
 } c2_partition_t;
 
 static c2_partition_t          castle_cache_partition[NR_CACHE_PARTITIONS]; /**< Cache partitions */
@@ -444,9 +453,6 @@ static int                     castle_cache_page_freelist_size; /**< Num c2ps on
 static               LIST_HEAD(castle_cache_page_freelist);     /**< Freelist of c2ps             */
 static int                     castle_cache_block_freelist_size;/**< Num c2bs on freelist         */
 static               LIST_HEAD(castle_cache_block_freelist);    /**< Freelist of c2bs             */
-static         DEFINE_SPINLOCK(castle_cache_block_evictlist_lock);  /**< Evictlist lock           */
-static atomic_t                castle_cache_block_evictlist_size;   /**< c2bs on eviction list    */
-static               LIST_HEAD(castle_cache_block_evictlist);   /**< Eviction list of c2bs        */
 
 /* The reservelist is an additional list of free c2bs and c2ps that are held
  * for the exclusive use of the flush thread.  The flush thread gets single c2p
@@ -528,13 +534,38 @@ void castle_cache_stats_print(int verbose)
     atomic_sub(writes, &castle_cache_write_stats);
 
     if (verbose)
-        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d(%d%%) C=%d F=%d R=%d W=%d\n",
+    {
+        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d(%d%%) CLOCK=%d C=%d F=%d R=%d W=%d\n"
+                "\tU=%d(%d%%),Ud=%d(%d%%) UX=%d(%d%%),UXd=%d(%d%%)\n"
+                "\tM=%d(%d%%),Md=%d(%d%%) MX=%d(%d%%),MXd=%d(%d%%)\n",
+
             atomic_read(&castle_cache_dirty_pgs),
             100 * atomic_read(&castle_cache_dirty_pgs) / castle_cache_size,
+            atomic_read(&castle_cache_block_clock_size),
             atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads,
-            writes);
+            writes,
+
+            atomic_read(&castle_cache_partition[USER].cur_pgs),
+            castle_cache_partition[USER].use_pct,
+            atomic_read(&castle_cache_partition[USER].dirty_pgs),
+            castle_cache_partition[USER].dirty_pct,
+            atomic_read(&castle_cache_partition[USER_COMPR].cur_pgs),
+            castle_cache_partition[USER_COMPR].use_pct,
+            atomic_read(&castle_cache_partition[USER_COMPR].dirty_pgs),
+            castle_cache_partition[USER_COMPR].dirty_pct,
+
+            atomic_read(&castle_cache_partition[MERGE_OUT].cur_pgs),
+            castle_cache_partition[MERGE_OUT].use_pct,
+            atomic_read(&castle_cache_partition[MERGE_OUT].dirty_pgs),
+            castle_cache_partition[MERGE_OUT].dirty_pct,
+            atomic_read(&castle_cache_partition[MERGE_COMPR].cur_pgs),
+            castle_cache_partition[MERGE_COMPR].use_pct,
+            atomic_read(&castle_cache_partition[MERGE_COMPR].dirty_pgs),
+            castle_cache_partition[MERGE_COMPR].dirty_pct);
+    }
+
     castle_trace_cache(TRACE_VALUE,
                        TRACE_CACHE_CLEAN_PGS_ID,
                        atomic_read(&castle_cache_clean_pgs), 0);
@@ -561,21 +592,6 @@ void castle_cache_stats_print(int verbose)
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count1, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads, 0);
     castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
-
-    if (verbose)
-        castle_printk(LOG_PERF, "USER: %d/%d(%d%%) D=%d(%d%%) clock=%d MERGE: %d/%d(%d%%) D=%d(%d%%) evict=%d\n",
-                atomic_read(&castle_cache_partition[USER].cur_pgs),
-                atomic_read(&castle_cache_partition[USER].max_pgs),
-                castle_cache_partition[USER].use_pct,
-                atomic_read(&castle_cache_partition[USER].dirty_pgs),
-                castle_cache_partition[USER].dirty_pct,
-                atomic_read(&castle_cache_block_clock_size),
-                atomic_read(&castle_cache_partition[MERGE_OUT].cur_pgs),
-                atomic_read(&castle_cache_partition[MERGE_OUT].max_pgs),
-                castle_cache_partition[MERGE_OUT].use_pct,
-                atomic_read(&castle_cache_partition[MERGE_OUT].dirty_pgs),
-                castle_cache_partition[MERGE_OUT].dirty_pct,
-                atomic_read(&castle_cache_block_evictlist_size));
 
     hits = misses = 0;
     for (i = 0; i < EXT_T_INVALID; i++)
@@ -765,7 +781,7 @@ static c2_partition_id_t c2_partition_most_overbudget_find(void)
 
     return partition->id;
 }
-STATIC_BUG_ON(NR_CACHE_PARTITIONS > 2); /* you'll want to make list_sort() not O(n^2) */
+STATIC_BUG_ON(NR_CACHE_PARTITIONS > 4); /* you'll want to make list_sort() not O(n^2) */
 
 /**
  * Add/remove nr_pgs from cache partition dirty field.
@@ -810,6 +826,49 @@ static void c2_partition_budget_update(c2_partition_id_t part_id, int nr_pgs)
 inline int c2b_partition(c2_block_t *c2b, c2_partition_id_t part_id)
 {
     return test_bit(C2B_STATE_PARTITION_OFFSET + part_id, &c2b->state);
+}
+
+/**
+ * Get the first cache partition ID c2b is a member of.
+ *
+ * USER comes before MERGE in c2_partition_id_t enum.  This is likely correct
+ * for most consumers of this function.  Consider updating if this is semantic
+ * is not sufficient.
+ */
+static c2_partition_id_t c2b_partition_id_first_get(c2_block_t *c2b)
+{
+    c2_partition_id_t part_id;
+
+    for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+        if (c2b_partition(c2b, part_id))
+            return part_id;
+
+    /* c2b must belong to a partition. */
+    BUG();
+}
+
+/**
+ * If c2b is a member of a use_evict partition, return it.
+ */
+static c2_partition_t * c2b_evict_partition_get(c2_block_t *c2b)
+{
+    c2_partition_id_t part_id;
+    c2_partition_t *part = NULL;
+
+    for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+    {
+        if (c2b_partition(c2b, part_id)
+                && castle_cache_partition[part_id].use_evict)
+        {
+            BUG_ON(part);
+            part = &castle_cache_partition[part_id];
+
+            /* Don't break even though we found a valid use_evict partition.
+             * Verify c2b is a member of a single use_evict partition. */
+        }
+    }
+
+    return part;
 }
 
 /**
@@ -1449,18 +1508,25 @@ void dirty_c2b(c2_block_t *c2b)
             if (old & (1ULL << (C2B_STATE_PARTITION_OFFSET + i)))
                 c2_partition_budget_dirty_update(i, c2b->nr_pages);
 
-        /* Remove c2b from eviction list if it is there. */
+        /* Remove c2b from partition eviction list, if present. */
         if (c2b_evictlist(c2b))
         {
-            spin_lock_irq(&castle_cache_block_evictlist_lock);
+            c2_partition_t *evict_part;
+
+            evict_part = c2b_evict_partition_get(c2b);
+            BUG_ON(!evict_part);
+            BUG_ON(!c2b_compressed(c2b) && evict_part->id != MERGE_OUT);
+            BUG_ON( c2b_compressed(c2b) && evict_part->id != MERGE_OUT);
+
+            spin_lock_irq(&evict_part->evict_lock);
             if (likely(test_clear_c2b_evictlist(c2b)))
             {
                 /* We just cleared the evictlist bit. */
-                BUG_ON(!c2b_partition(c2b, MERGE_OUT));
-                BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
+                BUG_ON(!c2b_partition(c2b, evict_part->id));
+                BUG_ON(atomic_dec_return(&evict_part->evict_size) < 0);
                 list_del(&c2b->evict);
             }
-            spin_unlock_irq(&castle_cache_block_evictlist_lock);
+            spin_unlock_irq(&evict_part->evict_lock);
         }
 
         /* Place dirty c2bs onto per-extent dirtytree. */
@@ -1502,6 +1568,7 @@ void clean_c2b_c2ps(c2_block_t *c2b)
  */
 void clean_c2b(c2_block_t *c2b, int clean_c2ps, int checklocked)
 {
+    c2_partition_t *evict_part;
     unsigned long old;
     int i;
 
@@ -1522,16 +1589,19 @@ void clean_c2b(c2_block_t *c2b, int clean_c2ps, int checklocked)
     BUG_ON(atomic_dec_return(&castle_cache_dirty_blks) < 0);
     atomic_inc(&castle_cache_clean_blks);
 
-    /* Place c2b on eviction list if it is in the MERGE_OUT partition. */
-    if (c2b_partition(c2b, MERGE_OUT))
+    /* Place c2b on partition eviction list if it has one. */
+    if ((evict_part = c2b_evict_partition_get(c2b)))
     {
         unsigned long flags;
 
-        spin_lock_irqsave(&castle_cache_block_evictlist_lock, flags);
+        BUG_ON(!c2b_partition(c2b, evict_part->id));
+        BUG_ON(!evict_part->use_evict);
+
+        spin_lock_irqsave(&evict_part->evict_lock, flags);
         BUG_ON(test_set_c2b_evictlist(c2b));
-        atomic_inc(&castle_cache_block_evictlist_size);
-        list_add_tail(&c2b->evict, &castle_cache_block_evictlist);
-        spin_unlock_irqrestore(&castle_cache_block_evictlist_lock, flags);
+        atomic_inc(&evict_part->evict_size);
+        list_add_tail(&c2b->evict, &evict_part->evict_list);
+        spin_unlock_irqrestore(&evict_part->evict_lock, flags);
     }
 
     if (test_clear_c2b_bit(c2b, C2B_dirty, &old))
@@ -2873,7 +2943,6 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     c_byte_off_t virt_base, virt_off, compr_base, compr_off;
     c_byte_off_t compr_block_size = castle_compr_block_size_get(compr_ext_id);
     c2_block_t *compr_c2b;
-    c2_partition_id_t compr_part;
 
     /* get extent mapping for the start of the c2b */
     virt_off = virt_cep.offset;
@@ -2899,15 +2968,11 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     compr_size += compr_cep.offset - compr_base;
     compr_size = roundup(compr_size, PAGE_SIZE);
 
-    /* decide on a partition for the compressed c2b */
-    for (compr_part = 0; compr_part < NR_CACHE_PARTITIONS; ++compr_part)
-        if (c2b_partition(c2b, compr_part))
-            break;
-    BUG_ON(compr_part == NR_CACHE_PARTITIONS);
-
     /* construct the compressed c2b */
     compr_cep.offset = compr_base;
-    compr_c2b = castle_cache_block_get(compr_cep, compr_size / PAGE_SIZE, compr_part);
+    compr_c2b = castle_cache_block_get(compr_cep,
+                                       compr_size / PAGE_SIZE,
+                                       c2b_partition_id_first_get(c2b));
 
     /* schedule I/O on the compressed c2b, if necessary */
     if (c2b_uptodate(compr_c2b))
@@ -3713,8 +3778,8 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
      * prevents castle_cache_block_evictlist_process() from racing us. */
     write_lock(&castle_cache_block_hash_lock);
     spin_lock_irq(&castle_cache_block_clock_lock);
-    /* A c2b will be busy while being inserted/removed from the eviction list
-     * so there is no need to take castle_cache_block_evictionlist_lock here. */
+    /* A c2b will be busy while being inserted/removed from a partition eviction
+     * list so there's no need to take the per-partition evict_lock here. */
 
     for (next = castle_cache_block_clock_hand->next;
          nr_pages < target_pages && rounds < CLOCK_ROUNDS;
@@ -3739,10 +3804,7 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
 
         /* Skip c2bs not in the specified partition. */
         if (unlikely(!c2b_partition(c2b, part_id)))
-        {
-            BUG_ON(1); /* currently have just two partitions */
             continue;
-        }
 
         /* Skip recently accessed blocks and decrease their "accessed" field. */
         if (c2b_accessed(c2b))
@@ -3775,7 +3837,7 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
          * We will remove this block from CLOCK.
          *
          * Remove the c2b from the hash and free it if it is not also
-         * on the evictlist, otherwise just remove it from CLOCK.
+         * on an evictlist, otherwise just remove it from CLOCK.
          */
 
         BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
@@ -3811,7 +3873,7 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
         return 1;
     }
 
-    /* Free victims that were not also on the evictlist. */
+    /* Free victims that were not also on an evictlist. */
     hlist_for_each_entry_safe(c2b, le, te, &victims_to_free, hlist)
     {
         hlist_del(le);
@@ -3822,26 +3884,28 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
 }
 
 /**
- * Return blocks from the evictlist to the freelist.
- *
- * NOTE: All blocks on evictlist are expected to be in MERGE_OUT partition.
+ * Return blocks from specified partition evictlist to the freelist.
  */
-static int castle_cache_block_evictlist_process(int target_pages)
+static int castle_cache_evictlist_process(int target_pages, c2_partition_id_t part_id)
 {
+    c2_partition_t *evict_part;
     struct list_head *lh, *th;
     LIST_HEAD(victims_to_free);
     c2_block_t *c2b;
     int nr_pages = 0;
 
+    evict_part = &castle_cache_partition[part_id];
+    BUG_ON(!evict_part->use_evict || evict_part->use_clock);
+
     /* Taking castle_cache_block_hash_lock allows us to remove from the
      * hash but also prevents further c2b references from being taken
      * and prevents castle_cache_block_clock_process() from racing us. */
     write_lock(&castle_cache_block_hash_lock);
-    spin_lock_irq(&castle_cache_block_evictlist_lock);
+    spin_lock_irq(&evict_part->evict_lock);
     /* A c2b will be busy for the whole duration of an insert into CLOCK
      * so we do not need to take the castle_cache_block_clock_lock here. */
 
-    list_for_each_safe(lh, th, &castle_cache_block_evictlist)
+    list_for_each_safe(lh, th, &evict_part->evict_list)
     {
         c2b = list_entry(lh, c2_block_t, evict);
 
@@ -3852,8 +3916,9 @@ static int castle_cache_block_evictlist_process(int target_pages)
          * the caller will hold a reference on the c2b, it will fail the busy
          * test below and will be ignored by this function. */
 
-        /* We assume that busy c2bs in CLOCK are not in use by MERGE_OUT.
-         * Remove these c2bs from the evictlist and let CLOCK deal with them. */
+        /* We assume busy c2bs in CLOCK and on an evictlist are not in use by
+         * their evictlist partition.  Remove these c2bs from the evictlist and
+         * let CLOCK handle them. */
         if (c2b_busy(c2b, 0) && !c2b_clock(c2b))
             continue;
 
@@ -3864,10 +3929,10 @@ static int castle_cache_block_evictlist_process(int target_pages)
          * otherwise just remove it from the evictlist.
          */
 
-        BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
+        BUG_ON(atomic_dec_return(&evict_part->evict_size) < 0);
         atomic_inc(&castle_cache_block_victims);
         BUG_ON(!test_clear_c2b_evictlist(c2b));
-        BUG_ON(!test_leave_c2b_partition(c2b, MERGE_OUT));
+        BUG_ON(!test_leave_c2b_partition(c2b, evict_part->id));
 
         if (!c2b_clock(c2b))
         {
@@ -3882,7 +3947,7 @@ static int castle_cache_block_evictlist_process(int target_pages)
             break;
     }
 
-    spin_unlock_irq(&castle_cache_block_evictlist_lock);
+    spin_unlock_irq(&evict_part->evict_lock);
     write_unlock(&castle_cache_block_hash_lock);
 
     if (nr_pages == 0)
@@ -3974,8 +4039,8 @@ static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id
     target_pages = max(target_pages, req_pages);
 
     /* Evict blocks from overbudget partition. */
-    if (part_id == MERGE_OUT)
-        return castle_cache_block_evictlist_process(target_pages);
+    if (castle_cache_partition[part_id].use_evict)
+        return castle_cache_evictlist_process(target_pages, part_id);
     else
     {
         BUG_ON(!castle_cache_partition[part_id].use_clock);
@@ -4029,10 +4094,15 @@ int castle_cache_block_destroy(c2_block_t *c2b)
     }
     if (test_clear_c2b_evictlist(c2b))
     {
-        spin_lock_irq(&castle_cache_block_evictlist_lock);
+        c2_partition_t *evict_part;
+
+        evict_part = c2b_evict_partition_get(c2b);
+        BUG_ON(!evict_part);
+
+        spin_lock_irq(&evict_part->evict_lock);
         list_del(&c2b->evict);
-        spin_unlock_irq(&castle_cache_block_evictlist_lock);
-        BUG_ON(atomic_dec_return(&castle_cache_block_evictlist_size) < 0);
+        BUG_ON(atomic_dec_return(&evict_part->evict_size) < 0);
+        spin_unlock_irq(&evict_part->evict_lock);
         lists++;
     }
     BUG_ON(!lists); /* c2b is busy so it must have been on a list */
@@ -4379,6 +4449,10 @@ out:
      * cache partition bits and partition budget adjustments.
      */
 
+    /* Get partition to use for COMPRESSED c2bs for supplied partition ID. */
+    if (c2b_compressed(c2b))
+        part_id = castle_cache_partition[part_id].compr_id;
+
     /* Is c2b being added to requested partition for the first time? */
     if (!test_join_c2b_partition(c2b, part_id))
     {
@@ -4395,27 +4469,30 @@ out:
             atomic_inc(&castle_cache_block_clock_size);
         }
 
-        /* Place c2b on eviction list if it is a clean c2b being added to the
-         * MERGE_OUT partition.  It's possible that the state of the c2b dirty
+        /* Place c2b on eviction list if it is a clean c2b being added to a
+         * use_evict partition.  It's possible that the state of the c2b dirty
          * bit could change while we're attempting this operation.  Be careful
          * not to race with dirty_c2b() and/or clean_c2b(). */
-        if (part_id == MERGE_OUT
+        if (castle_cache_partition[part_id].use_evict
                 && !c2b_dirty(c2b)
                 && !c2b_evictlist(c2b))
         {
-            spin_lock_irq(&castle_cache_block_evictlist_lock);
+            c2_partition_t *evict_part;
+
+            evict_part = &castle_cache_partition[part_id];
+            spin_lock_irq(&evict_part->evict_lock);
             if (!test_set_c2b_evictlist(c2b))
             {
                 /* We just set the evictlist bit. */
                 if (likely(!c2b_dirty(c2b)))
                 {
-                    atomic_inc(&castle_cache_block_evictlist_size);
-                    list_add_tail(&c2b->evict, &castle_cache_block_evictlist);
+                    atomic_inc(&evict_part->evict_size);
+                    list_add_tail(&c2b->evict, &evict_part->evict_list);
                 }
                 else
                     clear_c2b_evictlist(c2b);
             }
-            spin_unlock_irq(&castle_cache_block_evictlist_lock);
+            spin_unlock_irq(&evict_part->evict_lock);
         }
     }
 
@@ -7254,8 +7331,13 @@ static void castle_cache_hashes_fini(void)
             }
             if (test_clear_c2b_evictlist(c2b))
             {
+                c2_partition_t *evict_part;
+
+                evict_part = c2b_evict_partition_get(c2b);
+                BUG_ON(!evict_part);
+
                 list_del(&c2b->evict);
-                atomic_dec(&castle_cache_block_evictlist_size);
+                atomic_dec(&evict_part->evict_size);
             }
             c2_partition_budget_all_return(c2b);
 
@@ -7265,7 +7347,6 @@ static void castle_cache_hashes_fini(void)
 
     /* Ensure cache list accounting is in order. */
     BUG_ON(atomic_read(&castle_cache_block_clock_size) != 0);
-    BUG_ON(atomic_read(&castle_cache_block_evictlist_size) != 0);
     BUG_ON(atomic_read(&castle_cache_dirty_blks) != 0);
     BUG_ON(atomic_read(&castle_cache_clean_blks) != 0);
     BUG_ON(atomic_read(&c2_pref_active_window_size) != 0);
@@ -7275,6 +7356,7 @@ static void castle_cache_hashes_fini(void)
     {
         BUG_ON(atomic_read(&castle_cache_partition[part_id].cur_pgs) != 0);
         BUG_ON(atomic_read(&castle_cache_partition[part_id].dirty_pgs) != 0);
+        BUG_ON(atomic_read(&castle_cache_partition[part_id].evict_size) != 0);
     }
 
 #ifdef CASTLE_DEBUG
@@ -7993,22 +8075,36 @@ int castle_cache_init(void)
     castle_cache_pgs        = castle_alloc(castle_cache_page_freelist_size  *
                                            sizeof(c2_page_t));
 
-    /* Initialise cache partitions */
+    /* Initialise cache partitions with 1/4 of pages. */
+    pgs = castle_cache_page_freelist_size / 4;
     for (j = 0; j < NR_CACHE_PARTITIONS; j++)
     {
-        atomic_set(&castle_cache_partition[j].max_pgs, 0);
+        castle_cache_partition[j].id        = j;
+        castle_cache_partition[j].compr_id  = j;
+        list_add_tail(&castle_cache_partition[j].sort, &castle_cache_partitions);
+
+        atomic_set(&castle_cache_partition[j].max_pgs, pgs);
         atomic_set(&castle_cache_partition[j].cur_pgs, 0);
         atomic_set(&castle_cache_partition[j].dirty_pgs, 0);
+        atomic_set(&castle_cache_partition[j].reserve_pgs, 0);
         castle_cache_partition[j].use_pct   = 0;
+        castle_cache_partition[j].dirty_pct = 0;
+
         castle_cache_partition[j].use_clock = 0;
-        castle_cache_partition[j].id        = j;
-        list_add_tail(&castle_cache_partition[j].sort, &castle_cache_partitions);
+        castle_cache_partition[j].use_evict = 0;
+
+        spin_lock_init(&castle_cache_partition[j].evict_lock);
+        atomic_set(&castle_cache_partition[j].evict_size, 0);
+        INIT_LIST_HEAD(&castle_cache_partition[j].evict_list);
     }
-    pgs = castle_cache_page_freelist_size / 2;
-    atomic_set(&castle_cache_partition[MERGE_OUT].max_pgs, pgs);
-    atomic_set(&castle_cache_partition[USER].max_pgs,
-            castle_cache_page_freelist_size - pgs);
-    castle_cache_partition[USER].use_clock = 1;
+    /* Compressed merge output can always get 1/4 of the cache. */
+    atomic_set(&castle_cache_partition[MERGE_COMPR].reserve_pgs, pgs);
+    castle_cache_partition[USER].use_clock        = 1;
+    castle_cache_partition[USER].compr_id         = USER;
+    castle_cache_partition[USER_COMPR].use_clock  = 1;
+    castle_cache_partition[MERGE_OUT].use_evict   = 1;
+    castle_cache_partition[MERGE_OUT].compr_id    = MERGE_OUT;
+    castle_cache_partition[MERGE_COMPR].use_evict = 1;
 
     /* Init other variables */
     for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
@@ -8020,7 +8116,6 @@ int castle_cache_init(void)
     castle_cache_block_clock_hand = &castle_cache_block_clock;
 
     atomic_set(&castle_cache_block_clock_size, 0);
-    atomic_set(&castle_cache_block_evictlist_size, 0);
 
     atomic_set(&castle_cache_dirty_blks, 0);
     atomic_set(&castle_cache_clean_blks, 0);

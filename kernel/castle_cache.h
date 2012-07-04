@@ -109,12 +109,27 @@ struct castle_cache_block {
  * Castle cache partition descriptors.
  */
 typedef enum {
-    USER = 0,                               /**< Direct user-accessed data                        */
-    MERGE_IN,                               /**< Cache used for merge input                       */
-    MERGE_OUT = MERGE_IN,                   /**< Cache used for merge output                      */
-    NR_CACHE_PARTITIONS,                    /**< Number of cache partitions (must be last).       */
+    INVAL_CACHE_PARTITION = -1,     /**< Invalid cache partition                                */
+
+    /*
+     * Non-COMPRESSED-extent cache partitions.
+     */
+    USER = 0,                       /**< Direct user-accessed data                              */
+    MERGE_IN,                       /**< Cache used for merge input                             */
+    MERGE_OUT = MERGE_IN,           /**< Cache used for merge output                            */
+
+    NR_VIRT_CACHE_PARTITIONS,       /**< Number of VIRTUAL cache partitions (must be between
+                                         VIRTUAL and COMRPESSED partitions)                     */
+
+    /*
+     * COMPRESSED-extent cache partitions.
+     */
+    USER_COMPR = NR_VIRT_CACHE_PARTITIONS,  /**< User-accessed data from COMPRESSED extents     */
+    MERGE_COMPR,                    /**< Merge-accessed/requested data from COMPRESSED extents  */
+
+    NR_CACHE_PARTITIONS,            /**< Number of cache partitions (must be last).             */
 } c2_partition_id_t;
-STATIC_BUG_ON(NR_CACHE_PARTITIONS >= C2B_STATE_PARTITION_BITS);
+STATIC_BUG_ON(NR_CACHE_PARTITIONS > C2B_STATE_PARTITION_BITS);
 
 /**********************************************************************************************
  * Locking.
