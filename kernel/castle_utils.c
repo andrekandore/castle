@@ -495,43 +495,48 @@ int castle_counter_simple_reduce(c_val_tup_t *accumulator, c_val_tup_t delta_cvt
 }
 
 /**
+ * Prefetch an extent safely (holding a mask to it).
+ */
+static void castle_extent_prefetch(c_ext_id_t ext_id)
+{
+    c_chk_cnt_t start = 0, end = 0;
+    c_ext_pos_t cep;
+    c_ext_mask_id_t ext_mask;
+
+    /* Get the mask, and work out prefetch range. */
+    ext_mask = castle_extent_all_masks_get(ext_id);
+    castle_extent_latest_mask_read(ext_id, &start, &end);
+
+    /* Kick the prefetcher off. */
+    cep.ext_id = ext_id;
+    cep.offset = start * C_CHK_SIZE;
+    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
+
+    /* Waits for all outstanding prefetch IOs to complete. */
+    castle_cache_prefetches_wait();
+    castle_extent_put_all(ext_mask);
+}
+
+/**
  * Prefetch extents associated with CT.
  *
  * NOTE: Caller must hold a reference on CT.
  */
 void castle_component_tree_prefetch(struct castle_component_tree *ct)
 {
-    c_chk_cnt_t start = 0, end = 0;
-    c_ext_pos_t cep;
     int i;
 
     castle_printk(LOG_INFO, "Prefetching ct=%p da_id=0x%x\n", ct, ct->da);
 
     /* Internal btree nodes. */
-    cep.ext_id = ct->internal_ext_free.ext_id;
-    castle_extent_mask_read_all(cep.ext_id, &start, &end);
-    cep.offset = start * C_CHK_SIZE;
-    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
+    castle_extent_prefetch(ct->internal_ext_free.ext_id);
 
     /* Leaf btree nodes. */
-    start = end = 0;
-    cep.ext_id = ct->tree_ext_free.ext_id;
-    castle_extent_mask_read_all(cep.ext_id, &start, &end);
-    cep.offset = start * C_CHK_SIZE;
-    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
+    castle_extent_prefetch(ct->tree_ext_free.ext_id);
 
     /* Data extents. */
     for (i = 0; i < ct->nr_data_exts; i++)
-    {
-        start = end = 0;
-        cep.ext_id = ct->data_exts[i];
-        castle_extent_mask_read_all(cep.ext_id, &start, &end);
-        cep.offset = start * C_CHK_SIZE;
-    castle_cache_prefetch_pin(cep, C2_ADV_PREFETCH, USER, end-start);
-    }
-
-    /* Waits for all outstanding prefetch IOs to complete. */
-    castle_cache_prefetches_wait();
+        castle_extent_prefetch(ct->data_exts[i]);
 }
 
 /**
