@@ -4066,6 +4066,14 @@ static void castle_back_stream_in_continue(void *data)
             castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
             stateful_op->curr_op = NULL;
             castle_back_stateful_op_enable_expire(stateful_op);
+            /* Trigger expiry state update now, in case the stateful_op was set to
+               be terminated after this op. */
+            if(castle_back_stateful_op_completed_op(stateful_op))
+            {
+                castle_printk(LOG_WARN, "%s::triggering premature completion of op 0x%llx\n",
+                    __FUNCTION__, stateful_op->token);
+                break;
+            }
             spin_unlock(&stateful_op->lock);
             break;
         case CASTLE_RING_STREAM_IN_FINISH:
