@@ -1516,7 +1516,7 @@ void dirty_c2b(c2_block_t *c2b)
             evict_part = c2b_evict_partition_get(c2b);
             BUG_ON(!evict_part);
             BUG_ON(!c2b_compressed(c2b) && evict_part->id != MERGE_OUT);
-            BUG_ON( c2b_compressed(c2b) && evict_part->id != MERGE_OUT);
+            BUG_ON( c2b_compressed(c2b) && evict_part->id != MERGE_COMPR);
 
             spin_lock_irq(&evict_part->evict_lock);
             if (likely(test_clear_c2b_evictlist(c2b)))
@@ -8100,10 +8100,10 @@ int castle_cache_init(void)
     /* Compressed merge output can always get 1/4 of the cache. */
     atomic_set(&castle_cache_partition[MERGE_COMPR].reserve_pgs, pgs);
     castle_cache_partition[USER].use_clock        = 1;
-    castle_cache_partition[USER].compr_id         = USER;
+    castle_cache_partition[USER].compr_id         = USER_COMPR;
     castle_cache_partition[USER_COMPR].use_clock  = 1;
     castle_cache_partition[MERGE_OUT].use_evict   = 1;
-    castle_cache_partition[MERGE_OUT].compr_id    = MERGE_OUT;
+    castle_cache_partition[MERGE_OUT].compr_id    = MERGE_COMPR;
     castle_cache_partition[MERGE_COMPR].use_evict = 1;
 
     /* Init other variables */
