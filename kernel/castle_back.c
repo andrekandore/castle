@@ -69,6 +69,10 @@ static int castle_stream_in_headroom_cts = 100;
 module_param(castle_stream_in_headroom_cts, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_stream_in_headroom_cts, "Upper bound on number of component trees that may exist to allow another stream_in op to start");
 
+static int castle_stateful_op_idle_timeout_secs = 600;
+module_param(castle_stateful_op_idle_timeout_secs, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_stateful_op_idle_timeout_secs, "Max time (in secs) a stateful op can idle before being forecefully expired.");
+
 #define CASTLE_BACK_CONN_INITIALISED_BIT    (0)
 #define CASTLE_BACK_CONN_INITIALISED_FLAG   (1 << CASTLE_BACK_CONN_INITIALISED_BIT)
 #define CASTLE_BACK_CONN_NOTIFY_BIT         (1)
@@ -619,7 +623,7 @@ static void castle_back_put_stateful_op(struct castle_back_conn *conn,
 }
 
 #define STATEFUL_OP_TIMEOUT_CHECK_INTERVAL (1 * HZ)
-#define STATEFUL_OP_TIMEOUT (600 * HZ)
+#define STATEFUL_OP_TIMEOUT (castle_stateful_op_idle_timeout_secs * HZ)
 
 static void castle_back_stateful_op_timeout_check(unsigned long data);
 
