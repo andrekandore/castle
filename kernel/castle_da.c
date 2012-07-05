@@ -13143,12 +13143,15 @@ castle_da_in_stream_start(struct castle_double_array    *da,
 
     if (ret)
     {
+        castle_printk(LOG_ERROR, "%s::[%p] failed to alloc space for stream_in of up to %llu items "
+                "(internal ext size: %u, tree ext size: %u, data ext size: %u)\n",
+                __FUNCTION__, constr, item_count, internal_ext_size, tree_ext_size, data_ext_size);
         castle_ct_put(constr->tree, READ);
         constr->tree = NULL;
         goto err_1;
     }
 
-    castle_printk(LOG_DEBUG, "%s::[%p] preparing for stream_in of up to %llu items "
+    castle_printk(LOG_DEBUG, "%s::[%p] prepared for stream_in of up to %llu items "
             "(internal ext size: %u, tree ext size: %u, data ext size: %u, bloom ext size: %u)\n",
             __FUNCTION__, constr, item_count, internal_ext_size, tree_ext_size, data_ext_size,
             castle_extent_size_get(constr->tree->bloom.ext_id));
