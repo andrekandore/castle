@@ -4063,6 +4063,9 @@ static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t 
     uint64_t offset;
 
     debug("Seeking map for ext: %llu, chunk: %u\n", ext->ext_id, chk_idx);
+
+    BUG_ON(test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags));
+
     offset = (chk_idx * ext->k_factor * sizeof(c_disk_chk_t));
     if (SUPER_EXTENT(ext->ext_id))
     {
@@ -7008,7 +7011,8 @@ void castle_extents_rebuild_startup_check(int need_rebuild)
 static int castle_extent_verify_list_add(c_ext_t *ext, void *unused)
 {
     /* We are not handling logical extents or extents scheduled for deletion. */
-    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID))
+    if (!SUPER_EXTENT(ext->ext_id) && !(ext->ext_id == MICRO_EXT_ID) &&
+        !test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &ext->flags))
     {
         /*
          * Take a reference to the extent. We will drop this when we have finished remapping
@@ -7045,7 +7049,11 @@ static int castle_extent_scan_uuid(c_ext_t *ext, uint32_t uuid)
         for (idx=0; idx<ext->k_factor; idx++)
         {
             if (chunks[idx].slave_id == uuid)
+            {
+                castle_printk(LOG_UNLIMITED, "Found a ref: [%llu:%u]\n",
+                                              ext->ext_id, chunkno);
                 nr_refs++;
+            }
         }
     }
     return nr_refs;
