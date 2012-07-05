@@ -4382,7 +4382,7 @@ c_ext_mask_id_t castle_extent_mask_get(c_ext_id_t ext_id, c_chk_cnt_t *raw_size)
  *
  * @param mask_id [inout]   Extent mask that reference has to be released.
  */
-void castle_extent_mask_put(c_ext_mask_id_t mask_id)
+static void castle_extent_mask_put(c_ext_mask_id_t mask_id)
 {
     /* Get the mask structure. */
     c_ext_mask_t *mask = castle_extent_mask_hash_get(mask_id);
