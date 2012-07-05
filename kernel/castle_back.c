@@ -3295,6 +3295,8 @@ static c_chk_cnt_t castle_back_stream_in_internal_ext_size_wc_estimate(c_chk_cnt
 }
 
 static void castle_back_stream_in_continue(void *data);
+
+#define CASTLE_STREAM_IN_CHUNKS_ALLOC_ROUNDUP(_x, _r) (((_x)==0)?0:((_x)+((_r)-((_x)%(_r)))))
 static void castle_back_stream_in_start(struct castle_back_op *op)
 {
     struct castle_back_conn *conn = op->conn;
@@ -3370,13 +3372,12 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
 
     /* Initialise stateful op extent sizing */
     /* Round up the growable extents */
-    stateful_op->stream_in.expected_btree_chunks   = op->req.stream_in_start.btree_chunks +
-                    (STREAM_IN_OUTPUT_TREE_GROWTH_RATE
-                      - (op->req.stream_in_start.btree_chunks%STREAM_IN_OUTPUT_TREE_GROWTH_RATE));
-    stateful_op->stream_in.expected_dataext_chunks = op->req.stream_in_start.medium_object_chunks +
-                    (STREAM_IN_OUTPUT_DATA_GROWTH_RATE
-                      - (op->req.stream_in_start.medium_object_chunks%STREAM_IN_OUTPUT_DATA_GROWTH_RATE));
-    //TODO@tr: make round-up macro for the above two
+    stateful_op->stream_in.expected_btree_chunks   =
+            CASTLE_STREAM_IN_CHUNKS_ALLOC_ROUNDUP(op->req.stream_in_start.btree_chunks,
+                                                  STREAM_IN_OUTPUT_TREE_GROWTH_RATE);
+    stateful_op->stream_in.expected_dataext_chunks =
+            CASTLE_STREAM_IN_CHUNKS_ALLOC_ROUNDUP(op->req.stream_in_start.medium_object_chunks,
+                                                  STREAM_IN_OUTPUT_DATA_GROWTH_RATE);
     stateful_op->stream_in.expected_entries =
             castle_back_stream_in_entries_wc_estimate(stateful_op->stream_in.expected_btree_chunks,
                                                       attachment->col.da->btree_type);
