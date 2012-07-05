@@ -1386,7 +1386,7 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
     BUG_ON(!dirtytree);
 
     /* Check nobody is dirtying c2bs prior to what has been compressed. */
-    if (castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL)
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
         BUG_ON(c2b_end_off(c2b) <= dirtytree->next_virt_off);
 
     spin_lock_irqsave(&dirtytree->lock, flags);
