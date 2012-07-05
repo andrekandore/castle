@@ -112,22 +112,21 @@ typedef enum {
     INVAL_CACHE_PARTITION = -1,     /**< Invalid cache partition                                */
 
     /*
-     * Non-COMPRESSED-extent cache partitions.
+     * On-disk-extent cache partitions (e.g. COMPRESSED and NORMAL).
      */
     USER = 0,                       /**< Direct user-accessed data                              */
-    MERGE_IN,                       /**< Cache used for merge input                             */
-    MERGE_OUT = MERGE_IN,           /**< Cache used for merge output                            */
+    MERGE_IN,                       /**< Cache used for merge                                   */
+    MERGE_OUT = MERGE_IN,
 
-    NR_VIRT_CACHE_PARTITIONS,       /**< Number of VIRTUAL cache partitions (must be between
-                                         VIRTUAL and COMRPESSED partitions)                     */
+    NR_ONDISK_CACHE_PARTITIONS,     /**< Number of COMPRESSED and NORMAL partitions             */
 
     /*
-     * COMPRESSED-extent cache partitions.
+     * VIRTUAL-extent cache partitions (e.g. VIRTUAL).
      */
-    USER_COMPR = NR_VIRT_CACHE_PARTITIONS,  /**< User-accessed data from COMPRESSED extents     */
-    MERGE_COMPR,                    /**< Merge-accessed/requested data from COMPRESSED extents  */
+    USER_VIRT = NR_ONDISK_CACHE_PARTITIONS, /**< User-accessed data from VIRTUAL extents        */
+    MERGE_VIRT,                     /**< Merge-accessed/requested data from VIRTUAL extents     */
 
-    NR_CACHE_PARTITIONS,            /**< Number of cache partitions (must be last).             */
+    NR_CACHE_PARTITIONS,            /**< Number of cache partitions                             */
 } c2_partition_id_t;
 STATIC_BUG_ON(NR_CACHE_PARTITIONS > C2B_STATE_PARTITION_BITS);
 

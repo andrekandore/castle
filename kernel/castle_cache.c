@@ -68,7 +68,8 @@ enum c2b_state_bits {
     C2B_in_flight,          /**< Block is currently in-flight (un-set in c2b_multi_io_end()).   */
     C2B_barrier,            /**< Block in write IO, and should be used as a barrier write.      */
     C2B_eio,                /**< Block failed to write to slave(s)                              */
-    C2B_compressed,         /**< Block contains compressed data, is from on-disk compressed ext.*/
+    C2B_compressed,         /**< Block contains compressed data, is from on-disk COMPRESSED ext.*/
+    C2B_virtual,            /**< Block contains uncompressed data, is from a VIRTUAL extent.    */
     C2B_immutable,          /**< Block contents are finalised and will not be modified further. */
     C2B_evictlist,          /**< Block is on a partition evictlist.                             */
     C2B_clock,              /**< Block on castle_cache_block_clock (protected by _clock_lock).  */
@@ -167,6 +168,7 @@ C2B_FNS(in_flight, in_flight)
 C2B_FNS(barrier, barrier)
 C2B_FNS(eio, eio)
 C2B_FNS(compressed, compressed)
+C2B_FNS(virtual, virtual)
 C2B_FNS(immutable, immutable)
 C2B_FNS(evictlist, evictlist)
 C2B_TAS_FNS(evictlist, evictlist)
@@ -401,7 +403,7 @@ static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS;
  */
 typedef struct castle_cache_partition {
     uint8_t             id;                 /**< Cache partition ID                               */
-    uint8_t             compr_id;           /**< Cache partition ID for compressed data           */
+    uint8_t             virt_id;            /**< Cache partition ID for VIRTUAL data              */
     struct list_head    sort;               /**< Position on castle_cache_partitions              */
 
     atomic_t            max_pgs;            /**< Total pages available for this partition         */
@@ -536,8 +538,8 @@ void castle_cache_stats_print(int verbose)
     if (verbose)
     {
         castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d(%d%%) CLOCK=%d C=%d F=%d R=%d W=%d\n"
-                "\tU=%d(%d%%),Ud=%d(%d%%) UX=%d(%d%%),UXd=%d(%d%%)\n"
-                "\tM=%d(%d%%),Md=%d(%d%%) MX=%d(%d%%),MXd=%d(%d%%)\n",
+                "\tU=%d(%d%%),Ud=%d(%d%%) UV=%d(%d%%),UVd=%d(%d%%)\n"
+                "\tM=%d(%d%%),Md=%d(%d%%) MV=%d(%d%%),MVd=%d(%d%%)\n",
 
             atomic_read(&castle_cache_dirty_pgs),
             100 * atomic_read(&castle_cache_dirty_pgs) / castle_cache_size,
@@ -551,19 +553,19 @@ void castle_cache_stats_print(int verbose)
             castle_cache_partition[USER].use_pct,
             atomic_read(&castle_cache_partition[USER].dirty_pgs),
             castle_cache_partition[USER].dirty_pct,
-            atomic_read(&castle_cache_partition[USER_COMPR].cur_pgs),
-            castle_cache_partition[USER_COMPR].use_pct,
-            atomic_read(&castle_cache_partition[USER_COMPR].dirty_pgs),
-            castle_cache_partition[USER_COMPR].dirty_pct,
+            atomic_read(&castle_cache_partition[USER_VIRT].cur_pgs),
+            castle_cache_partition[USER_VIRT].use_pct,
+            atomic_read(&castle_cache_partition[USER_VIRT].dirty_pgs),
+            castle_cache_partition[USER_VIRT].dirty_pct,
 
             atomic_read(&castle_cache_partition[MERGE_OUT].cur_pgs),
             castle_cache_partition[MERGE_OUT].use_pct,
             atomic_read(&castle_cache_partition[MERGE_OUT].dirty_pgs),
             castle_cache_partition[MERGE_OUT].dirty_pct,
-            atomic_read(&castle_cache_partition[MERGE_COMPR].cur_pgs),
-            castle_cache_partition[MERGE_COMPR].use_pct,
-            atomic_read(&castle_cache_partition[MERGE_COMPR].dirty_pgs),
-            castle_cache_partition[MERGE_COMPR].dirty_pct);
+            atomic_read(&castle_cache_partition[MERGE_VIRT].cur_pgs),
+            castle_cache_partition[MERGE_VIRT].use_pct,
+            atomic_read(&castle_cache_partition[MERGE_VIRT].dirty_pgs),
+            castle_cache_partition[MERGE_VIRT].dirty_pct);
     }
 
     castle_trace_cache(TRACE_VALUE,
@@ -1515,8 +1517,8 @@ void dirty_c2b(c2_block_t *c2b)
 
             evict_part = c2b_evict_partition_get(c2b);
             BUG_ON(!evict_part);
-            BUG_ON(!c2b_compressed(c2b) && evict_part->id != MERGE_OUT);
-            BUG_ON( c2b_compressed(c2b) && evict_part->id != MERGE_COMPR);
+            BUG_ON( c2b_virtual(c2b) && evict_part->id != MERGE_VIRT);
+            BUG_ON(!c2b_virtual(c2b) && evict_part->id != MERGE_OUT);
 
             spin_lock_irq(&evict_part->evict_lock);
             if (likely(test_clear_c2b_evictlist(c2b)))
@@ -3573,7 +3575,7 @@ static void castle_cache_block_init(c2_block_t *c2b,
     struct page *page;
     c_ext_pos_t dcep;
     c2_page_t *c2p;
-    int i, uptodate, compressed;
+    int i, uptodate, compressed = 0, virtual = 0;
     struct mutex *vmap_per_cpu_mutex_ptr;
     struct page ** vmap_per_cpu_pgs_ptr;
 
@@ -3592,7 +3594,11 @@ static void castle_cache_block_init(c2_block_t *c2b,
     /* Init the page array (note: this may substitute some c2ps,
        if they already exist in the hash. */
     uptodate   = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
-    compressed = castle_compr_type_get(cep.ext_id) == C_COMPR_COMPRESSED;
+    switch (castle_compr_type_get(cep.ext_id))
+    {
+        case C_COMPR_COMPRESSED: compressed = 1; break;
+        case C_COMPR_VIRTUAL:    virtual    = 1; break;
+    }
 
     /* Respect upper limits on maximum c2b size. */
     BUG_ON( compressed && nr_pages > CASTLE_CACHE_VMAP_COMPR_PGS);
@@ -3603,7 +3609,8 @@ static void castle_cache_block_init(c2_block_t *c2b,
     c2b->cep = cep;
     c2b->state.bits = INIT_C2B_BITS
                             | (uptodate   ? (1 << C2B_uptodate)   : 0)
-                            | (compressed ? (1 << C2B_compressed) : 0);
+                            | (compressed ? (1 << C2B_compressed) : 0)
+                            | (virtual    ? (1 << C2B_virtual)    : 0);
     c2b->state.partition = 0;
     c2b->state.accessed  = 1;   /* not zero, but not a lot either */
     c2b->nr_pages = nr_pages;
@@ -4449,9 +4456,9 @@ out:
      * cache partition bits and partition budget adjustments.
      */
 
-    /* Get partition to use for COMPRESSED c2bs for supplied partition ID. */
-    if (c2b_compressed(c2b))
-        part_id = castle_cache_partition[part_id].compr_id;
+    /* Get partition to use for VIRTUAL c2bs for supplied partition ID. */
+    if (c2b_virtual(c2b))
+        part_id = castle_cache_partition[part_id].virt_id;
 
     /* Is c2b being added to requested partition for the first time? */
     if (!test_join_c2b_partition(c2b, part_id))
@@ -8080,7 +8087,7 @@ int castle_cache_init(void)
     for (j = 0; j < NR_CACHE_PARTITIONS; j++)
     {
         castle_cache_partition[j].id        = j;
-        castle_cache_partition[j].compr_id  = j;
+        castle_cache_partition[j].virt_id   = j;
         list_add_tail(&castle_cache_partition[j].sort, &castle_cache_partitions);
 
         atomic_set(&castle_cache_partition[j].max_pgs, pgs);
@@ -8097,14 +8104,14 @@ int castle_cache_init(void)
         atomic_set(&castle_cache_partition[j].evict_size, 0);
         INIT_LIST_HEAD(&castle_cache_partition[j].evict_list);
     }
-    /* Compressed merge output can always get 1/4 of the cache. */
-    atomic_set(&castle_cache_partition[MERGE_COMPR].reserve_pgs, pgs);
-    castle_cache_partition[USER].use_clock        = 1;
-    castle_cache_partition[USER].compr_id         = USER_COMPR;
-    castle_cache_partition[USER_COMPR].use_clock  = 1;
-    castle_cache_partition[MERGE_OUT].use_evict   = 1;
-    castle_cache_partition[MERGE_OUT].compr_id    = MERGE_COMPR;
-    castle_cache_partition[MERGE_COMPR].use_evict = 1;
+    /* COMPRESSED and NORMAL merge output can always get 1/4 of the cache. */
+    atomic_set(&castle_cache_partition[MERGE_OUT].reserve_pgs, pgs);
+    castle_cache_partition[USER].use_clock       = 1;
+    castle_cache_partition[USER].virt_id         = USER_VIRT;
+    castle_cache_partition[USER_VIRT].use_clock  = 1;
+    castle_cache_partition[MERGE_OUT].use_evict  = 1;
+    castle_cache_partition[MERGE_OUT].virt_id    = MERGE_VIRT;
+    castle_cache_partition[MERGE_VIRT].use_evict = 1;
 
     /* Init other variables */
     for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
