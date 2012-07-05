@@ -3394,14 +3394,11 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
                 stateful_op->stream_in.expected_dataext_chunks,
                 stateful_op);
 
-    /* TODO@tr: Do we need transaction lock here? */
-    CASTLE_TRANSACTION_BEGIN;
     constr = castle_da_in_stream_start(stateful_op->attachment->col.da,
                                        stateful_op->stream_in.expected_entries,
                                        internal_ext_size,
                                        stateful_op->stream_in.expected_btree_chunks,
                                        stateful_op->stream_in.expected_dataext_chunks);
-    CASTLE_TRANSACTION_END;
 
     if (!constr)
     {
