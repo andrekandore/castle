@@ -13157,7 +13157,9 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     return constr;
 
 err_1:
+    CASTLE_TRANSACTION_BEGIN;
     castle_immut_tree_constr_dealloc(constr);
+    CASTLE_TRANSACTION_END;
 err_0:
     return NULL;
 }
