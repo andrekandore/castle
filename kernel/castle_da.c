@@ -13148,9 +13148,9 @@ castle_da_in_stream_start(struct castle_double_array    *da,
         goto err_out;
     }
 
-    castle_printk(LOG_USERINFO, "%s::preparing for stream_in of up to %llu items "
+    castle_printk(LOG_DEBUG, "%s::[%p] preparing for stream_in of up to %llu items "
             "(internal ext size: %u, tree ext size: %u, data ext size: %u, bloom ext size: %u)\n",
-            __FUNCTION__, item_count, internal_ext_size, tree_ext_size, data_ext_size,
+            __FUNCTION__, constr, item_count, internal_ext_size, tree_ext_size, data_ext_size,
             castle_extent_size_get(constr->tree->bloom.ext_id));
 
 

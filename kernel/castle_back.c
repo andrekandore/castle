@@ -3386,9 +3386,11 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
                                                                 attachment->col.da->btree_type);
     BUG_ON(!internal_ext_size);
 
-    castle_printk(LOG_DEBUG, "%s:: stream_in op on cpu %u, expected_entries: %lld, "
-                "expected_dataext_chunks: %ld, stateful_op:%p\n",
+    castle_printk(LOG_DEBUG, "%s:: stream_in %p:0x%x op on cpu %u, expected_entries: %u, "
+                "expected_dataext_chunks: %u, stateful_op:%p\n",
                 __FUNCTION__,
+                stateful_op->conn,
+                stateful_op->token,
                 op->cpu,
                 stateful_op->stream_in.expected_entries,
                 stateful_op->stream_in.expected_dataext_chunks,
@@ -3411,6 +3413,16 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
         err = -ENOSPC;
         goto err2;
     }
+
+    castle_printk(LOG_USERINFO, "%s:: stream_in %p:0x%x; up to %llu entries in %u leaf chunks, %u data extent chunks, and %u EMBF chunks.\n",
+                __FUNCTION__,
+                stateful_op->conn,
+                stateful_op->token,
+                stateful_op->stream_in.expected_entries,
+                stateful_op->stream_in.expected_btree_chunks,
+                stateful_op->stream_in.expected_dataext_chunks,
+                castle_extent_size_get(constr->tree->bloom.ext_id));
+
     /* Work structure to run every queued op. Every stream_in_next gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_stream_in_continue, stateful_op);
 
@@ -3526,7 +3538,7 @@ static void castle_back_stream_in_finish(struct castle_back_op *op)
         castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
         goto err0;
     }
-    castle_printk(LOG_INFO, "%s::stateful op %llx\n", __FUNCTION__, stateful_op->token);
+    castle_printk(LOG_USERINFO, "%s::stateful op %p:0x%x\n", __FUNCTION__, stateful_op->conn, stateful_op->token);
     /*
      * Put this op on the queue for the stream_in
      */
@@ -3534,7 +3546,8 @@ static void castle_back_stream_in_finish(struct castle_back_op *op)
     err = castle_back_stateful_op_queue_op(stateful_op, op->req.stream_in_finish.token, op);
     if (err)
     {
-        castle_printk(LOG_ERROR, "%s:: failed to queue, err:%u\n", __FUNCTION__, err);
+        castle_printk(LOG_ERROR, "%s:: failed to queue for %p:0x%x, err:%u\n",
+            __FUNCTION__, err, stateful_op->conn, stateful_op->token);
         spin_unlock(&stateful_op->lock);
         goto err0;
     }
@@ -3779,8 +3792,8 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         {
             /* Growth will exceed allocation */
             castle_printk(LOG_ERROR,
-                    "%s::[op %llx] exhausted extent allocation (size: %lu chunks); suggest complete current stream then retry.\n",
-                    __FUNCTION__, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE);
+                    "%s::[op %p:0x%x] exhausted extent allocation (size: %u chunks); suggest complete current stream then retry.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE);
             return -ENOSPC;
         }
 
@@ -3789,8 +3802,8 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         {
             /* Growth failed probably because running low on freespace */
             castle_printk(LOG_ERROR,
-                    "%s::[op %llx] failed to obtain freespace on extent; suggest complete current streams, wait, then retry.\n",
-                    __FUNCTION__, stateful_op->token);
+                    "%s::[op %p:0x%x] failed to obtain freespace on extent; suggest complete current streams, wait, then retry.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token);
             return -ENOSPC;
         }
         /* Growth successful. */
@@ -3871,8 +3884,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         if(err)
         {
             castle_printk(LOG_ERROR,
-                        "%s::[op %llx] leaf node extent growth control failed with err %d.\n",
-                        __FUNCTION__, stateful_op->token, err);
+                        "%s::[op %p:0x%x] leaf node extent growth control failed with err %d.\n",
+                        __FUNCTION__, stateful_op->conn, stateful_op->token, err);
             goto err2;
         }
 
@@ -3897,8 +3910,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     BUG_ON(kv_hdr.val_len > MEDIUM_OBJECT_LIMIT);
                     if(!stateful_op->stream_in.expected_dataext_chunks)
                     {
-                        castle_printk(LOG_ERROR, "%s::[op %llx] user requested 0 MO chunks on this op; giving up on value of size %llu bytes.\n",
-                            __FUNCTION__, stateful_op->token, kv_hdr.val_len);
+                        castle_printk(LOG_ERROR, "%s::[op %p:0x%x] user requested 0 MO chunks on this op; giving up on value of size %llu bytes.\n",
+                            __FUNCTION__, stateful_op->conn, stateful_op->token, kv_hdr.val_len);
                         err = -EFBIG;
                         goto err2;
                     }
@@ -3915,8 +3928,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     if(err)
                     {
                         castle_printk(LOG_ERROR,
-                                    "%s::[op %llx] data extent growth control failed with err %d.\n",
-                                    __FUNCTION__, stateful_op->token, err);
+                                    "%s::[op %p:0x%x] data extent growth control failed with err %d.\n",
+                                    __FUNCTION__, stateful_op->conn, stateful_op->token, err);
                         goto err2;
                     }
 
@@ -4002,8 +4015,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                 CVT_TOMBSTONE_INIT(cvt, (uint64_t)now.tv_sec);
                 break;
             case CASTLE_VALUE_TYPE_OUT_OF_LINE:
-                castle_printk(LOG_WARN, "%s::[op 0x%llx] skipping OoL.\n",
-                    __FUNCTION__, stateful_op->token);
+                castle_printk(LOG_WARN, "%s::[op %p:0x%x] skipping OoL.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token);
                 BUG_ON(!CVT_INVALID(cvt)); /* should still be INVAL; let's leave it that way. */
                 break;
             default:
@@ -4061,7 +4074,7 @@ static void castle_back_stream_in_continue(void *data)
         case CASTLE_RING_STREAM_IN_NEXT:
             spin_unlock(&stateful_op->lock);
             if ((ret = castle_back_stream_in_buf_process(stateful_op)))
-                castle_printk(LOG_ERROR, "%s::stateful op %llx failed with error code %d.\n",
+                castle_printk(LOG_ERROR, "%s::stateful op 0x%x failed with error code %d.\n",
                         __FUNCTION__, stateful_op->token, ret);
             spin_lock(&stateful_op->lock);
             castle_back_buffer_put(stateful_op->conn, op->buf);
@@ -4072,7 +4085,7 @@ static void castle_back_stream_in_continue(void *data)
                be terminated after this op. */
             if(castle_back_stateful_op_completed_op(stateful_op))
             {
-                castle_printk(LOG_WARN, "%s::triggered premature completion of op 0x%llx\n",
+                castle_printk(LOG_WARN, "%s::triggered premature completion of op 0x%x\n",
                     __FUNCTION__, token);
                 break;
             }
@@ -4081,8 +4094,9 @@ static void castle_back_stream_in_continue(void *data)
         case CASTLE_RING_STREAM_IN_FINISH:
             abort_stream = stateful_op->curr_op->req.stream_in_finish.abort;
 
-            castle_printk(LOG_USERINFO, "%s::finishing stream in for op %llx, abort=%u\n",
+            castle_printk(LOG_USERINFO, "%s::finishing stream in for op %p:0x%x abort=%u\n",
                     __FUNCTION__,
+                    stateful_op->conn,
                     stateful_op->token,
                     abort_stream);
 
