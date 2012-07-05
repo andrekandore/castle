@@ -216,13 +216,6 @@ void castle_sysfs_version_del(struct castle_version *v)
 }
 
 /* Double Array functions could race with DA deletion. */
-static ssize_t double_array_number_show(struct kobject *kobj,
-                                        struct attribute *attr,
-                                        char *buf)
-{
-    return sprintf(buf, "%d\n", castle_da_count());
-}
-
 static ssize_t da_version_show(struct kobject *kobj,
                                struct attribute *attr,
                                char *buf)
@@ -399,17 +392,6 @@ static ssize_t da_array_list_show(struct kobject *kobj,
         snprintf(buf + PAGE_SIZE - 50, 50, "Overflow.. can't fit in PAGE_SIZE\n");
 
     return strlen(buf);
-}
-
-static ssize_t slaves_number_show(struct kobject *kobj,
-                                  struct attribute *attr,
-                                  char *buf)
-{
-    int nr_slaves;
-
-    nr_slaves = castle_nr_slaves_get();
-
-    return sprintf(buf, "%d\n", nr_slaves);
 }
 
 static ssize_t slave_uuid_show(struct kobject *kobj,
@@ -620,23 +602,6 @@ static ssize_t slaves_rebuild_chunks_remapped_show(struct kobject *kobj,
     return sprintf(buf, "%ld\n", castle_extents_chunks_remapped);
 }
 
-static ssize_t collections_number_show(struct kobject *kobj,
-                                       struct attribute *attr,
-                                       char *buf)
-{
-    struct castle_attachments *collections =
-                container_of(kobj, struct castle_attachments, collections_kobj);
-    struct list_head *lh;
-    int nr_collections = 0;
-
-    list_for_each(lh, &collections->attachments)
-    {
-        nr_collections++;
-    }
-
-    return sprintf(buf, "%d\n", nr_collections);
-}
-
 static ssize_t collection_version_show(struct kobject *kobj,
                                        struct attribute *attr,
                                        char *buf)
@@ -716,11 +681,7 @@ static struct kobj_type castle_versions_ktype = {
 };
 
 /* Definition of Double array sysfs directory attributes */
-static struct castle_sysfs_entry double_array_number =
-__ATTR(number, S_IRUGO|S_IWUSR, double_array_number_show, NULL);
-
 static struct attribute *castle_double_array_attrs[] = {
-    &double_array_number.attr,
     NULL,
 };
 
@@ -1075,19 +1036,7 @@ void castle_sysfs_ct_del(struct castle_component_tree *ct)
 }
 
 /* Definition of Merge threads directory attributes */
-
-static ssize_t data_extents_number_show(struct kobject *kobj,
-                                        struct attribute *attr,
-                                        char *buf)
-{
-    return sprintf(buf, "%u\n", castle_data_extents_count);
-}
-
-static struct castle_sysfs_entry data_extents_number =
-__ATTR(number, S_IRUGO|S_IWUSR, data_extents_number_show, NULL);
-
 static struct attribute *castle_data_extents_attrs[] = {
-    &data_extents_number.attr,
     NULL,
 };
 
@@ -1279,14 +1228,10 @@ void castle_sysfs_merge_del(struct castle_da_merge *merge)
 }
 
 /* Definition of slaves sysfs directory attributes */
-static struct castle_sysfs_entry slaves_number =
-__ATTR(number, S_IRUGO|S_IWUSR, slaves_number_show, NULL);
-
 static struct castle_sysfs_entry slaves_rebuild_chunks_remapped =
 __ATTR(rebuild_chunks_remapped, S_IRUGO|S_IWUSR, slaves_rebuild_chunks_remapped_show, NULL);
 
 static struct attribute *castle_slaves_attrs[] = {
-    &slaves_number.attr,
     &slaves_rebuild_chunks_remapped.attr,
     NULL,
 };
@@ -1377,11 +1322,7 @@ void castle_sysfs_slave_del(struct castle_slave *slave)
 }
 
 /* Definition of collections sysfs directory attributes */
-static struct castle_sysfs_entry collections_number =
-__ATTR(number, S_IRUGO|S_IWUSR, collections_number_show, NULL);
-
 static struct attribute *castle_collections_attrs[] = {
-    &collections_number.attr,
     NULL,
 };
 
