@@ -13117,7 +13117,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                             NULL);      /* not a merge.             */
 
     if (!constr)
-        goto err_out;
+        goto err_0;
 
     /* Calculate nr_rwcts from tree_ext_size and data_ext_size. Its best-effort, anyway. */
     nr_rwcts = max((int)max(1, (int)(tree_ext_size/MAX_DYNAMIC_TREE_SIZE)),
@@ -13131,7 +13131,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
                                    /* FIXME: Understand the usage of nr of rwcts. */
 
     if (constr->tree == NULL)
-        goto err_out;
+        goto err_1;
 
     ret = castle_immut_tree_space_alloc(constr,
                                         internal_ext_size * C_CHK_SIZE,
@@ -13145,7 +13145,7 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     {
         castle_ct_put(constr->tree, READ);
         constr->tree = NULL;
-        goto err_out;
+        goto err_1;
     }
 
     castle_printk(LOG_DEBUG, "%s::[%p] preparing for stream_in of up to %llu items "
@@ -13156,9 +13156,9 @@ castle_da_in_stream_start(struct castle_double_array    *da,
 
     return constr;
 
-err_out:
+err_1:
     castle_immut_tree_constr_dealloc(constr);
-
+err_0:
     return NULL;
 }
 
