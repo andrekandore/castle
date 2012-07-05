@@ -44,6 +44,11 @@ int castle_ctrl_prog_present(void)
     return (castle_ctrl_prog_state == CTRL_PROG_PRESENT);
 }
 
+pid_t castle_ctrl_prog_pid_get(void)
+{
+    return castle_ctrl_prog_state == CTRL_PROG_PRESENT ? castle_ctrl_prog_pid : 0;
+}
+
 static void castle_ctrl_prog_touch(void)
 {
     castle_ctrl_prog_last_jiffies = jiffies;
