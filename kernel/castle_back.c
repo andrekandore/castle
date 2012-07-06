@@ -61,7 +61,7 @@ atomic_t                        castle_req_seq_id = ATOMIC_INIT(0); /**< Unique 
 
 struct castle_back_op;
 
-static int castle_stream_in_headroom_chunks = 20;
+static int castle_stream_in_headroom_chunks = 250;
 module_param(castle_stream_in_headroom_chunks, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_stream_in_headroom_chunks, "Amount of space (in chunks) that must be free to allow a stream_in op to start");
 
