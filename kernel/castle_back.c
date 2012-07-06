@@ -2254,7 +2254,7 @@ int castle_buffer_consumer_init(c_buf_consumer_t *buf_con,
     /* Sanity check buffer header fits in buffer and set pointer. */
     if (buf_len < sizeof(c_buf_hdr_t))
     {
-        castle_printk(LOG_ERROR, "%s::failed because buf_len (%lu) is too small.\n",
+        castle_printk(LOG_ERROR, "%s::failed because buf_len (%u) is too small.\n",
             __FUNCTION__, buf_len);
         return -EINVAL;
     }
@@ -3355,7 +3355,7 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
     if(col_da_nr_trees >= castle_stream_in_headroom_cts)
     {
         castle_printk(LOG_WARN,
-                "Cannot allow stream-in; %u component trees in vertree %lu (max allowed: %u trees). Try again later.\n",
+                "Cannot allow stream-in; %u component trees in vertree %u (max allowed: %u trees). Try again later.\n",
                 col_da_nr_trees,
                 attachment->col.da->id,
                 castle_stream_in_headroom_cts);
@@ -3386,7 +3386,7 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
                                                                 attachment->col.da->btree_type);
     BUG_ON(!internal_ext_size);
 
-    castle_printk(LOG_DEBUG, "%s:: stream_in %p:0x%x op on cpu %u, expected_entries: %u, "
+    castle_printk(LOG_DEBUG, "%s:: stream_in %p:0x%x op on cpu %u, expected_entries: %llu, "
                 "expected_dataext_chunks: %u, stateful_op:%p\n",
                 __FUNCTION__,
                 stateful_op->conn,
@@ -3405,7 +3405,7 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
     if (!constr)
     {
         castle_printk(LOG_ERROR, "%s::castle_da_in_stream_start failed for "
-                "collection id 0x%x, expected entries %lld, expected MO chunks %lld\n",
+                "collection id 0x%x, expected entries %lld, expected MO chunks %u\n",
                 __FUNCTION__,
                 op->req.stream_in_start.collection_id,
                 stateful_op->stream_in.expected_entries,
@@ -3464,7 +3464,7 @@ static void castle_back_stream_in_next(struct castle_back_op *op)
     struct castle_back_stateful_op *stateful_op;
     int err;
 
-    castle_printk(LOG_DEBUG, "%s::start, with token %llu on conn op->conn %p\n",
+    castle_printk(LOG_DEBUG, "%s::start, with token %u on conn op->conn %p\n",
             __FUNCTION__, op->req.stream_in_finish.token, op->conn);
     stateful_op = castle_back_find_stateful_op(op->conn,
                                                op->req.stream_in_next.token,
@@ -3547,7 +3547,7 @@ static void castle_back_stream_in_finish(struct castle_back_op *op)
     if (err)
     {
         castle_printk(LOG_ERROR, "%s:: failed to queue for %p:0x%x, err:%u\n",
-            __FUNCTION__, err, stateful_op->conn, stateful_op->token);
+            __FUNCTION__, stateful_op->conn, stateful_op->token, err);
         spin_unlock(&stateful_op->lock);
         goto err0;
     }
@@ -3792,7 +3792,7 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         {
             /* Growth will exceed allocation */
             castle_printk(LOG_ERROR,
-                    "%s::[op %p:0x%x] exhausted extent allocation (size: %u chunks); suggest complete current stream then retry.\n",
+                    "%s::[op %p:0x%x] exhausted extent allocation (size: %llu chunks); suggest complete current stream then retry.\n",
                     __FUNCTION__, stateful_op->conn, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE);
             return -ENOSPC;
         }
@@ -3840,7 +3840,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                                              op->buf->size);
     if (unlikely(nr_keys < 0))
     {
-        castle_printk(LOG_ERROR, "%s::[op %llu] nr_keys %d\n",
+        castle_printk(LOG_ERROR, "%s::[op %x] nr_keys %d\n",
             __FUNCTION__, stateful_op->token, nr_keys);
         return -EINVAL;
     }
@@ -3848,8 +3848,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     if (unlikely(stateful_op->stream_in.received_entries
                 + nr_keys > stateful_op->stream_in.expected_entries))
     {
-        castle_printk(LOG_ERROR, "%s::[op %llu] Attempt to insert %d keys would overflow "
-                "expected %lu (already received %lu).\n",
+        castle_printk(LOG_ERROR, "%s::[op %x] Attempt to insert %d keys would overflow "
+                "expected %llu (already received %llu).\n",
                 __FUNCTION__,
                 stateful_op->token,
                 nr_keys,
@@ -3938,7 +3938,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                                                         0, /* was_preallocated */
                                                         &mobj_ext_cep)) < 0)
                     {
-                        castle_printk(LOG_ERROR, "%s::[op %llu] Failed to get medium object freespace, "
+                        castle_printk(LOG_ERROR, "%s::[op %x] Failed to get medium object freespace, "
                                 "err=%d.\n", __FUNCTION__, stateful_op->token, err);
                         err = -ENOSPC;
                         goto err2;

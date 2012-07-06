@@ -892,7 +892,7 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     if(already_completed)
     {
         castle_printk(LOG_DEBUG, "%s::Initialising immut enumerator (iter %p)"
-                " in COMPLETED state for ct id=%d\n",
+                " in COMPLETED state for ct id=%llu\n",
                 __FUNCTION__, iter, iter->tree->seq);
         iter->completed = 1;
         return;
@@ -1261,7 +1261,7 @@ static void castle_ct_modlist_iter_fill(c_modlist_iter_t *iter)
 
     if (item_idx != atomic64_read(&iter->tree->item_count))
     {
-        castle_printk(LOG_WARN, "Error. Different number of items than expected in CT=%d "
+        castle_printk(LOG_WARN, "Error. Different number of items than expected in CT=%llu "
                "(dynamic=%d). Item_idx=%d, item_count=%ld\n",
                iter->tree->seq, CT_DYNAMIC(iter->tree),
                item_idx, atomic64_read(&iter->tree->item_count));
@@ -4551,8 +4551,8 @@ static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_c
     /* truncate remaining blank chunks in output tree if there is at least one unused chunk */
     if (castle_ext_freespace_available(&out_tree->tree_ext_free) > C_CHK_SIZE)
     {
-        castle_printk(LOG_DEBUG, "%s::[da %d] truncating tree ext %u beyond chunk %u,"
-                " after %llu bytes used and %llu bytes allocated (grown)\n",
+        castle_printk(LOG_DEBUG, "%s::[da %u] truncating tree ext %llu beyond chunk %lu,"
+                " after %lu bytes used and %llu bytes allocated (grown)\n",
                 __FUNCTION__,
                 tree_constr->da->id,
                 out_tree->tree_ext_free.ext_id,
@@ -4565,8 +4565,8 @@ static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_c
 
     if (castle_ext_freespace_available(&out_tree->internal_ext_free) > C_CHK_SIZE)
     {
-        castle_printk(LOG_DEBUG, "%s::[da %d] truncating internal ext %u beyond chunk %u,"
-                " after %llu bytes used and %llu bytes allocated (grown)\n",
+        castle_printk(LOG_DEBUG, "%s::[da %u] truncating internal ext %llu beyond chunk %lu,"
+                " after %lu bytes used and %llu bytes allocated (grown)\n",
                 __FUNCTION__,
                 tree_constr->da->id,
                 out_tree->internal_ext_free.ext_id,
@@ -4579,8 +4579,8 @@ static void castle_immut_tree_package(struct castle_immut_tree_construct *tree_c
 
     if (castle_ext_freespace_available(&out_tree->data_ext_free) > C_CHK_SIZE)
     {
-        castle_printk(LOG_DEBUG, "%s::[da %d] truncating data ext %u beyond chunk %u,"
-                " after %llu bytes used and %llu bytes allocated (grown)\n",
+        castle_printk(LOG_DEBUG, "%s::[da %u] truncating data ext %llu beyond chunk %lu,"
+                " after %lu bytes used and %llu bytes allocated (grown)\n",
                 __FUNCTION__,
                 tree_constr->da->id,
                 out_tree->data_ext_free.ext_id,
@@ -5419,7 +5419,8 @@ static int castle_da_tombstone_discardable_check(struct castle_da_merge *merge, 
         __FUNCTION__, tombstone_realtime);
     if (merge->start_time.tv_sec < tombstone_realtime)
     {
-        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted??? System clock may be messed up.\n");
+        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted???"
+                      " System clock may be messed up.\n", __FUNCTION__);
         return 0;
     }
 
@@ -5819,7 +5820,7 @@ static unsigned int castle_da_merge_top_level_check(struct castle_da_merge *merg
     /* Assert that we really have the merge's oldest tree, according to data_age */
     FOR_EACH_MERGE_TREE(i, merge)
     {
-        castle_printk(LOG_DEBUG, "%s::[%p] intree %d data_age %d, oldest tree data_age %d\n",
+        castle_printk(LOG_DEBUG, "%s::[%p] intree %d data_age %llu, oldest tree data_age %llu\n",
                 __FUNCTION__, merge, i, merge->in_trees[i]->data_age, merge_oldest_tree->data_age);
         BUG_ON( (i!=merge->nr_trees-1) &&
                 (merge->in_trees[i]->data_age <= merge_oldest_tree->data_age) );
@@ -5920,7 +5921,7 @@ static int castle_da_merge_init(struct castle_da_merge *merge, void *unused)
         /* Attach extents to reservation pools. */
         castle_da_merge_res_pool_attach(merge);
 
-        castle_printk(LOG_INFO, "Found merge with %llu entries\n", atomic64_read(&out_tree->item_count));
+        castle_printk(LOG_INFO, "Found merge with %lu entries\n", atomic64_read(&out_tree->item_count));
 
         goto deser_done;
     }
@@ -6500,7 +6501,7 @@ int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *
     unsigned int btree_level;
 
     BUG_ON(!merge->nr_trees);
-    castle_printk(LOG_DEBUG, "%s::[merge %lu] allocing package for %u in trees.\n",
+    castle_printk(LOG_DEBUG, "%s::[merge %u] allocing package for %u in trees.\n",
         __FUNCTION__, merge->id, merge->nr_trees);
 
     m->merge_state = castle_zalloc(sizeof(struct castle_dmserlist_entry));
@@ -6513,7 +6514,7 @@ int castle_da_merge_mstore_package_alloc(struct castle_da_merge_mstore_package *
             castle_immut_tree_node_size_get(merge->out_tree_constr, btree_level);
         BUG_ON(node_size_blocks == 0);
 
-        castle_printk(LOG_DEBUG, "%s::[merge %lu] allocing space for a %lu block node at level %u.\n",
+        castle_printk(LOG_DEBUG, "%s::[merge %u] allocing space for a %u block node at level %u.\n",
                 __FUNCTION__, merge->id, node_size_blocks, btree_level);
 
         m->active_node[btree_level].in_use = 0;
@@ -7108,7 +7109,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                     active_node->btree_level = i;
                     active_node->size_blocks = castle_immut_tree_node_size_get(merge->out_tree_constr, i);
                     BUG_ON(node->size != active_node->size_blocks);
-                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %lu blocks (node->used:%u).\n",
+                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %u blocks (node->used:%u).\n",
                             __FUNCTION__,
                             merge->id,
                             i,
@@ -7265,9 +7266,8 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
                 BUG_ON(!node_entry);
             }
 
-            castle_printk(LOG_DEBUG, "%s::sanity check for merge %p (da %d level %d) node_c2b[%d] ("cep_fmt_str")\n",
-                    __FUNCTION__, merge, da->id, level,
-                    i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
+            castle_printk(LOG_DEBUG, "%s::sanity check for merge %p node_c2b[%d] ("cep_fmt_str")\n",
+                    __FUNCTION__, merge, i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
 
             level->node_c2b =
                 castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->levels[i].node_c2b_cep, i);
@@ -7588,7 +7588,7 @@ static int castle_da_l1_merge_run(void *da_p)
         for (i = 0; i < nr_trees; i++)
         {
             /* Truncate extents so during merge we don't over-prefetch. */
-            castle_printk(LOG_DEBUG, "%s: Truncating T0 seq_id=%lu extents to %d %d %d\n",
+            castle_printk(LOG_DEBUG, "%s: Truncating T0 seq_id=%llu extents to %lu %lu %lu\n",
                     __FUNCTION__,
                     in_trees[i]->seq,
                     USED_CHUNK(atomic64_read(&in_trees[i]->internal_ext_free.used)),
@@ -7875,7 +7875,7 @@ static void castle_da_merge_serdes_out_tree_check(struct castle_dmserlist_entry 
             if(node->magic != BTREE_NODE_MAGIC)
             {
                 castle_printk(LOG_ERROR, "%s::failed to recover node at "cep_fmt_str
-                        "; found weird magic=%lx.\n",
+                        "; found weird magic=%x.\n",
                         __FUNCTION__, cep2str(merge_mstore->levels[i].node_c2b_cep), node->magic);
                 BUG();
             }
@@ -8901,7 +8901,7 @@ void castle_ct_put(struct castle_component_tree *ct, int rw)
     /* If the ct still on the da list, this must be an error. */
     if(ct->da_list.next != NULL)
     {
-        castle_printk(LOG_ERROR, "CT=%d, still on DA list, but trying to remove.\n", ct->seq);
+        castle_printk(LOG_ERROR, "CT=%llu, still on DA list, but trying to remove.\n", ct->seq);
         BUG();
     }
     /* Destroy the component tree */
@@ -8997,7 +8997,7 @@ static void castle_da_level0_promote(struct castle_double_array *da)
          * One at level 1 CTs will be written to disk by checkpoint. */
         if (atomic64_read(&ct->item_count) != 0)
         {
-            castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %u (has %ld items)\n",
+            castle_printk(LOG_INFO, "Promote for DA 0x%x level 0 RWCT seq %llu (has %ld items)\n",
                     da->id, ct->seq, atomic64_read(&ct->item_count));
             create_failed = _castle_da_rwct_create(da,
                                                    cpu_index,
@@ -9110,7 +9110,7 @@ static struct castle_component_tree * castle_da_ct_unmarshall(struct castle_clis
     struct castle_double_array *da = castle_da_hash_get(ctm->da_id);
     struct castle_component_tree *ct;
 
-    castle_printk(LOG_DEBUG, "%s::seq %d\n", __FUNCTION__, ctm->seq);
+    castle_printk(LOG_DEBUG, "%s::seq %llu\n", __FUNCTION__, ctm->seq);
 
     ct = castle_ct_init(da, ctm->nr_data_exts);
     if (!ct)
@@ -9811,7 +9811,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
     /* memory allocation and some sanity checking: */
     if (!CT_BLOOM_EXISTS(ct))
     {
-        castle_printk(LOG_ERROR, "%s::no bloom filter attached to CT %d, "
+        castle_printk(LOG_ERROR, "%s::no bloom filter attached to CT %llu, "
                 "yet we have build_params. Weird.\n", __FUNCTION__, ct->seq);
         BUG(); /* relax this if we might ever end up in this situation */
         return -ENXIO;
@@ -9821,7 +9821,7 @@ static int castle_da_ct_bloom_build_param_deserialise(struct castle_component_tr
     ct->bloom.private = castle_zalloc(sizeof(struct castle_bloom_build_params));
     if(!ct->bloom.private)
     {
-        castle_printk(LOG_ERROR, "%s::failed to deserialise bloom build parameters for CT %d; "
+        castle_printk(LOG_ERROR, "%s::failed to deserialise bloom build parameters for CT %llu; "
                 "discarding bloom filter on this CT.", __FUNCTION__, ct->seq);
         castle_bloom_abort(&ct->bloom);
         castle_bloom_destroy(&ct->bloom);
@@ -9848,7 +9848,7 @@ static int _castle_sysfs_ct_add(struct castle_component_tree *ct, void *_unused)
 
     if (castle_sysfs_ct_add(ct))
     {
-        castle_printk(LOG_USERINFO, "Failed to add CT: 0x%x to sysfs\n", ct->seq);
+        castle_printk(LOG_USERINFO, "Failed to add CT: 0x%llx to sysfs\n", ct->seq);
         return -1;
     }
 
@@ -9904,7 +9904,7 @@ static int castle_da_merge_deser_mstore_outtree_int_nodes_recover(void)
         btree_node = (struct castle_btree_node *)entry->payload;
         BUG_ON(btree_node->magic != BTREE_NODE_MAGIC);
 
-        castle_printk(LOG_UNLIMITED, "%s::[merge %u] recovering %lu block level %u node from mstore.\n",
+        castle_printk(LOG_UNLIMITED, "%s::[merge %u] recovering %u block level %u node from mstore.\n",
             __FUNCTION__, merge->id, entry->size_blocks, entry->btree_level);
 
         /* set up serdes recovery package. */
@@ -10033,7 +10033,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         BUG_ON(!out_tree);
         BUG_ON(da_id != out_tree->da->id);
         castle_printk(LOG_UNLIMITED, "%s::deserialising merge %u on da %u with partially-"
-                                 "complete ct, seq %u\n",
+                                 "complete ct, seq %llu\n",
                                  __FUNCTION__, merge->id, da_id, out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
         /* the difference between unmarshalling a partially complete in-merge ct and a "normal" ct is
@@ -10180,7 +10180,7 @@ static int castle_da_merge_deser_intrees_attach(void)
                 entry, sizeof(struct castle_in_tree_merge_state_entry));
         castle_check_free(entry);
 
-        castle_printk(LOG_DEBUG, "%s::recovered input tree (seq=%d) merge state for da %d merge_id %u pos %d.\n",
+        castle_printk(LOG_DEBUG, "%s::recovered input tree (seq=%llu) merge state for da %d merge_id %u pos %d.\n",
                 __FUNCTION__,
                 merge->serdes.live.in_tree_state_arr[pos].seq,
                 merge->serdes.live.in_tree_state_arr[pos].da_id,
@@ -10345,7 +10345,7 @@ int castle_double_array_read(void)
         ct = castle_component_tree_get(mstore_loentry.ct_seq);
         if (!ct)
         {
-            castle_printk(LOG_ERROR, "Found zombie Large Object(%llu, %u)\n",
+            castle_printk(LOG_ERROR, "Found zombie Large Object(%llu, %llu)\n",
                     mstore_loentry.ext_id, mstore_loentry.ct_seq);
             BUG();
         }
@@ -10353,7 +10353,7 @@ int castle_double_array_read(void)
                                     mstore_loentry.length,
                                     &ct->large_objs, NULL))
         {
-            castle_printk(LOG_WARN, "Failed to add Large Object %llu to CT: %u\n",
+            castle_printk(LOG_WARN, "Failed to add Large Object %llu to CT: %llu\n",
                     mstore_loentry.ext_id,
                     mstore_loentry.ct_seq);
             goto error_out;
@@ -12135,7 +12135,7 @@ int castle_double_array_init(void)
     budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;        /* 10% of cache. */
     if (budget < min_budget)
         budget = min_budget;
-    castle_printk(LOG_INIT, "Allocating %lluMB for modlist iter byte budget.\n",
+    castle_printk(LOG_INIT, "Allocating %luMB for modlist iter byte budget.\n",
             budget / C_CHK_SIZE);
     atomic_set(&castle_ct_modlist_iter_byte_budget, budget);
     mutex_init(&castle_da_level1_merge_init);
@@ -13177,17 +13177,17 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     CASTLE_TRANSACTION_BEGIN;
 
     BUG_ON(atomic_read(&ct->ref_count)!=1);
-    castle_printk(LOG_INFO, "%s::finalizing stream-in tree %u (with %lld entries)\n",
+    castle_printk(LOG_INFO, "%s::finalizing stream-in tree %llu (with %lu entries)\n",
         __FUNCTION__, ct->seq, atomic64_read(&ct->item_count));
 
     /* Complete Output tree and get it ready to promote to DA. */
     castle_immut_tree_complete(constr);
 
-    castle_printk(LOG_INFO, "%s::completed ct %u [%p] with "
-        "internal extent %lu (size: %llu chunks) "
-        "tree extent %lu (size: %llu chunks) "
-        "data extent %lu (size: %llu chunks) "
-        "bloom extent %lu (size: %llu chunks)\n",
+    castle_printk(LOG_INFO, "%s::completed ct %llu [%p] with "
+        "internal extent %llu (size: %llu chunks) "
+        "tree extent %llu (size: %llu chunks) "
+        "data extent %llu (size: %llu chunks) "
+        "bloom extent %llu (size: %llu chunks)\n",
         __FUNCTION__,
         ct->seq,
         ct,
@@ -13202,7 +13202,7 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
 
     if (err || (atomic64_read(&ct->item_count)==0) )
     {
-        castle_printk(LOG_USERINFO, "%s::aborting stream-in tree %d (with %lld entries)\n",
+        castle_printk(LOG_USERINFO, "%s::aborting stream-in tree %llu (with %lu entries)\n",
             __FUNCTION__, ct->seq, atomic64_read(&ct->item_count));
         castle_ct_put(ct, READ);
         constr->tree = NULL;

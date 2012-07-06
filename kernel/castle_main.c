@@ -1487,7 +1487,7 @@ struct castle_slave* castle_claim(uint32_t new_dev)
     /* Make sure that the disk is at least FREE_SPACE_START big. */
     if(castle_freespace_slave_capacity_get(cs) < MIN_SLAVE_CAPACITY)
     {
-        castle_printk(LOG_ERROR, "Disk %s capacity too small. Must be at least %dM, got %lldM\n",
+        castle_printk(LOG_ERROR, "Disk %s capacity too small. Must be at least %dM, got %uM\n",
                  __bdevname(dev, b),
                  MIN_SLAVE_CAPACITY,
                  castle_freespace_slave_capacity_get(cs));

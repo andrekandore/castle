@@ -6271,8 +6271,8 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                 /* No compressed data was available to flush and we have not
                  * yet compressed up to end_off (we would have exited at the
                  * next_virt_mutable_off >= end_off test above). */
-                castle_printk(LOG_ERROR, "Failed to compress ext_id=%lu to "
-                        "end_off=%lu dirtytree=%p\n",
+                castle_printk(LOG_ERROR, "Failed to compress ext_id=%llu to "
+                        "end_off=%llu dirtytree=%p\n",
                         dirtytree->ext_id, end_off, dirtytree);
                 BUG();
             }
@@ -7771,8 +7771,8 @@ void castle_checkpoint_ratelimit_set(unsigned long ratelimit)
     /* If ratelimit is smaller than min, ignore the request to set it. */
     if(ratelimit < CASTLE_MIN_CHECKPOINT_RATELIMIT)
     {
-        castle_printk(LOG_WARN, "Trying to set checkpoint ratelimit to too small of a rate: %d, "
-                                "minimum is %d. Current ratelimit is %d\n",
+        castle_printk(LOG_WARN, "Trying to set checkpoint ratelimit to too small of a rate: %lu, "
+                                "minimum is %u. Current ratelimit is %u\n",
                                 ratelimit,
                                 CASTLE_MIN_CHECKPOINT_RATELIMIT,
                                 castle_checkpoint_ratelimit);
@@ -7806,7 +7806,7 @@ static void castle_cache_dirty_user_flood(void)
                                            DIRTY_EXT_CHUNKS, /* 24GB */
                                            CASTLE_EXT_FLAGS_NONE);
         BUG_ON(EXT_ID_INVAL(dirty_ext_id));
-        castle_printk(LOG_USERINFO, "%s: Allocated extent ID %ld\n",
+        castle_printk(LOG_USERINFO, "%s: Allocated extent ID %llu\n",
                 __FUNCTION__, dirty_ext_id);
     }
 
@@ -7987,7 +7987,7 @@ static int castle_periodic_checkpoint(void *unused)
         castle_checkpoint_version_inc();
 
         castle_printk(LOG_USERINFO,
-            "***** Completed checkpoint of version: %u (%lu/%lu chunks) *****\n",
+            "***** Completed checkpoint of version: %u (%lu/%llu chunks) *****\n",
             version,
             USED_CHUNK(atomic64_read(&mstore_ext_free.used)),
             CHUNK(mstore_ext_free.ext_size));
@@ -8004,9 +8004,7 @@ out:
         msleep_interruptible(1000);
 
     if (ret)
-        castle_printk(LOG_ERROR,
-                "Checkpoint thread exiting with ret=%d.  Forcing panic.\n",
-                __FUNCTION__, ret);
+        castle_printk(LOG_ERROR, "Checkpoint thread exiting with ret=%d.  Forcing panic.\n", ret);
     BUG_ON(ret);
 
     return ret;

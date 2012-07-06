@@ -1002,7 +1002,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
                     timestamp = leaf_entry_timestamp_get(&entry_end);
-                castle_printk(LOG_DEBUG, "[ext] timestamp=%lu len=%lu cep=" cep_fmt_str_nl,
+                castle_printk(LOG_DEBUG, "[ext] timestamp=%llu len=%llu cep=" cep_fmt_str_nl,
                               timestamp, val->length, cep2str(val->cep));
             }
             else
@@ -1012,7 +1012,7 @@ static void castle_slim_node_print(struct castle_btree_node *node)
                 castle_user_timestamp_t timestamp = 0;
                 if (LEAF_ENTRY_HAS_TIMESTAMP(entry))
                     timestamp = leaf_entry_timestamp_get(&entry_end);
-                castle_printk(LOG_DEBUG, "[inl] timestamp=%lu len=%u\n", timestamp, val->length);
+                castle_printk(LOG_DEBUG, "[inl] timestamp=%llu len=%u\n", timestamp, val->length);
             }
         }
     }

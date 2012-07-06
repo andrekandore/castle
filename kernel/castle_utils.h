@@ -364,7 +364,8 @@ typedef enum {
     MAX_CONS_LEVEL  /**< Counts number of levels (has to be last)   */
 } c_printk_level_t;
 
-void castle_printk(c_printk_level_t level, const char *fmt, ...);
+void castle_printk(c_printk_level_t level, const char *fmt, ...)
+    __attribute__((format(printf, 2, 3)));
 int castle_printk_init(void);
 void castle_printk_fini(void);
 
@@ -465,8 +466,8 @@ static inline void castle_time_interval_print(c_printk_level_t printk_level,
                                 "%s: %ld.%06ld000.\n",
                                 interval->start.tv_sec,
                                 interval->start.tv_usec,
-                                (duration_ns / 1000000000LL),
-                                (duration_ns % 1000000000LL),
+                                (duration_ns / 1000000000L),
+                                (duration_ns % 1000000000L),
                                 active_label,
                                 interval->total_active.tv_sec,
                                 interval->total_active.tv_usec);

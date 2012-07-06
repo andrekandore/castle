@@ -361,7 +361,8 @@ static int castle_timestamped_tombstone_discardable_check(c_dfs_resolver *dfs_re
         __FUNCTION__, tombstone_realtime);
     if (dfs_resolver->now.tv_sec < tombstone_realtime)
     {
-        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted??? System clock may be messed up.\n");
+        castle_printk(LOG_WARN, "%s::merge started before this tombstone was inserted???"
+                      " System clock may be messed up.\n", __FUNCTION__);
         return 0;
     }
 

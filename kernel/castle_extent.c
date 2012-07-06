@@ -1874,7 +1874,7 @@ static int castle_extent_mstore_ext_create(void)
                                           CASTLE_EXT_FLAG_MUTEX_LOCKED);
     if (ext_id != MSTORE_EXT_ID+1)
         return -ENOSPC;
-    castle_printk(LOG_INIT, "%s::allocated %lu chunks for mstore\n", __FUNCTION__, ext_size);
+    castle_printk(LOG_INIT, "%s::allocated %u chunks for mstore\n", __FUNCTION__, ext_size);
 
     castle_extents_sb = castle_extents_super_block_get();
 
@@ -2372,7 +2372,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
     struct castle_meta_compactor compactor;
     unsigned long new_used;
 
-    castle_printk(LOG_INIT, "Meta extent freespace: used=%lld, size=%lld\n",
+    castle_printk(LOG_INIT, "Meta extent freespace: used=%lu, size=%llu\n",
             atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
 
     if ((castle_meta_ext_compact_pct < 0) || (castle_meta_ext_compact_pct > 100))
@@ -2389,7 +2389,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
         castle_meta_ext_compact_pct);
     nr_meta_pgs = meta_ext_free.ext_size / PAGE_SIZE;
     bitmap_size = nr_meta_pgs / 8 + 1;
-    castle_printk(LOG_USERINFO, "Allocating %lld bitmap for %lld pages of meta ext.\n",
+    castle_printk(LOG_USERINFO, "Allocating %lu bitmap for %lu pages of meta ext.\n",
             bitmap_size, nr_meta_pgs);
     used_meta_bitmap = castle_alloc(bitmap_size);
     if(!used_meta_bitmap)
@@ -2432,7 +2432,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
         atomic64_set(&meta_ext_free.used,    new_used);
         atomic64_set(&meta_ext_free.blocked, new_used);
 #endif
-        castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lld\n", new_used);
+        castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lu\n", new_used);
 
         return;
     }
@@ -2445,7 +2445,7 @@ static void castle_extents_meta_compact(int *force_checkpoint)
     atomic64_set(&meta_ext_free.used,    (unsigned long)compactor.compaction_idx * PAGE_SIZE);
     atomic64_set(&meta_ext_free.blocked, (unsigned long)compactor.compaction_idx * PAGE_SIZE);
 #endif
-    castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lld\n",
+    castle_printk(LOG_USERINFO, "Updated used meta extent counter to: %lu\n",
             (unsigned long)compactor.compaction_idx * PAGE_SIZE);
     return;
 
@@ -3402,7 +3402,7 @@ static int castle_extent_meta_ext_space_get(c_ext_t *ext, uint32_t nr_blocks)
     debug("Allocated extent map at: "cep_fmt_str_nl, cep2str(ext->maps_cep));
     if((ext->maps_cep.offset >> 20) !=
        (ext->maps_cep.offset + nr_blocks * C_BLK_SIZE) >> 20)
-        castle_printk(LOG_USERINFO, "Metaext, used=0x%llx, size=0x%llx\n",
+        castle_printk(LOG_USERINFO, "Metaext, used=0x%lx, size=0x%llx\n",
                atomic64_read(&meta_ext_free.used), meta_ext_free.ext_size);
 
     BUG_ON(BLOCK_OFFSET(ext->maps_cep.offset));
@@ -3949,7 +3949,7 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
     if (atomic64_read(&virt_ext->next_comp_byte) < (virt_cep.offset + C_COMPR_BLK_SZ))
         atomic64_add(C_COMPR_BLK_SZ, &virt_ext->next_comp_byte);
 
-    debug_compr_map("Setting compression map: " cep_fmt_str " - " cep_fmt_str" size=%lu\n",
+    debug_compr_map("Setting compression map: " cep_fmt_str " - " cep_fmt_str" size=%llu\n",
                      __cep2str(virt_cep), __cep2str(comp_cep), comp_blk_bytes);
 
     return;
@@ -3961,7 +3961,7 @@ static int castle_extent_used_bytes_check(c_ext_t *ext, void *unused)
         return 0;
 
     if (ext->used_bytes > atomic64_read(&ext->next_comp_byte))
-        castle_printk(LOG_UNLIMITED, "%s [%llu] %llu %llu\n",
+        castle_printk(LOG_UNLIMITED, "%s [%llu] %llu %lu\n",
                                       __FUNCTION__,
                                       ext->ext_id,
                                       ext->used_bytes,
@@ -4047,8 +4047,8 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
         /* Whole compr_unit_size amount of data written out. */
         virt_ext->dirtytree->next_compr_off     = roundup(comp_cep.offset + comp_blk_size,
                                                           C_BLK_SIZE);
-    debug_compr("Calculated next_compr_off=%lu for ext_id=%lu used_bytes=%lu "
-            "comp_blk_size=%lu comp_cep.offset=%lu used_bytes_mod=%lu dirtytree=%p\n",
+    debug_compr("Calculated next_compr_off=%llu for ext_id=%llu used_bytes=%llu "
+            "comp_blk_size=%llu comp_cep.offset=%llu used_bytes_mod=%llu dirtytree=%p\n",
             virt_ext->dirtytree->next_compr_off, virt_ext->ext_id, used_bytes,
             comp_blk_size, comp_cep.offset, used_bytes%C_COMPR_BLK_SZ, virt_ext->dirtytree);
     virt_ext->dirtytree->next_compr_mutable_off = virt_ext->dirtytree->next_compr_off;
@@ -4703,7 +4703,7 @@ int castle_extent_link(c_ext_id_t ext_id)
     if (MASK_ID_INVAL(mask_id))
     {
         /* Shouldn't have tried to create links on a dead extent. BUG. */
-        castle_printk(LOG_ERROR, "%s::cannot do get on ext with id %d.\n", __FUNCTION__, ext_id);
+        castle_printk(LOG_ERROR, "%s::cannot do get on ext with id %llu.\n", __FUNCTION__, ext_id);
         BUG();
     }
 
@@ -4743,7 +4743,7 @@ int castle_extent_unlink(c_ext_id_t ext_id)
     /* Can't unlink an extent not in hash. BUG. */
     if(!ext)
     {
-        castle_printk(LOG_ERROR, "%s::cannot do unlink on ext with id %d.\n", __FUNCTION__, ext_id);
+        castle_printk(LOG_ERROR, "%s::cannot do unlink on ext with id %llu.\n", __FUNCTION__, ext_id);
         BUG();
     }
 
@@ -6350,7 +6350,7 @@ static void initialise_extent_state(c_ext_t * ext)
     ext->shadow_map = castle_vmalloc(map_size);
     if (!ext->shadow_map)
     {
-        castle_printk(LOG_ERROR, "ERROR: could not allocate shadow map of size %lu\n", map_size);
+        castle_printk(LOG_ERROR, "ERROR: could not allocate shadow map of size %u\n", map_size);
         BUG();
     }
 
@@ -7492,7 +7492,7 @@ static int _castle_extent_grow(c_ext_t *ext, c_chk_cnt_t count)
         else
             space_needed -= space_available;
 
-        debug_compr("Growing CE %llu by %u chunks for VE %llu by %u chunks.\n",
+        debug_compr("Growing CE %llu by %llu chunks for VE %llu by %u chunks.\n",
                      comp_ext->ext_id, DIV_ROUND_UP(space_needed, C_CHK_SIZE),
                      virt_ext->ext_id, count);
 

@@ -413,7 +413,7 @@ static ssize_t slave_size_show(struct kobject *kobj,
     if (!test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags))
         castle_freespace_summary_get(slave, NULL, &size);
 
-    return sprintf(buf, "%lld\n", size * C_CHK_SIZE);
+    return sprintf(buf, "%lu\n", size * C_CHK_SIZE);
 }
 
 static ssize_t slave_used_show(struct kobject *kobj,
@@ -1000,7 +1000,7 @@ int castle_sysfs_ct_add(struct castle_component_tree *ct)
     return 0;
 
 err2:
-    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%x\n", ct->seq);
+    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%llx\n", ct->seq);
     /* Remove all the links that are succeeded. */
     while (i)
     {
@@ -1015,7 +1015,7 @@ err2:
     }
     kobject_remove_wait(&ct->data_extents_kobj);
 err1:
-    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%x\n", ct->seq);
+    castle_printk(LOG_USERINFO, "Failed to create sysfs entry for CT: 0x%llx\n", ct->seq);
     kobject_remove_wait(&ct->kobj);
 
     BUG_ON(ret == 0);

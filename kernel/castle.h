@@ -33,15 +33,15 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define BUG()            do { bug_fn(__FILE__, __LINE__); } while(0)
 #define BUG_ON(_cond)    do { if(unlikely(_cond)) BUG(); } while(0)
 
-#define MAX_KMALLOC_PAGES   32                                  /**< Maximum pages we can kmalloc */
-#define MAX_KMALLOC_SIZE    MAX_KMALLOC_PAGES << PAGE_SHIFT     /**< Maximum Bytes we can kmalloc */
+#define MAX_KMALLOC_PAGES   32                                /**< Maximum pages we can kmalloc */
+#define MAX_KMALLOC_SIZE    MAX_KMALLOC_PAGES << PAGE_SHIFT   /**< Maximum Bytes we can kmalloc */
 
 /* Printk implementation used in the entire filesystem. */
 #define PRINTKS_PER_SEC_STEADY_STATE    5
 #define PRINTKS_IN_BURST                100
 #define PRINTK_BUFFER_MBS               20          /**< Size of printk ring buffer (in MB).    */
 #define PRINTK_BUFFER_SIZE              PRINTK_BUFFER_MBS*1024*1024 /**< Size of printk buffer. */
-/*#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                     \
+/*#define castle_printk(_f, _a...)    do { if(__printk_ratelimit(                   \
                                                 HZ/PRINTKS_PER_SEC_STEADY_STATE,    \
                                                 PRINTKS_IN_BURST))                  \
                                             printk(_f, ##_a); } while(0)*/
@@ -60,7 +60,7 @@ void ATTRIB_NORET bug_fn(char *file, unsigned long line);
 #define CASTLE_INIT_WORK_AND_TRACE(_work, _func, _data) INIT_WORK((_work), (void (*)(void *)) (__trace_##_func), _data)
 
 #define DEFINE_WQ_TRACE_FN(_func, _struct)                                          \
-static void __trace_##_func(void *data)                                              \
+static void __trace_##_func(void *data)                                             \
 {                                                                                   \
     int seq_id = ((_struct *)data)->seq_id;                                         \
                                                                                     \
@@ -111,7 +111,7 @@ typedef uint32_t block_t;
 #define MIN_LIVE_SLAVES 2
 
 #define C_CHK_SHIFT                    (20)
-#define C_CHK_SIZE                     (1ULL << C_CHK_SHIFT)   /**< Bytes per chunk.             */
+#define C_CHK_SIZE                     (1UL << C_CHK_SHIFT)   /**< Bytes per chunk.             */
 
 #define CHUNK_OFFSET(offset)  ((offset) & (C_CHK_SIZE - 1))
 #define BLOCK_OFFSET(offset)  ((offset) & (C_BLK_SIZE - 1))
@@ -120,7 +120,7 @@ typedef uint32_t block_t;
 #define USED_CHUNK(offset)    (offset ? CHUNK(offset-1) : CHUNK(0))
 #define BLOCK(offset)         ((offset) >> C_BLK_SHIFT)
 #define BLK_IN_CHK(offset)    (BLOCK(CHUNK_OFFSET(offset)))
-#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)         /**< Blocks(/pages) per chunk.    */
+#define BLKS_PER_CHK          (C_CHK_SIZE / C_BLK_SIZE)         /**< Blocks(/pages) per chunk.  */
 #define MASK_BLK_OFFSET(offset) (((offset) >> C_BLK_SHIFT) << C_BLK_SHIFT)
 #define MASK_CHK_OFFSET(offset) (((offset) >> C_CHK_SHIFT) << C_CHK_SHIFT)
 

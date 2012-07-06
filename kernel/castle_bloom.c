@@ -35,7 +35,7 @@ MODULE_PARM_DESC(castle_bloom_debug, "Verify bloom misses (for point gets)");
 #define BLOOM_BITS_PER_ELEMENT        9
 #define BLOOM_MAX_BITS_PER_ELEMENT    16
 /* ensure CHUNK_SIZE % BLOCK_SIZE == 0 */
-#define BLOOM_CHUNK_SIZE              (1*1024*1024ULL)
+#define BLOOM_CHUNK_SIZE              (1*1024*1024UL)
 #define BLOOM_CHUNK_SIZE_PAGES        (BLOOM_CHUNK_SIZE / PAGE_SIZE)
 #define BLOOM_BLOCK_SIZE_HDD_PAGES    64
 #define BLOOM_BLOCK_SIZE_SSD_PAGES    2
@@ -155,7 +155,7 @@ int castle_bloom_create(castle_bloom_t *bf,
             goto alloc_fail;
         }
     }
-    castle_printk(LOG_DEBUG, "%s: Allocated ext_id=%d for bf=%p bf_bp=%p\n",
+    castle_printk(LOG_DEBUG, "%s: Allocated ext_id=%llu for bf=%p bf_bp=%p\n",
             __FUNCTION__, bf->ext_id, bf, bf_bp);
 
     /* Finish initialising bloom filter structures. */
@@ -180,7 +180,7 @@ int castle_bloom_create(castle_bloom_t *bf,
 
     castle_printk(LOG_DEBUG, "%s: bf=%p bf_bp=%p num_elements=%llu "
             "num_chunks=%u size=%llu num_btree_nodes=%u "
-            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d\n",
+            "BLOOM_BLOCKS_PER_CHUNK(bf)=%lu\n",
             __FUNCTION__, bf, bf_bp, num_elements, bf->num_chunks, size,
             atomic_read(&bf->num_btree_nodes), BLOOM_BLOCKS_PER_CHUNK(bf));
 
@@ -325,7 +325,7 @@ static void castle_bloom_next_chunk(castle_bloom_t *bf)
     write_unlock_c2b(bf_bp->chunk_c2b);
 
     castle_printk(LOG_DEBUG, "%s: New chunk at " cep_fmt_str" for bf=%p "
-            "BLOOM_BLOCKS_PER_CHUNK(bf)=%d chunks_complete=%d.\n",
+            "BLOOM_BLOCKS_PER_CHUNK(bf)=%lu chunks_complete=%d.\n",
             __FUNCTION__, cep2str(bf_bp->chunk_c2b->cep), bf,
             BLOOM_BLOCKS_PER_CHUNK(bf), bf_bp->chunks_complete);
 }
@@ -1163,7 +1163,7 @@ void castle_bloom_build_param_unmarshall(castle_bloom_t *bf, struct castle_bbp_e
         if(bf_bp->cur_node->magic != BTREE_NODE_MAGIC)
         {
             castle_printk(LOG_ERROR, "%s::failed to recover node at "cep_fmt_str
-                    "; found weird magic=%lx.\n",
+                    "; found weird magic=%x.\n",
                     __FUNCTION__, cep2str(bf_bp->node_cep), bf_bp->cur_node->magic);
             BUG();
         }
