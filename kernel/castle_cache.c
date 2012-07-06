@@ -494,7 +494,7 @@ static struct task_struct     *castle_cache_decompress_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_decompress_wq);
 static         DEFINE_SPINLOCK(castle_cache_decompress_lock);
 static               LIST_HEAD(castle_cache_decompress_list);
-static atomic_t                castle_cache_decompress_list_size;
+static atomic_t                castle_cache_decompress_list_size = ATOMIC_INIT(0);
 
 #define CASTLE_CACHE_COMPRESS_BUF_SIZE      LZO1X_1_MEM_COMPRESS
 #define CASTLE_CACHE_DECOMPRESS_BUF_SIZE    C_COMPR_MAX_BLOCK_SIZE
@@ -3024,9 +3024,11 @@ static void castle_cache_compr_fini(void)
 
     for (i = 0; i < NR_CPUS; ++i)
     {
-        compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
-        if (*compress_buf_ptr)
+        if (cpu_possible(i))
+        {
+            compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
             castle_free(*compress_buf_ptr);
+        }
     }
 }
 
@@ -3036,17 +3038,18 @@ static void castle_cache_compr_fini(void)
 static int castle_cache_compr_init(void)
 {
     unsigned char **compress_buf_ptr;
+    size_t compress_buf_size;
     int i, ret = 0;
 
-    atomic_set(&castle_cache_decompress_list_size, 0);
+    compress_buf_size = max((size_t) CASTLE_CACHE_COMPRESS_BUF_SIZE,
+                            (size_t) CASTLE_CACHE_DECOMPRESS_BUF_SIZE);
 
     for (i = 0; i < NR_CPUS; ++i)
     {
         if (cpu_possible(i))
         {
             compress_buf_ptr = &per_cpu(castle_cache_compress_buf, i);
-            *compress_buf_ptr = castle_alloc(max((size_t) CASTLE_CACHE_COMPRESS_BUF_SIZE,
-                                                 (size_t) CASTLE_CACHE_DECOMPRESS_BUF_SIZE));
+            *compress_buf_ptr = castle_alloc(compress_buf_size);
             if (!*compress_buf_ptr)
             {
                 castle_printk(LOG_INIT, "could not allocate per-CPU compression buffers.\n");
