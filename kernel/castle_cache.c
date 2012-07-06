@@ -403,7 +403,8 @@ static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS;
  */
 typedef struct castle_cache_partition {
     uint8_t             id;                 /**< Cache partition ID                               */
-    uint8_t             virt_id;            /**< Cache partition ID for VIRTUAL data              */
+    uint8_t             virt_id;            /**< Associated partition for VIRTUAL data            */
+    uint8_t             normal_id;          /**< Associated partition for NORMAL/COMPRESSED data  */
     struct list_head    sort;               /**< Position on castle_cache_partitions              */
 
     atomic_t            max_pgs;            /**< Total pages available for this partition         */
@@ -847,6 +848,18 @@ static c2_partition_id_t c2b_partition_id_first_get(c2_block_t *c2b)
 
     /* c2b must belong to a partition. */
     BUG();
+}
+
+/**
+ * Get first cache partition ID c2b is a member of and normalise it.
+ */
+static c2_partition_id_t c2b_partition_id_first_normal_get(c2_block_t *c2b)
+{
+    c2_partition_id_t part_id;
+
+    part_id = c2b_partition_id_first_get(c2b);
+
+    return castle_cache_partition[part_id].normal_id;
 }
 
 /**
@@ -2974,7 +2987,7 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
     compr_cep.offset = compr_base;
     compr_c2b = castle_cache_block_get(compr_cep,
                                        compr_size / PAGE_SIZE,
-                                       c2b_partition_id_first_get(c2b));
+                                       c2b_partition_id_first_normal_get(c2b));
 
     /* schedule I/O on the compressed c2b, if necessary */
     if (c2b_uptodate(compr_c2b))
@@ -3593,12 +3606,13 @@ static void castle_cache_block_init(c2_block_t *c2b,
 #endif
     /* Init the page array (note: this may substitute some c2ps,
        if they already exist in the hash. */
-    uptodate   = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
+    uptodate = castle_cache_pages_get(cep, c2ps, castle_cache_pages_to_c2ps(nr_pages));
     switch (castle_compr_type_get(cep.ext_id))
     {
         case C_COMPR_COMPRESSED: compressed = 1; break;
         case C_COMPR_VIRTUAL:    virtual    = 1; break;
     }
+    BUG_ON(compressed && virtual);
 
     /* Respect upper limits on maximum c2b size. */
     BUG_ON( compressed && nr_pages > CASTLE_CACHE_VMAP_COMPR_PGS);
@@ -4457,6 +4471,7 @@ out:
      */
 
     /* Get partition to use for VIRTUAL c2bs for supplied partition ID. */
+    BUG_ON(part_id >= NR_ONDISK_CACHE_PARTITIONS);
     if (c2b_virtual(c2b))
         part_id = castle_cache_partition[part_id].virt_id;
 
@@ -8086,6 +8101,7 @@ int castle_cache_init(void)
     {
         castle_cache_partition[j].id        = j;
         castle_cache_partition[j].virt_id   = j;
+        castle_cache_partition[j].normal_id = j;
         list_add_tail(&castle_cache_partition[j].sort, &castle_cache_partitions);
 
         atomic_set(&castle_cache_partition[j].max_pgs, pgs);
@@ -8102,14 +8118,16 @@ int castle_cache_init(void)
         atomic_set(&castle_cache_partition[j].evict_size, 0);
         INIT_LIST_HEAD(&castle_cache_partition[j].evict_list);
     }
-    /* COMPRESSED and NORMAL merge output can always get 1/4 of the cache. */
-    atomic_set(&castle_cache_partition[MERGE_OUT].reserve_pgs, pgs);
     castle_cache_partition[USER].use_clock       = 1;
     castle_cache_partition[USER].virt_id         = USER_VIRT;
     castle_cache_partition[USER_VIRT].use_clock  = 1;
+    castle_cache_partition[USER_VIRT].normal_id  = USER;
+    /* COMPRESSED and NORMAL merge output can always get 1/4 of the cache. */
+    atomic_set(&castle_cache_partition[MERGE_OUT].reserve_pgs, pgs);
     castle_cache_partition[MERGE_OUT].use_evict  = 1;
     castle_cache_partition[MERGE_OUT].virt_id    = MERGE_VIRT;
     castle_cache_partition[MERGE_VIRT].use_evict = 1;
+    castle_cache_partition[MERGE_VIRT].normal_id = MERGE_OUT;
 
     /* Init other variables */
     for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
