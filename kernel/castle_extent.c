@@ -896,6 +896,18 @@ void castle_res_pools_post_checkpoint(void)
     __castle_res_pool_hash_iterate(castle_res_pool_post_checkpoint, NULL);
 }
 
+static int castle_res_pool_check_alive(c_res_pool_t *pool, void *unused)
+{
+    /* If the pool is not attached to any extent, get-rid of it. */
+    if (atomic_read(&pool->ref_count) == 1)
+    {
+        castle_printk(LOG_UNLIMITED, "Found dead reservation pool: %u\n", pool->id);
+        castle_res_pool_destroy(pool->id);
+    }
+
+    return 0;
+}
+
 int castle_res_pools_read(void)
 {
     struct castle_mstore_iter *iterator = NULL;
@@ -1518,6 +1530,9 @@ int castle_extents_restore(void)
     __castle_extents_hash_iterate(castle_extent_compr_ext_check_alive, NULL);
 
     __castle_extents_hash_iterate(castle_extent_check_alive, NULL);
+
+    __castle_res_pool_hash_iterate(castle_res_pool_check_alive, NULL);
+
     return 0;
 }
 
