@@ -4398,16 +4398,17 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
          *
          * Try and get c2b and c2ps from the freelists.
          *
-         * If we are the flush thread and fail to get c2b/c2ps from the freelist
-         * after a _freelist_grow then allocate from the reservelist. */
+         * If we are the flush thread and fail to get map c2b/c2ps from the
+         * freelist after a _freelist_grow() then dip into the reservelist. */
         do {
             c2b = castle_cache_block_freelist_get();
             if (unlikely(!c2b))
             {
                 castle_cache_block_freelist_grow(part_id);
 
-                if (unlikely(current == castle_cache_flush_thread)
-                        && grown_block_freelist++)
+                if (unlikely(current == castle_cache_flush_thread
+                            && cep.ext_id == META_EXT_ID
+                            && grown_block_freelist++))
                     c2b = castle_cache_block_reservelist_get();
             }
         } while (!c2b);
@@ -4417,8 +4418,9 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             {
                 castle_cache_page_freelist_grow(nr_pages, part_id);
 
-                if (unlikely(current == castle_cache_flush_thread)
-                        && grown_page_freelist++)
+                if (unlikely(current == castle_cache_flush_thread
+                            && cep.ext_id == META_EXT_ID
+                            && grown_page_freelist++))
                     c2ps = castle_cache_page_reservelist_get(nr_pages);
             }
         } while (!c2ps);
