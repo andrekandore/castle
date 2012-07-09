@@ -410,10 +410,11 @@ typedef struct castle_cache_partition {
     atomic_t            max_pgs;            /**< Total pages available for this partition         */
     atomic_t            cur_pgs;            /**< Current pages used by this partition             */
     atomic_t            dirty_pgs;          /**< cur_pgs which are c2b_dirty()                    */
-    atomic_t            reserve_pgs;        /**< Pages guaranteed available for this partition    */
     uint16_t            use_pct;            /**< cur_pgs as a percentage of max_pgs               */
     uint16_t            dirty_pct;          /**< dirty_pgs as a percentage of cur_pgs             */
 
+    uint8_t             use_max;            /**< Should max_pgs be enforced for allocations from
+                                                 the block/page freelists (ignored for hash gets) */
     uint8_t             use_clock;          /**< Should c2bs from this partition be in CLOCK?     */
     uint8_t             use_evict;          /**< Should clean c2bs from this partition go onto
                                                  the evictlist?                                   */
@@ -766,6 +767,22 @@ static int c2_partition_budget_use_pct_cmp(struct list_head *l1, struct list_hea
 }
 
 /**
+ * Can cache partition budget satisfy allocation of nr_pgs?
+ */
+static int c2_partition_can_satisfy(c2_partition_id_t part_id, int nr_pgs)
+{
+    c2_partition_t *partition = &castle_cache_partition[part_id];
+
+    /* Always proceed with allocations if max_pgs is not enforced. */
+    if (!partition->use_max)
+        return 1;
+
+    /* Proceed with allocation if allocating nr_pgs would not exceed max_pgs. */
+    return (atomic_read(&partition->cur_pgs)
+            + nr_pgs <= atomic_read(&partition->max_pgs));
+}
+
+/**
  * Return the partition ID that is currently most overbudget.
  */
 static c2_partition_id_t c2_partition_most_overbudget_find(void)
@@ -948,6 +965,57 @@ static inline void c2_partition_budget_all_return(c2_block_t *c2b)
 
     for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
         leave_c2b_partition(c2b, part_id);
+}
+
+/**
+ * Initialise cache partitions.
+ */
+static inline void c2_partitions_init(void)
+{
+    c2_partition_id_t part_id;
+    c2_partition_t *part;
+    int pgs;
+
+    /* Basic partition initialisation. */
+    pgs = castle_cache_page_freelist_size / 4;
+    for (part_id = 0; part_id < NR_CACHE_PARTITIONS; part_id++)
+    {
+        part = &castle_cache_partition[part_id];
+
+        memset(part, 0, sizeof(c2_partition_t));
+
+        part->id        = part_id;
+        part->virt_id   = part_id;
+        part->normal_id = part_id;
+        list_add_tail(&part->sort, &castle_cache_partitions);
+
+        atomic_set(&part->max_pgs, pgs);
+
+        spin_lock_init(&part->evict_lock);
+        INIT_LIST_HEAD(&part->evict_list);
+    }
+
+    /* Initialise USER partition. */
+    part = &castle_cache_partition[USER];
+    part->use_clock = 1;            /* use CLOCK                            */
+    part->virt_id   = USER_VIRT;    /* partition for VIRTUAL-extent c2bs    */
+
+    /* Initialise USER_VIRT partition. */
+    part = &castle_cache_partition[USER_VIRT];
+    part->use_max   = 1;            /* can not use more than max_pgs        */
+    part->use_clock = 1;            /* use CLOCK                            */
+    part->normal_id = USER;         /* partition for !VIRTUAL-extent c2bs   */
+
+    /* Initialise MERGE partition. */
+    part = &castle_cache_partition[MERGE_OUT];
+    part->use_evict = 1;            /* use evictlist, not CLOCK             */
+    part->virt_id   = MERGE_VIRT;   /* partition for VIRTUAL-extent c2bs    */
+
+    /* Initialise MERGE_VIRT partition. */
+    part = &castle_cache_partition[MERGE_VIRT];
+    part->use_max   = 1;            /* can not use more than max_pgs        */
+    part->use_evict = 1;            /* use evictlist, not CLOCK             */
+    part->normal_id = MERGE_OUT;    /* partition for !VIRTUAL-extent c2bs   */
 }
 
 /**
@@ -3350,17 +3418,26 @@ static inline void __castle_cache_block_freelist_add(c2_block_t *c2b)
 /**
  * Get nr_pages of c2ps from the freelist.
  *
- * @param nr_pages  Number of pages to get from freelist
+ * @param   nr_pages    Number of pages to get from freelist
+ * @param   part_id     Cache partition c2ps are for
+ * @param   force       Whether to skip partition checks
  *
  * @also castle_cache_page_reservelist_get()
  */
-static c2_page_t** castle_cache_page_freelist_get(int nr_pages)
+static c2_page_t** castle_cache_page_freelist_get(int nr_pages,
+                                                  c2_partition_id_t part_id,
+                                                  int force)
 {
     struct list_head *lh, *lt;
     c2_page_t **c2ps;
     int i, nr_c2ps;
 
     debug("%s::Asked for %d pages from the freelist.\n", __FUNCTION__, nr_pages);
+
+    /* Fail immediately if the requested partition can not satisfy an allocation
+     * of nr_pages.  Skip this check if we are doing a force allocation. */
+    if (!force && !c2_partition_can_satisfy(part_id, nr_pages))
+        return NULL;
 
     nr_c2ps = castle_cache_pages_to_c2ps(nr_pages);
 
@@ -3994,23 +4071,13 @@ void castle_cache_flush_wakeup(void)
 
 /**
  * Evict c2bs to the freelist so they can be used by specified partition.
+ *
+ * @param   nr_pgs      Number of pages required by caller
+ * @param   part_id     Cache partition that requested the grow
  */
-static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id)
+static int _castle_cache_freelists_grow(int nr_pgs, c2_partition_id_t part_id)
 {
     int target_pages, free_pages;
-#ifdef CASTLE_DEBUG
-    c2_partition_id_t grow_for_part_id = part_id;
-#endif
-
-    /* Always pick the most overbudget cache partition to evict blocks from.
-     *
-     * If growing the freelists to satisfy an allocation for a partition which
-     * is itself over budget, it does not necessarily make sense to evict from
-     * its own clean c2bs.  Because c2bs can overlap we tend towards a situation
-     * where all cache partitions are overbudget at all times.  Unless we always
-     * evict from the most overbudget partition we are not fairly sharing the
-     * available resources between partitions. */
-    part_id = c2_partition_most_overbudget_find();
 
     /* Return immediately if the partition to evict from is > 75% dirty.
      *
@@ -4027,15 +4094,6 @@ static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id
 
         return 2;
     }
-
-#ifdef CASTLE_DEBUG
-    if (grow_for_part_id == USER)
-        castle_printk(LOG_DEBUG, "Evicting from %s (%d%%) to satisfy allocation for %s (%d%%)\n",
-                part_id == USER ? "USER" : (part_id == MERGE_OUT ? "MERGE" : "UNKNOWN"),
-                castle_cache_partition[part_id].use_pct,
-                grow_for_part_id == USER ? "USER" : (grow_for_part_id == MERGE_OUT ? "MERGE" : "UNKNOWN"),
-                castle_cache_partition[grow_for_part_id].use_pct);
-#endif
 
     /* Determine how much of the cache to evict:
      *
@@ -4056,7 +4114,7 @@ static int _castle_cache_freelists_grow(int req_pages, c2_partition_id_t part_id
     else
         target_pages = (10 * castle_cache_size - 900 * free_pages) / 1000;
 
-    target_pages = max(target_pages, req_pages);
+    target_pages = max(target_pages, nr_pgs);
 
     /* Evict blocks from overbudget partition. */
     if (castle_cache_partition[part_id].use_evict)
@@ -4147,18 +4205,31 @@ int castle_cache_block_destroy(c2_block_t *c2b)
  * checking that the reservelist is capable of satisfying the request.
  *
  * @param nr_c2bs   Minimum number of c2bs we need freed up
- * @param nr_pages  Minimum number of pages we need freed up
- * @param partition Cache partition to allocate from
+ * @param nr_pgs    Minimum number of pages we need freed up
+ * @param part_id   Cache partition that requested the grow
  *
  * @also _castle_cache_block_get()
  * @also castle_cache_block_hash_clean()
  * @also castle_extent_remap()
  */
-static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages, c2_partition_id_t part_id)
+static void castle_cache_freelists_grow(int nr_c2bs, int nr_pgs, c2_partition_id_t part_id)
 {
     int flush_seq, success;
 
-    while (_castle_cache_freelists_grow(nr_pages, part_id) != EXIT_SUCCESS)
+    /* Decide which cache partition to evict blocks from.
+     *
+     * If the requesting partition is overbudget and has use_max set, evict from
+     * that partition, otherwise pick the most overbudget cache partition to
+     * evict blocks from.
+     *
+     * Because c2bs can overlap we tend towards a situation where all partitions
+     * are overbudget at all times (with the exclusion of use_max partitions).
+     * Therefore it makes sense to evict from the most overbudget partition or
+     * we are not fairly sharing available resources between partitions. */
+    if (c2_partition_can_satisfy(part_id, nr_pgs))
+        part_id = c2_partition_most_overbudget_find();
+
+    while (_castle_cache_freelists_grow(nr_pgs, part_id) != EXIT_SUCCESS)
     {
         debug("Failed to clean the hash.\n");
 
@@ -4170,7 +4241,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages, c2_partition_
         flush_seq = atomic_read(&castle_cache_flush_seq);
 
         spin_lock(&castle_cache_freelist_lock);
-        success = (castle_cache_page_freelist_size * PAGES_PER_C2P >= nr_pages)
+        success = (castle_cache_page_freelist_size * PAGES_PER_C2P >= nr_pgs)
             && (castle_cache_block_freelist_size >= nr_c2bs);
         spin_unlock(&castle_cache_freelist_lock);
 
@@ -4187,7 +4258,7 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pages, c2_partition_
             spin_lock(&castle_cache_reservelist_lock);
             c2p_size = atomic_read(&castle_cache_page_reservelist_size);
             c2b_size = atomic_read(&castle_cache_block_reservelist_size);
-            success = (c2p_size * PAGES_PER_C2P >= nr_pages)
+            success = (c2p_size * PAGES_PER_C2P >= nr_pgs)
                 && (c2b_size >= nr_c2bs);
             spin_unlock(&castle_cache_reservelist_lock);
 
@@ -4240,7 +4311,7 @@ static int castle_cache_evict(void *unused)
 {
     while (!kthread_should_stop())
     {
-        _castle_cache_freelists_grow(0, NR_CACHE_PARTITIONS);
+        _castle_cache_freelists_grow(0, c2_partition_most_overbudget_find());
         msleep_interruptible(100); /* can be woken up if necessary */
     }
 
@@ -4331,14 +4402,23 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
                                    int nr_pages,
                                    c2_partition_id_t part_id)
 {
-    int grown_block_freelist = 0, grown_page_freelist = 0;
 #ifdef CASTLE_PERF_DEBUG
     c_ext_type_t ext_type;
 #endif
+    int grown_block_freelist = 0,
+        grown_page_freelist  = 0,
+        force                = 0;
     c2_block_t *c2b;
     c2_page_t **c2ps;
 
     BUG_ON(BLOCK_OFFSET(cep.offset));
+
+    /* Get partition to use for VIRTUAL c2bs for supplied partition ID. */
+    BUG_ON(part_id >= NR_CACHE_PARTITIONS);
+    if (unlikely(part_id >= NR_ONDISK_CACHE_PARTITIONS))
+        force = 1;
+    if (!force && castle_compr_type_get(cep.ext_id) == C_COMPR_VIRTUAL)
+        part_id = castle_cache_partition[part_id].virt_id;
 
     might_sleep();
     for(;;)
@@ -4413,7 +4493,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             }
         } while (!c2b);
         do {
-            c2ps = castle_cache_page_freelist_get(nr_pages);
+            c2ps = castle_cache_page_freelist_get(nr_pages, part_id, force);
             if (unlikely(!c2ps))
             {
                 castle_cache_page_freelist_grow(nr_pages, part_id);
@@ -4470,11 +4550,6 @@ out:
      * castle_cache_block_hash_lock there is no risk of racing setting/clearing
      * cache partition bits and partition budget adjustments.
      */
-
-    /* Get partition to use for VIRTUAL c2bs for supplied partition ID. */
-    BUG_ON(part_id >= NR_ONDISK_CACHE_PARTITIONS);
-    if (c2b_virtual(c2b))
-        part_id = castle_cache_partition[part_id].virt_id;
 
     /* Is c2b being added to requested partition for the first time? */
     if (!test_join_c2b_partition(c2b, part_id))
@@ -5939,7 +6014,7 @@ static c2_block_t * _c2_compress_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
             size   = end_off  - start_off; /* full compr_unit_size c2b */
         else
             size   = seen_off - start_off; /* sub-compr_unit_size c2b */
-        ret_c2b = castle_cache_block_get(cep, size >> PAGE_SHIFT, MERGE_OUT);
+        ret_c2b = castle_cache_block_get(cep, size >> PAGE_SHIFT, MERGE_VIRT);
         BUG_ON(!c2b_uptodate(ret_c2b));
         BUG_ON(test_set_c2b_flushing(ret_c2b));
 
@@ -7482,7 +7557,7 @@ static int castle_cache_freelists_init(void)
             list_add(&c2p->list, &castle_cache_page_freelist);
     }
     /* Finish by adjusting the freelist sizes. */
-    castle_cache_page_freelist_size  -= CASTLE_CACHE_RESERVELIST_QUOTA;
+    castle_cache_page_freelist_size -= CASTLE_CACHE_RESERVELIST_QUOTA;
     atomic_set(&castle_cache_page_reservelist_size, CASTLE_CACHE_RESERVELIST_QUOTA);
 
     /* Initialise the c2b freelist and meta-extent reserve freelist. */
@@ -8048,13 +8123,13 @@ void castle_checkpoint_fini(void)
 int castle_cache_init(void)
 {
     unsigned long max_ram;
-    struct sysinfo i;
+    struct sysinfo si;
     struct mutex* vmap_mutex_ptr;
-    int ret, j, cpu_iter, pgs;
+    int ret, i, cpu_iter;
 
     /* Find out how much memory there is in the system. */
-    si_meminfo(&i);
-    max_ram = i.totalram;
+    si_meminfo(&si);
+    max_ram = si.totalram;
     max_ram = max_ram / 2;
 
     /* Fail if we are trying to use too much. */
@@ -8098,45 +8173,14 @@ int castle_cache_init(void)
     castle_cache_pgs        = castle_alloc(castle_cache_page_freelist_size  *
                                            sizeof(c2_page_t));
 
-    /* Initialise cache partitions with 1/4 of pages. */
-    pgs = castle_cache_page_freelist_size / 4;
-    for (j = 0; j < NR_CACHE_PARTITIONS; j++)
-    {
-        castle_cache_partition[j].id        = j;
-        castle_cache_partition[j].virt_id   = j;
-        castle_cache_partition[j].normal_id = j;
-        list_add_tail(&castle_cache_partition[j].sort, &castle_cache_partitions);
-
-        atomic_set(&castle_cache_partition[j].max_pgs, pgs);
-        atomic_set(&castle_cache_partition[j].cur_pgs, 0);
-        atomic_set(&castle_cache_partition[j].dirty_pgs, 0);
-        atomic_set(&castle_cache_partition[j].reserve_pgs, 0);
-        castle_cache_partition[j].use_pct   = 0;
-        castle_cache_partition[j].dirty_pct = 0;
-
-        castle_cache_partition[j].use_clock = 0;
-        castle_cache_partition[j].use_evict = 0;
-
-        spin_lock_init(&castle_cache_partition[j].evict_lock);
-        atomic_set(&castle_cache_partition[j].evict_size, 0);
-        INIT_LIST_HEAD(&castle_cache_partition[j].evict_list);
-    }
-    castle_cache_partition[USER].use_clock       = 1;
-    castle_cache_partition[USER].virt_id         = USER_VIRT;
-    castle_cache_partition[USER_VIRT].use_clock  = 1;
-    castle_cache_partition[USER_VIRT].normal_id  = USER;
-    /* COMPRESSED and NORMAL merge output can always get 1/4 of the cache. */
-    atomic_set(&castle_cache_partition[MERGE_OUT].reserve_pgs, pgs);
-    castle_cache_partition[MERGE_OUT].use_evict  = 1;
-    castle_cache_partition[MERGE_OUT].virt_id    = MERGE_VIRT;
-    castle_cache_partition[MERGE_VIRT].use_evict = 1;
-    castle_cache_partition[MERGE_VIRT].normal_id = MERGE_OUT;
+    /* Initialise cache partitions */
+    c2_partitions_init();
 
     /* Init other variables */
-    for(j=0; j<NR_EXTENT_FLUSH_PRIOS; j++)
+    for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
     {
-        INIT_LIST_HEAD(&castle_cache_extent_dirtylists[j]);
-        atomic_set(&castle_cache_extent_dirtylist_sizes[j], 0);
+        INIT_LIST_HEAD(&castle_cache_extent_dirtylists[i]);
+        atomic_set(&castle_cache_extent_dirtylist_sizes[i], 0);
     }
 
     castle_cache_block_clock_hand = &castle_cache_block_clock;
