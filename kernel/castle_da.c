@@ -5302,8 +5302,8 @@ static void castle_da_merge_new_partition_update(struct castle_da_merge *merge,
         BUG_ON(!cep_source_arr);
         if ( !EXT_POS_INVAL(cep_source_arr[i]) )
         {
-//            castle_printk(LOG_DEBUG, "%s::[merge %d] scheduling shrink of "cep_fmt_str"\n",
-//                    __FUNCTION__, merge->id, cep2str(cep_source_arr[i]));
+            castle_printk(LOG_DEBUG, "%s::[merge %d] scheduling shrink of "cep_fmt_str"\n",
+                    __FUNCTION__, merge->id, cep2str(cep_source_arr[i]));
             merge->in_tree_shrinkable_cep[cep_arr_index++] =
                 cep_source_arr[i];
             cep_source_arr[i] = INVAL_EXT_POS;
@@ -6842,8 +6842,8 @@ static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
     else
     {
         int i;
-//        castle_printk(LOG_DEBUG, "%s::[merge %u, %p] making new SERDES snapshot.\n",
-//                __FUNCTION__, merge->id, merge);
+        castle_printk(LOG_DEBUG, "%s::[merge %u, %p] making new SERDES snapshot.\n",
+                __FUNCTION__, merge->id, merge);
 
         CASTLE_TRANSACTION_BEGIN;
 
@@ -6868,8 +6868,8 @@ static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
         {
             if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                 continue;
-//            castle_printk(LOG_DEVEL, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
-//                    __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
+            castle_printk(LOG_DEVEL, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
+                    __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
         }
 
         /* mark serialisation as checkpointable, and no longer updatable */
@@ -7109,12 +7109,12 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                     active_node->btree_level = i;
                     active_node->size_blocks = castle_immut_tree_node_size_get(merge->out_tree_constr, i);
                     BUG_ON(node->size != active_node->size_blocks);
-//                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %u blocks (node->used:%u).\n",
-//                            __FUNCTION__,
-//                            merge->id,
-//                            i,
-//                            active_node->size_blocks,
-//                            node->used);
+                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %u blocks (node->used:%u).\n",
+                            __FUNCTION__,
+                            merge->id,
+                            i,
+                            active_node->size_blocks,
+                            node->used);
                     memcpy(active_node->payload, node, active_node->size_blocks * C_BLK_SIZE);
                 }
             }//fi active node
