@@ -538,34 +538,26 @@ void castle_cache_stats_print(int verbose)
 
     if (verbose)
     {
-        castle_printk(LOG_PERF, "castle_cache_stats_timer_tick: D=%d(%d%%) CLOCK=%d C=%d F=%d R=%d W=%d\n"
-                "\tU=%d(%d%%),Ud=%d(%d%%) UV=%d(%d%%),UVd=%d(%d%%)\n"
-                "\tM=%d(%d%%),Md=%d(%d%%) MV=%d(%d%%),MVd=%d(%d%%)\n",
-
+        castle_printk(LOG_PERF, "\n\tD=%d%% C=%d%% F=%d%% | D=%d C=%d F=%d | R=%d W=%d\n"
+                                "\tUSER      %3d%% USERd      %3d%% | MERGE      %3d%%      MERGEd %3d%%\n"
+                                "\tUSER_VIRT %3d%% USER_VIRTd %3d%% | MERGE_VIRT %3d%% MERGE_VIRTd %3d%%\n",
+            (100 * atomic_read(&castle_cache_dirty_pgs)) / castle_cache_size,
+            (100 * atomic_read(&castle_cache_clean_pgs)) / castle_cache_size,
+            (100 * castle_cache_page_freelist_size * PAGES_PER_C2P) / castle_cache_size,
             atomic_read(&castle_cache_dirty_pgs),
-            100 * atomic_read(&castle_cache_dirty_pgs) / castle_cache_size,
-            atomic_read(&castle_cache_block_clock_size),
             atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
             reads,
             writes,
 
-            atomic_read(&castle_cache_partition[USER].cur_pgs),
             castle_cache_partition[USER].use_pct,
-            atomic_read(&castle_cache_partition[USER].dirty_pgs),
             castle_cache_partition[USER].dirty_pct,
-            atomic_read(&castle_cache_partition[USER_VIRT].cur_pgs),
-            castle_cache_partition[USER_VIRT].use_pct,
-            atomic_read(&castle_cache_partition[USER_VIRT].dirty_pgs),
-            castle_cache_partition[USER_VIRT].dirty_pct,
-
-            atomic_read(&castle_cache_partition[MERGE_OUT].cur_pgs),
             castle_cache_partition[MERGE_OUT].use_pct,
-            atomic_read(&castle_cache_partition[MERGE_OUT].dirty_pgs),
             castle_cache_partition[MERGE_OUT].dirty_pct,
-            atomic_read(&castle_cache_partition[MERGE_VIRT].cur_pgs),
+
+            castle_cache_partition[USER_VIRT].use_pct,
+            castle_cache_partition[USER_VIRT].dirty_pct,
             castle_cache_partition[MERGE_VIRT].use_pct,
-            atomic_read(&castle_cache_partition[MERGE_VIRT].dirty_pgs),
             castle_cache_partition[MERGE_VIRT].dirty_pct);
     }
 
