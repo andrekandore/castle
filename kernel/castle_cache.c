@@ -484,9 +484,9 @@ typedef struct page *castle_cache_vmap_pgs_t[CASTLE_CACHE_VMAP_PGS];
 DEFINE_PER_CPU(castle_cache_vmap_pgs_t, castle_cache_vmap_pgs);
 DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
 
-struct task_struct            *castle_cache_flush_thread;
-static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);
-static atomic_t                castle_cache_flush_seq;
+struct task_struct            *castle_cache_flush_thread;   /**< Thread running background flush  */
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);      /**< Wait on flush thread to do work  */
+static atomic_t                castle_cache_flush_seq;      /**< Detect flush thread work         */
 
 struct task_struct            *castle_cache_evict_thread;
 
