@@ -4213,26 +4213,34 @@ int castle_cache_block_destroy(c2_block_t *c2b)
  * @param nr_c2bs   Minimum number of c2bs we need freed up
  * @param nr_pgs    Minimum number of pages we need freed up
  * @param part_id   Cache partition that requested the grow
+ * @param for_virt  Force growing for a VIRTUAL partition
  *
  * @also _castle_cache_block_get()
  * @also castle_cache_block_hash_clean()
  * @also castle_extent_remap()
  */
-static void castle_cache_freelists_grow(int nr_c2bs, int nr_pgs, c2_partition_id_t part_id)
+static void castle_cache_freelists_grow(int nr_c2bs,
+                                        int nr_pgs,
+                                        c2_partition_id_t part_id,
+                                        int for_virt)
 {
     int flush_seq, success;
 
     /* Decide which cache partition to evict blocks from.
      *
-     * If the requesting partition is overbudget and has use_max set, evict from
-     * that partition, otherwise pick the most overbudget cache partition to
-     * evict blocks from.
+     * 1. Evict from a non-VIRTUAL partition if for_virt is specified.
+     * 2. Evict from the requesting partition if it is overbudget and has
+     *    use_max set (except if for_virt is specified and it is VIRTUAL).
+     * 3. If none of the above are true then evict from the most overbudget
+     *    partition.
      *
      * Because c2bs can overlap we tend towards a situation where all partitions
      * are overbudget at all times (with the exclusion of use_max partitions).
      * Therefore it makes sense to evict from the most overbudget partition or
      * we are not fairly sharing available resources between partitions. */
-    if (c2_partition_can_satisfy(part_id, nr_pgs))
+    if (for_virt)   /* (1) */
+        part_id = castle_cache_partition[part_id].normal_id;
+    else if (c2_partition_can_satisfy(part_id, nr_pgs))  /* (3) */
         part_id = c2_partition_most_overbudget_find();
 
     while (_castle_cache_freelists_grow(nr_pgs, part_id) != EXIT_SUCCESS)
@@ -4297,17 +4305,20 @@ static void castle_cache_freelists_grow(int nr_c2bs, int nr_pgs, c2_partition_id
 /**
  * Grow castle_cache_block_freelist by (a minimum of) one block.
  */
-static inline void castle_cache_block_freelist_grow(c2_partition_id_t part_id)
+static inline void castle_cache_block_freelist_grow(c2_partition_id_t part_id,
+                                                    int for_virt)
 {
-    castle_cache_freelists_grow(1 /*nr_c2bs*/, 0 /*nr_pages*/, part_id);
+    castle_cache_freelists_grow(1 /*nr_c2bs*/, 0 /*nr_pages*/, part_id, for_virt);
 }
 
 /**
  * Grow castle_cache_page_freelist_size by nr_pages/PAGES_PER_C2P.
  */
-static inline void castle_cache_page_freelist_grow(int nr_pages, c2_partition_id_t part_id)
+static inline void castle_cache_page_freelist_grow(int nr_pages,
+                                                   c2_partition_id_t part_id,
+                                                   int for_virt)
 {
-    castle_cache_freelists_grow(0 /*nr_c2bs*/, nr_pages, part_id);
+    castle_cache_freelists_grow(0 /*nr_c2bs*/, nr_pages, part_id, for_virt);
 }
 
 /**
@@ -4402,6 +4413,20 @@ out:
 /**
  * Get block starting at cep, size nr_pages from specified partition.
  *
+ * @param   cep         Extent and offset
+ * @param   nr_pages    Size of c2b
+ * @param   part_id     c2b destination partition
+ *
+ * NOTE: With the exception of the cache itself callers must provide a part_id
+ *       that is < NR_ONDISK_CACHE_PARTITIONS regardless of what type of extent
+ *       cep.ext_id is.
+ *
+ * If we fail to get c2bs/c2ps and the consumer (cache only) provided a VIRTUAL
+ * cache partition (e.g. >= NR_ONDISK_CACHE_PARTITIONS) then a non-VIRTUAL cache
+ * partition will be the target of any evictions.  This is necessary for
+ * _c2_compress_compr_unit_get() to be able to get a compression unit c2b for
+ * compression (and therefore eviction) to proceed.
+ *
  * @return  Block matching cep, nr_pages.
  */
 c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
@@ -4411,9 +4436,9 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
 #ifdef CASTLE_PERF_DEBUG
     c_ext_type_t ext_type;
 #endif
-    int grown_block_freelist = 0,
-        grown_page_freelist  = 0,
-        force                = 0;
+    int grown_block_freelist = 0;   /* how many times we've grown c2b freelist  */
+    int grown_page_freelist  = 0;   /* how many times we've grown c2p freelist  */
+    int for_virt             = 0;   /* did caller pass a VIRTUAL partition ID?  */
     c2_block_t *c2b;
     c2_page_t **c2ps;
 
@@ -4422,8 +4447,8 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
     /* Get partition to use for VIRTUAL c2bs for supplied partition ID. */
     BUG_ON(part_id >= NR_CACHE_PARTITIONS);
     if (unlikely(part_id >= NR_ONDISK_CACHE_PARTITIONS))
-        force = 1;
-    if (!force && castle_compr_type_get(cep.ext_id) == C_COMPR_VIRTUAL)
+        for_virt = 1;
+    else if (castle_compr_type_get(cep.ext_id) == C_COMPR_VIRTUAL)
         part_id = castle_cache_partition[part_id].virt_id;
 
     might_sleep();
@@ -4490,7 +4515,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             c2b = castle_cache_block_freelist_get();
             if (unlikely(!c2b))
             {
-                castle_cache_block_freelist_grow(part_id);
+                castle_cache_block_freelist_grow(part_id, for_virt);
 
                 if (unlikely(current == castle_cache_flush_thread
                             && cep.ext_id == META_EXT_ID
@@ -4499,10 +4524,10 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
             }
         } while (!c2b);
         do {
-            c2ps = castle_cache_page_freelist_get(nr_pages, part_id, force);
+            c2ps = castle_cache_page_freelist_get(nr_pages, part_id, for_virt);
             if (unlikely(!c2ps))
             {
-                castle_cache_page_freelist_grow(nr_pages, part_id);
+                castle_cache_page_freelist_grow(nr_pages, part_id, for_virt);
 
                 if (unlikely(current == castle_cache_flush_thread
                             && cep.ext_id == META_EXT_ID
