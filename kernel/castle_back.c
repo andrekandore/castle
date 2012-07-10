@@ -3886,6 +3886,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
             castle_printk(LOG_ERROR,
                         "%s::[op %p:0x%x] leaf node extent growth control failed with err %d.\n",
                         __FUNCTION__, stateful_op->conn, stateful_op->token, err);
+            err = -ENOSPC;
             goto err2;
         }
 
