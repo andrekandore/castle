@@ -503,6 +503,8 @@ typedef struct castle_immut_iterator {
 
     struct castle_da_merge *merge; /* use this pointer to determine if the merge is
                                       doing partial merges */
+    int                           inited;
+    c_ext_pos_t                   first_node_cep;
 } c_immut_iter_t;
 
 /**
@@ -753,8 +755,32 @@ static void castle_ct_immut_iter_next_node(c_immut_iter_t *iter)
     }
 }
 
+static void castle_ct_immut_iter_init_complete(c_immut_iter_t *iter)
+{
+    c_ext_pos_t first_node_cep;
+    uint16_t first_node_size;
+
+    BUG_ON(iter->inited);
+    first_node_cep = iter->first_node_cep;
+    first_node_size = iter->tree->node_sizes[0];
+    castle_printk(LOG_DEBUG, "%s::first_node_cep = "cep_fmt_str"\n",
+            __FUNCTION__, cep2str(first_node_cep));
+    castle_ct_immut_iter_next_node_find(iter,
+            first_node_cep,
+            first_node_size);
+    /* Check if we succeeded at finding at least a single node */
+    BUG_ON(!iter->next_c2b);
+    /* Init curr_c2b correctly */
+    castle_ct_immut_iter_next_node(iter);
+    iter->inited = 1;
+}
+
 static int castle_ct_immut_iter_prep_next(c_immut_iter_t *iter)
 {
+    /* There may be final iter init work to do. */
+    if (!iter->inited)
+        castle_ct_immut_iter_init_complete(iter);
+
     /* Check if we can read from the curr_node. If not move to the next node.
        Make sure that if entries exist, they are not leaf pointers. */
     if(iter->curr_idx >= iter->curr_node->used || iter->curr_idx < 0)
@@ -861,6 +887,7 @@ struct castle_iterator_type castle_ct_immut_iter = {
  * @param already_complete       When re-initialising an iterator for a deserialising
  *                               merge, where the iterator had already completed, set the
  *                               completed flag and skip the node_find()
+ * @also  castle_ct_immut_iter_init_complete
  */
 static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
                                       castle_immut_iter_node_start node_start,
@@ -879,6 +906,7 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
     iter->private   = private;
     iter->async_iter.end_io = NULL;
     iter->async_iter.iter_type = &castle_ct_immut_iter;
+    iter->inited    = 0;
 
     first_node_cep.ext_id = iter->tree->tree_ext_free.ext_id;
     first_node_cep.offset = 0;
@@ -898,16 +926,18 @@ static void castle_ct_immut_iter_init(c_immut_iter_t *iter,
         return;
     }
 
+    iter->first_node_cep = first_node_cep;
     first_node_size = iter->tree->node_sizes[0];
-    castle_printk(LOG_DEBUG, "%s::first_node_cep = "cep_fmt_str"\n",
-            __FUNCTION__, cep2str(first_node_cep));
-    castle_ct_immut_iter_next_node_find(iter,
-                                        first_node_cep,
-                                        first_node_size);
-    /* Check if we succeeded at finding at least a single node */
-    BUG_ON(!iter->next_c2b);
-    /* Init curr_c2b correctly */
-    castle_ct_immut_iter_next_node(iter);
+
+    /* For non-deserialising merges, the iter init is NOT yet complete; to reduce the amt
+       of work done under transaction lock, the final bit of init work is delayed until the
+       first call to prep_next() (which calls castle_ct_immut_iter_init_complete()). */
+
+    /* If this is a deserialising merge, the inter init must be completed now, it cannot be
+       delayed until prep_next(). */
+    if (resume_merge_node_cep)
+        castle_ct_immut_iter_init_complete(iter);
+
 }
 
 /**
@@ -941,6 +971,7 @@ static int castle_kv_compare(struct castle_btree_type *btree,
  * @also castle_ct_modlist_iter_init()
  */
 typedef struct castle_modlist_iterator {
+    int inited;
     c_async_iterator_t async_iter;
     struct castle_btree_type *btree;
     struct castle_component_tree *tree;
@@ -1065,8 +1096,19 @@ static int castle_ct_modlist_iter_has_next(c_modlist_iter_t *iter)
  *
  * @return 1    Always
  */
+static void castle_ct_modlist_iter_next_node(c_immut_iter_t *immut_iter);
+static void castle_ct_modlist_iter_mergesort(c_modlist_iter_t *iter);
 static int castle_ct_modlist_iter_prep_next(c_modlist_iter_t *iter)
 {
+    if(!iter->inited)
+    {
+        castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter, NULL, 0);
+
+        /* Finally, sort the data so we can return sorted entries to the caller. */
+        castle_ct_modlist_iter_mergesort(iter);
+        iter->inited = 1;
+    }
+
     return 1;
 }
 
@@ -1474,11 +1516,7 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 
     /* Initialise the immutable iterator */
     iter->enumerator->tree = ct;
-    castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter, NULL, 0);
-
-    /* Finally, sort the data so we can return sorted entries to the caller. */
-    castle_ct_modlist_iter_mergesort(iter);
-
+    iter->inited = 0;
     /* Good state before we accept requests. */
     iter->err = 0;
     iter->next_item = 0;
@@ -2823,6 +2861,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
         iter->tree = tree;
         iter->merge = merge;
         castle_ct_immut_iter_init(iter, NULL, NULL, resume_merge_node_cep, already_completed);
+
         /* @TODO: after init errors? */
         *iter_p = iter;
     }
