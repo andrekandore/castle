@@ -68,6 +68,7 @@ typedef struct castle_cache_extent_dirtytree {
                                                      crash consistency.                         */
     c_byte_off_t        virt_consistent_off_1;  /**< Virtual offset required to reach disk for
                                                      crash consistency.                         */
+    struct work_struct  compr_work;             /**< For asynchronous compression of dirtytree. */
 } c2_ext_dirtytree_t;
 
 struct castle_cache_page;
@@ -326,6 +327,7 @@ c2_block_t* castle_cache_block_get    (c_ext_pos_t cep,
 void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
+void        castle_cache_dirtytree_compress(struct work_struct *work);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 int                        castle_checkpoint_init          (void);

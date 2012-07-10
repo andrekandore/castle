@@ -491,6 +491,10 @@ static atomic_t                castle_cache_flush_seq;      /**< Detect flush th
 
 struct task_struct            *castle_cache_evict_thread;
 
+#define CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS    5           /**< Minimum available VIRTUAL data
+                                                                 before scheduling async compress */
+struct workqueue_struct       *castle_cache_compr_wq = NULL;/**< For async (de)compression        */
+
 static struct task_struct     *castle_cache_decompress_thread;
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_decompress_wq);
 static         DEFINE_SPINLOCK(castle_cache_decompress_lock);
@@ -1520,6 +1524,18 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
 
     /* Keep the reference until the c2b is clean but drop the lock. */
     c2b->dirtytree = dirtytree;
+
+    /* Schedule asynchronous compression if we have enough data. */
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id)
+            && c2b_end_off(c2b) >= dirtytree->next_virt_off
+                        + CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS * C_CHK_SIZE)
+    {
+        castle_extent_dirtytree_get(dirtytree);
+        if (!queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
+            /* dirtytree reference already taken */
+            castle_extent_dirtytree_put(dirtytree);
+    }
+
     spin_unlock_irqrestore(&dirtytree->lock, flags);
 
     return EXIT_SUCCESS;
@@ -3062,6 +3078,9 @@ static void castle_cache_compr_fini(void)
     /* Destroy any outstanding flush and straddle c2bs. */
     castle_extent_for_each_virt_ext(_c2_compress_c2bs_put);
 
+    if (castle_cache_compr_wq)
+        destroy_workqueue(castle_cache_compr_wq);
+
     kthread_stop(castle_cache_decompress_thread);
 
     for (i = 0; i < NR_CPUS; ++i)
@@ -3101,7 +3120,16 @@ static int castle_cache_compr_init(void)
         }
     }
 
+    castle_cache_compr_wq = create_workqueue("castle_compr");
+    if (!castle_cache_compr_wq)
+    {
+        castle_printk(LOG_INIT, "Error: Could not allocate castle_compr wq\n");
+        ret = -ENOMEM;
+        goto err;
+    }
+
     castle_cache_decompress_thread = kthread_run(castle_cache_decompress, NULL, "castle_decompress");
+
     return 0;
 
 err:
@@ -6410,6 +6438,26 @@ out:
     if (compressed_p)
         *compressed_p = compressed;
     atomic_add(compressed, &castle_cache_compress_stats);
+}
+
+/**
+ * Asynchronous compression workqueue wrapper.
+ */
+void castle_cache_dirtytree_compress(struct work_struct *work)
+{
+    c2_ext_dirtytree_t *dirtytree;
+
+    dirtytree = container_of(work, c2_ext_dirtytree_t, compr_work);
+
+    castle_cache_compress(dirtytree,
+                          0,            /* end_off      */
+                          0,            /* max_pgs      */
+                          0,            /* force        */
+                          NULL);        /* compressed_p */
+
+    /* Put reference taken by c2_dirtytree_insert() potentially freeing the
+     * dirtytree if the extent has already been destroyed. */
+    castle_extent_dirtytree_put(dirtytree);
 }
 
 /**********************************************************************************************
