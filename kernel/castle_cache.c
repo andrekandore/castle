@@ -1526,28 +1526,6 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
 }
 
 /**
- * Demote tree of dirty blocks (dirtytree) when the extent is being deleted.
- * This prioritises flushing the blocks of this extent out of the cache.
- *
- * @param c2b   Dirtytree to demote.
- *
- * @also c2_dirtytree_remove()
- */
-void castle_cache_dirtytree_demote(c2_ext_dirtytree_t *dirtytree)
-{
-    if (likely(!RB_EMPTY_ROOT(&dirtytree->rb_root)))
-    {
-        atomic_dec(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
-        spin_lock_irq(&castle_cache_extent_dirtylist_lock);
-        list_del(&dirtytree->list);
-        dirtytree->flush_prio = DEAD_EXT_FLUSH_PRIO;
-        list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
-        spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
-        atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
-    }
-}
-
-/**
  * Mark c2b and associated c2ps dirty and place on dirtytree.
  *
  * @param c2b   c2b to mark as dirty.
@@ -6441,9 +6419,6 @@ out:
 /**
  * IO completion callback handler for castle_cache_extent_flush().
  *
- * Also used as IO completion callback for castle_cache_extent_evict() as this
- * calls __castle_cache_extent_flush().
- *
  * This is the primary callback for checkpoint-related flushes.
  *
  * @param c2b   c2b that has been flushed to disk
@@ -6896,7 +6871,7 @@ void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start,
         }
 
         /* Stop once we see c2bs starting beyond the range. */
-        if (c2b->cep.offset >= end_off)
+        if (end_off && c2b->cep.offset >= end_off)
         {
             debug("dirtytree=%p c2b=%p cep.offset=%lu > end_off=%lu\n",
                     dirtytree, c2b, c2b->cep.offset, end_off);
@@ -6911,7 +6886,7 @@ void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start,
             goto next_c2b;
         }
 
-        /* Flush this c2b. */
+        /* Evict this c2b. */
         read_lock_c2b(c2b);
         get_c2b(c2b);
         c2b_batch[batch_idx++] = c2b;
@@ -6932,7 +6907,7 @@ next_c2b:
     }
     spin_unlock_irq(&dirtytree->lock);
 
-    /* Flush any c2bs remaining in the batch. */
+    /* Evict any c2bs remaining in the batch. */
     castle_cache_extent_batch_evict(c2b_batch, batch_idx);
 
     if (castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL)
@@ -6945,6 +6920,9 @@ next_c2b:
         _c2_compress_c2bs_put(dirtytree);
         mutex_unlock(&dirtytree->compr_mutex);
     }
+
+    /* We can not now assume RB_EMPTY_ROOT(dirtytree->rb_root) as some c2bs may
+     * already have been flushing before we reached them in this function. */
 }
 
 /**

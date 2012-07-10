@@ -3692,7 +3692,7 @@ static void castle_extent_resource_release(void *data)
     BUG_ON(ext->dirtytree->nr_pages);
 
     /* Drop 'extent exists' reference on c2b dirtytree. */
-    castle_cache_dirtytree_demote(ext->dirtytree);
+    castle_cache_extent_evict(ext->dirtytree, 0 /*start*/, 0 /*end*/);
     castle_extent_dirtytree_put(ext->dirtytree);
 
     castle_free(ext);
