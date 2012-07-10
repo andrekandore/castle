@@ -165,8 +165,6 @@ check_pid:
 
 static void castle_ctrl_prog_work_do(void *unused)
 {
-    struct timeval tv;
-
     /* Do nothing if the FS hasn't been inited yet. */
     if(!castle_fs_inited)
         return;
@@ -180,8 +178,11 @@ static void castle_ctrl_prog_work_do(void *unused)
             /* If the nugget_disabled parameter is set, don't send event to start nugget. */
             if (!castle_ctrl_prog_disabled)
             {
-                do_gettimeofday(&tv);
-                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, (uint64_t)tv.tv_sec);
+                struct timespec uptime;
+                do_posix_clock_monotonic_gettime(&uptime);
+                castle_printk(LOG_INIT,
+                        "Registering ctrl_prog with uptime stamp %lu.\n", uptime.tv_sec);
+                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, (uint64_t)uptime.tv_sec);
             }
             break;
         case CTRL_PROG_PRESENT:
