@@ -4259,7 +4259,7 @@ static void castle_cache_freelists_grow(int nr_c2bs,
             && (castle_cache_block_freelist_size >= nr_c2bs);
         spin_unlock(&castle_cache_freelist_lock);
 
-        if (success)
+        if (success && (for_virt || c2_partition_can_satisfy(part_id, nr_pgs)))
             return;
 
         /* If we're the flush thread the reservelist should now be capable of
