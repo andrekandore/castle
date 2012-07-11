@@ -4,15 +4,14 @@
 #include "castle.h"
 
 typedef enum {
-    DEAD_EXT_FLUSH_PRIO,
     LARGE_OBJS_FLUSH_PRIO,
     DEFAULT_FLUSH_PRIO,
     LARGE_CT_FLUSH_PRIO,
     MEDIUM_CT_FLUSH_PRIO,
     SMALL_CT_FLUSH_PRIO,
     META_FLUSH_PRIO,
+    NR_EXTENT_FLUSH_PRIOS,              /**< Must be at end of list.                    */
 } c_ext_flush_prio_t;
-#define NR_EXTENT_FLUSH_PRIOS   16
 
 struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 

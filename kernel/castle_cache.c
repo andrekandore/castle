@@ -374,11 +374,19 @@ static struct hlist_head      *castle_cache_page_hash = NULL;
 static struct kmem_cache      *castle_io_array_cache = NULL;
 static struct kmem_cache      *castle_flush_cache = NULL;
 
-static         DEFINE_SPINLOCK(castle_cache_extent_dirtylist_lock);
-static struct list_head        castle_cache_extent_dirtylists[NR_EXTENT_FLUSH_PRIOS];
-                                                                    /**< Lists of dirtytrees      */
-static atomic_t                castle_cache_extent_dirtylist_sizes[NR_EXTENT_FLUSH_PRIOS];
-                                                                    /**< Number of dirty extents  */
+/* Bucketed dirtylist structures.
+ *
+ * c2_ext_dirtylists_lock protects individual buckets for both
+ * c2_ext_virtual_dirtylists and c2_ext_ondisk_dirtylists arrays.
+ *
+ * We categorise dirtytrees into priority buckets so we can more efficiently
+ * compress and flush from the cache.
+ */
+static         DEFINE_SPINLOCK(c2_ext_dirtylists_lock);
+static struct list_head        c2_ext_virtual_dirtylists[NR_EXTENT_FLUSH_PRIOS];
+static atomic_t                c2_ext_virtual_dirtylists_sizes[NR_EXTENT_FLUSH_PRIOS];
+static struct list_head        c2_ext_ondisk_dirtylists[NR_EXTENT_FLUSH_PRIOS];
+static atomic_t                c2_ext_ondisk_dirtylists_sizes[NR_EXTENT_FLUSH_PRIOS];
 
 static         DEFINE_SPINLOCK(castle_cache_block_clock_lock);
 static               LIST_HEAD(castle_cache_block_clock);           /**< List of c2bs in CLOCK    */
@@ -1407,10 +1415,13 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
     {
         /* Last dirty c2b for this extent, remove it from the global
          * list of dirty extents. */
-        spin_lock(&castle_cache_extent_dirtylist_lock);
+        spin_lock(&c2_ext_dirtylists_lock);
         list_del_init(&dirtytree->list);
-        spin_unlock(&castle_cache_extent_dirtylist_lock);
-        BUG_ON(atomic_dec_return(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]) < 0);
+        spin_unlock(&c2_ext_dirtylists_lock);
+        if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+            BUG_ON(atomic_dec_return(&c2_ext_virtual_dirtylists_sizes[dirtytree->flush_prio]) < 0);
+        else
+            BUG_ON(atomic_dec_return(&c2_ext_ondisk_dirtylists_sizes[dirtytree->flush_prio]) < 0);
     }
 
     /* Maintain the number of pages in this dirtytree. */
@@ -1435,8 +1446,8 @@ static int c2_dirtytree_remove(c2_block_t *c2b)
  *
  * - Get and hold per-extent dirtytree reference via c2b->cep.ext_id
  * - Lock dirtytree and insert c2b into RB-tree
- * - If RB-tree was previously empty, thread dirtytree onto the global
- *   list of dirty extents (castle_cache_extent_dirtylist)
+ * - If RB-tree was previously empty, thread dirtytree onto either the global
+ *   list of dirty VIRTUAL or ONDISK extents
  * - Don't drop the dirtytree reference (put in c2_dirtytree_remove())
  *
  * @also c2_dirtytree_remove()
@@ -1511,10 +1522,20 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
         /* First dirty c2b for this extent, place it onto the global
          * list of dirty extents. */
         BUG_ON(dirtytree->flush_prio >= NR_EXTENT_FLUSH_PRIOS);
-        spin_lock(&castle_cache_extent_dirtylist_lock);
-        list_add(&dirtytree->list, &castle_cache_extent_dirtylists[dirtytree->flush_prio]);
-        spin_unlock(&castle_cache_extent_dirtylist_lock);
-        atomic_inc(&castle_cache_extent_dirtylist_sizes[dirtytree->flush_prio]);
+        spin_lock(&c2_ext_dirtylists_lock);
+        if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+        {
+            /* Dirtytree is for a VIRTUAL extent, add to virtual dirtylist. */
+            list_add(&dirtytree->list, &c2_ext_virtual_dirtylists[dirtytree->flush_prio]);
+            atomic_inc(&c2_ext_virtual_dirtylists_sizes[dirtytree->flush_prio]);
+        }
+        else
+        {
+            /* Dirtytree is for an ONDISK extent, add to ondisk dirtylist. */
+            list_add(&dirtytree->list, &c2_ext_ondisk_dirtylists[dirtytree->flush_prio]);
+            atomic_inc(&c2_ext_ondisk_dirtylists_sizes[dirtytree->flush_prio]);
+        }
+        spin_unlock(&c2_ext_dirtylists_lock);
     }
     rb_link_node(&c2b->rb_dirtytree, parent, p);
     rb_insert_color(&c2b->rb_dirtytree, &dirtytree->rb_root);
@@ -7124,7 +7145,7 @@ static int _castle_cache_flush_pages_calculate(int exiting)
     if (unlikely(exiting))
     {
         for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
-            if (atomic_read(&castle_cache_extent_dirtylist_sizes[i]) != 0)
+            if (atomic_read(&c2_ext_ondisk_dirtylists_sizes[i]) != 0)
                 return INT_MAX;
 
         /* All dirtytrees flushed and freed, flush is complete. */
@@ -7197,35 +7218,32 @@ static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_p
 #define MIN_EFFICIENT_DIRTYTREE     (5*256)   /* In pages, equals 5MB                 */
     c2_ext_dirtytree_t *dirtytree = NULL;
 
-    spin_lock_irq(&castle_cache_extent_dirtylist_lock);
+    spin_lock_irq(&c2_ext_dirtylists_lock);
 
     while (!dirtytree
             && (*max_scan)-- > 0
-            && !list_empty(&castle_cache_extent_dirtylists[prio]))
+            && !list_empty(&c2_ext_ondisk_dirtylists[prio]))
     {
         /* Get the first dirtytree in the list and move it to the end so that
          * next time around a different extent will be considered. */
-        dirtytree = list_first_entry(&castle_cache_extent_dirtylists[prio],
+        dirtytree = list_first_entry(&c2_ext_ondisk_dirtylists[prio],
                 c2_ext_dirtytree_t, list);
-        list_move_tail(&dirtytree->list, &castle_cache_extent_dirtylists[prio]);
+        list_move_tail(&dirtytree->list, &c2_ext_ondisk_dirtylists[prio]);
 
         /* On non-aggressive scans try and keep IO more efficient by flushing
          * just extents with many dirty pages. */
-        if (!aggressive
-                && prio != DEAD_EXT_FLUSH_PRIO
-                && dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
+        if (!aggressive && dirtytree->nr_pages < MIN_EFFICIENT_DIRTYTREE)
         {
             dirtytree = NULL;
             continue;
         }
 
-        /* Get dirtytree ref under castle_cache_extent_dirtylist_lock,
-         * preventing a race where the final dirty c2b end_io() handler fires
-         * and frees the dirtytree. */
+        /* Get dirtytree ref under c2_ext_dirtylists_lock, preventing a race
+         * where the final dirty c2b end_io() fires and frees the dirtytree. */
         castle_extent_dirtytree_get(dirtytree);
     }
 
-    spin_unlock_irq(&castle_cache_extent_dirtylist_lock);
+    spin_unlock_irq(&c2_ext_dirtylists_lock);
 
     return dirtytree;
 }
@@ -7301,7 +7319,7 @@ err_out:
 /**
  * Flush dirty blocks to disk.
  *
- * Fundamentally this function walks castle_cache_extent_dirtylist (the global
+ * Fundamentally this function walks c2_ext_ondisk_dirtylists lists (the global
  * list of dirty extents) and calls __castle_cache_extent_flush() on each dirty
  * extent until a suitable number of pages have been flushed.
  *
@@ -7315,7 +7333,7 @@ err_out:
  * - Wait until there are at least MIN_FLUSH_SIZE pages to flush (or timeout
  *   occurs)
  * - Calculate the number of pages we will try to flush this run
- * - Grab the first dirty extent from castle_cache_extent_dirtylist and take
+ * - Grab the first dirty extent from c2_ext_ondisk_dirtylists and take
  *   a reference to it
  * - Push held extent to the back of the list
  * - Schedule a flush via __castle_cache_extent_flush()
@@ -7383,7 +7401,7 @@ aggressive:
         {
             int nr_dirtytrees;
 
-            nr_dirtytrees = atomic_read(&castle_cache_extent_dirtylist_sizes[prio]);
+            nr_dirtytrees = atomic_read(&c2_ext_ondisk_dirtylists_sizes[prio]);
 
             while (likely(to_flush > 0))
             {
@@ -8250,8 +8268,10 @@ int castle_cache_init(void)
     /* Init other variables */
     for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
     {
-        INIT_LIST_HEAD(&castle_cache_extent_dirtylists[i]);
-        atomic_set(&castle_cache_extent_dirtylist_sizes[i], 0);
+        INIT_LIST_HEAD(&c2_ext_virtual_dirtylists[i]);
+        atomic_set(&c2_ext_virtual_dirtylists_sizes[i], 0);
+        INIT_LIST_HEAD(&c2_ext_ondisk_dirtylists[i]);
+        atomic_set(&c2_ext_ondisk_dirtylists_sizes[i], 0);
     }
 
     castle_cache_block_clock_hand = &castle_cache_block_clock;
