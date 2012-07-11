@@ -6645,7 +6645,10 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     c2_block_t *c2b;
     struct rb_node *parent;
     c2_block_t *c2b_batch[CASTLE_CACHE_FLUSH_BATCH_SIZE];
-    int compr_type, batch_idx, flushed = 0;
+    int batch_idx, flushed = 0;
+
+    /* We should never try and flush a VIRTUAL extent. */
+    BUG_ON(castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL);
 
     /* Flush from the beginning of the extent to end_off.
      * If end_off is not specified, flush the entire extent. */
@@ -6655,19 +6658,6 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     /* If max_pgs is not specified, set a huge limit. */
     if (max_pgs == 0)
         max_pgs = INT_MAX;
-
-    /* TODO: The following code is temporary until we have a dedicated set
-     * of compression threads that will perform all compression on demand. */
-    compr_type = castle_compr_type_get(dirtytree->ext_id);
-    if (compr_type == C_COMPR_VIRTUAL)
-    {
-        castle_cache_compress(dirtytree,   /* dirtytree    */
-                              0,           /* end_off      */
-                              0,           /* max_pgs      */
-                              waitlock,    /* force        */
-                              NULL);       /* compressed_p */
-        return;
-    }
 
     debug("Extent flush: (%llu) -> %llu\n", dirtytree->ext_id, nr_pages/BLKS_PER_CHK);
     do
@@ -7206,6 +7196,7 @@ static int _castle_cache_flush_pages_calculate(int exiting)
  * @param max_scan      [in/out]    Maximum number of dirtytrees to consider at
  *                                  this priority level.  Decremented for each
  *                                  dirtytree that is considered
+ * @param need_compr    [in]        Look at VIRTUAL dirtylists?
  * @param aggressive    [in]        Whether to skip flush efficiency check
  *
  * @return  *           Pointer to next dirtytree to flush, with reference taken
@@ -7213,22 +7204,31 @@ static int _castle_cache_flush_pages_calculate(int exiting)
  */
 static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_prio_t prio,
                                                                    int *max_scan,
+                                                                   int need_compr,
                                                                    int aggressive)
 {
 #define MIN_EFFICIENT_DIRTYTREE     (5*256)   /* In pages, equals 5MB                 */
     c2_ext_dirtytree_t *dirtytree = NULL;
+    struct list_head *dirtylist;
 
     spin_lock_irq(&c2_ext_dirtylists_lock);
 
+    /* If the flush thread needs to do compression, look at the list of VIRTUAL
+     * extent dirtylists, otherwise the ONDISK dirtylists. */
+    if (need_compr)
+        dirtylist = &c2_ext_virtual_dirtylists[prio];
+    else
+        dirtylist = &c2_ext_ondisk_dirtylists[prio];
+
     while (!dirtytree
             && (*max_scan)-- > 0
-            && !list_empty(&c2_ext_ondisk_dirtylists[prio]))
+            && !list_empty(dirtylist))
     {
         /* Get the first dirtytree in the list and move it to the end so that
          * next time around a different extent will be considered. */
-        dirtytree = list_first_entry(&c2_ext_ondisk_dirtylists[prio],
+        dirtytree = list_first_entry(dirtylist,
                 c2_ext_dirtytree_t, list);
-        list_move_tail(&dirtytree->list, &c2_ext_ondisk_dirtylists[prio]);
+        list_move_tail(&dirtytree->list, dirtylist);
 
         /* On non-aggressive scans try and keep IO more efficient by flushing
          * just extents with many dirty pages. */
@@ -7250,6 +7250,8 @@ static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_p
 
 /**
  * Flush specified dirtytree, tracking to_flush and in_flight.
+ *
+ * NOTE: Called only from the flush thread.
  *
  * @param dirtytree [in]        Dirtytree to flush
  * @param to_flush  [in/out]    Maximum pages to flush from dirtytree
@@ -7294,14 +7296,21 @@ static void _castle_cache_flush_dirtytree_flush(c2_ext_dirtytree_t *dirtytree,
     castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
 
     /* Flushed will be set to an approximation of pages flushed. */
-    __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
-                                start_chk * C_CHK_SIZE,         /* start offset */
-                                (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
-                               *to_flush,                       /* max_pgs      */
-                                castle_cache_flush_endio,       /* Callback     */
-                                (atomic_t *)data,               /* Callback data*/
-                                &flushed,                       /* flushed_p    */
-                                0);                             /* waitlock     */
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+        castle_cache_compress(dirtytree,                            /* dirtytree    */
+                              (end_chk + 1) * C_CHK_SIZE - 1,       /* end_off      */
+                             *to_flush,                             /* max_pgs      */
+                              0,                                    /* force        */
+                             &flushed);                             /* compressed_p */
+    else
+        __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
+                                    start_chk * C_CHK_SIZE,         /* start offset */
+                                    (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
+                                   *to_flush,                       /* max_pgs      */
+                                    castle_cache_flush_endio,       /* Callback     */
+                                    (atomic_t *)data,               /* Callback data*/
+                                   &flushed,                        /* flushed_p    */
+                                    0);                             /* waitlock     */
     *to_flush -= flushed;
 
     /* Return immediately if IOs are still flushing.  Otherwise, if all IOs have
@@ -7345,7 +7354,7 @@ err_out:
  */
 static int castle_cache_flush(void *unused)
 {
-    int exiting, to_flush, last_flush, prio, aggressive;
+    int exiting, to_flush, last_flush, prio, aggressive, need_compr;
     atomic_t in_flight = ATOMIC(0);
     c2_ext_dirtytree_t *dirtytree;
 
@@ -7369,6 +7378,11 @@ static int castle_cache_flush(void *unused)
          * without flushing any outstanding dirty data to disk. */
         if (unlikely(exiting))
             break;
+
+        /* Do compression if somebody has hinted that we need to flush a VIRTUAL
+         * cache partition. */
+        need_compr = (castle_cache_flush_part_id < NR_EXTENT_FLUSH_PRIOS
+                && castle_compr_type_get(castle_cache_flush_part_id) == C_COMPR_VIRTUAL);
 
         /* Calculate how many pages need flushing.  This function sleeps with an
          * interruptible timeout, waking up if a sufficient number of pages are
@@ -7401,7 +7415,10 @@ aggressive:
         {
             int nr_dirtytrees;
 
-            nr_dirtytrees = atomic_read(&c2_ext_ondisk_dirtylists_sizes[prio]);
+            if (need_compr)
+                nr_dirtytrees = atomic_read(&c2_ext_virtual_dirtylists_sizes[prio]);
+            else
+                nr_dirtytrees = atomic_read(&c2_ext_ondisk_dirtylists_sizes[prio]);
 
             while (likely(to_flush > 0))
             {
@@ -7412,6 +7429,7 @@ aggressive:
                  * go away while we dispatch IOs on any non-flushing c2bs. */
                 dirtytree = _castle_cache_flush_next_dirtytree_get(prio,
                                                                    &nr_dirtytrees,
+                                                                   need_compr,
                                                                    aggressive);
                 /* Try the next priority level if we didn't find a dirtytree. */
                 if (!dirtytree)
