@@ -4585,6 +4585,9 @@ out:
     /* Is c2b being added to requested partition for the first time? */
     if (!test_join_c2b_partition(c2b, part_id))
     {
+        /* DEBUG: Verify that c2b isn't in multiple for_evict partitions. */
+        c2b_evict_partition_get(c2b);
+
         /* Place c2b on CLOCK list if it is for a partition subject to CLOCK
          * eviction policy and is not already there.  Since the c2b has at
          * least one reference, we won't race with any eviction functions. */
@@ -6327,13 +6330,14 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                   int                 force,
                                   int                *compressed_p)
 {
-    c2_block_t  *v_c2b,             /* VIRTUAL c2b (compression-unit aligned and sized).        */
-                *c_c2b = NULL;      /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
-    void        *c_buf = NULL;      /* Pointer to dirtytree->next_compr_off in c_c2b->buffer.   */
-    c_byte_off_t c_rem = 0;         /* Bytes remaining in c_buf.                                */
-    int          compressed = 0;    /* Number of compressed pages (VIRTUAL).                    */
-    int          create = 1;        /* For _c2_compress_c2bs_get().                             */
-    c_byte_off_t size;              /* Transient, for calculations.                             */
+    c2_block_t     *v_c2b,          /* VIRTUAL c2b (compression-unit aligned and sized).        */
+                   *c_c2b = NULL;   /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
+    void           *c_buf = NULL;   /* Pointer to dirtytree->next_compr_off in c_c2b->buffer.   */
+    c_byte_off_t    c_rem = 0;      /* Bytes remaining in c_buf.                                */
+    int             compressed = 0; /* Number of compressed pages (VIRTUAL).                    */
+    int             create = 1;     /* For _c2_compress_c2bs_get().                             */
+    c_byte_off_t    size;           /* Transient, for calculations.                             */
+    c_ext_mask_id_t ext_mask;       /* Extent reference, held during compression.               */
 
     BUG_ON(end_off && (!force || max_pgs));
 
@@ -6342,6 +6346,12 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         mutex_lock(&dirtytree->compr_mutex);
     else if (!mutex_trylock(&dirtytree->compr_mutex))
         goto out;
+
+    /* During compression c2bs are created in both the VIRTUAL and COMPRESSED
+     * extents so take a reference to ensure they can't go away. */
+    ext_mask = castle_extent_get(dirtytree->ext_id);
+    if (MASK_ID_INVAL(ext_mask))
+        goto out_unlock;
 
     /* Sanity check stored offsets. */
     BUG_ON(dirtytree->next_compr_off < dirtytree->next_compr_mutable_off);
@@ -6456,6 +6466,9 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         _c2_compress_c2bs_put(dirtytree);
     }
 
+    castle_extent_put(ext_mask);
+
+out_unlock:
     mutex_unlock(&dirtytree->compr_mutex);
 
 out:
