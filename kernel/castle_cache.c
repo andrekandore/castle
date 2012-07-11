@@ -6326,6 +6326,8 @@ static void _c2_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
  * @param   max_pgs         [in]    0 => No maximum
  * @param   force           [in]    Whether to force compress all c2bs in dirtytree.
  * @param   compressed_p    [out]   How many VIRTUAL pages were compressed
+ *
+ * NOTE: Caller must hold a reference on dirtytree->ext_id while compressing.
  */
 static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
                                   c_byte_off_t        end_off,
@@ -6340,7 +6342,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
     int             compressed = 0; /* Number of compressed pages (VIRTUAL).                    */
     int             create = 1;     /* For _c2_compress_c2bs_get().                             */
     c_byte_off_t    size;           /* Transient, for calculations.                             */
-    c_ext_mask_id_t ext_mask;       /* Extent reference, held during compression.               */
 
     BUG_ON(end_off && (!force || max_pgs));
 
@@ -6349,12 +6350,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         mutex_lock(&dirtytree->compr_mutex);
     else if (!mutex_trylock(&dirtytree->compr_mutex))
         goto out;
-
-    /* During compression c2bs are created in both the VIRTUAL and COMPRESSED
-     * extents so take a reference to ensure they can't go away. */
-    ext_mask = castle_extent_get(dirtytree->ext_id);
-    if (MASK_ID_INVAL(ext_mask))
-        goto out_unlock;
 
     /* Sanity check stored offsets. */
     BUG_ON(dirtytree->next_compr_off < dirtytree->next_compr_mutable_off);
@@ -6469,9 +6464,6 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         _c2_compress_c2bs_put(dirtytree);
     }
 
-    castle_extent_put(ext_mask);
-
-out_unlock:
     mutex_unlock(&dirtytree->compr_mutex);
 
 out:
@@ -6487,8 +6479,15 @@ out:
 void castle_cache_dirtytree_compress(struct work_struct *work)
 {
     c2_ext_dirtytree_t *dirtytree;
+    c_ext_mask_id_t ext_mask;
 
     dirtytree = container_of(work, c2_ext_dirtytree_t, compr_work);
+
+    /* During compression c2bs are created in both the VIRTUAL and COMPRESSED
+     * extents so take a reference to ensure they can't go away. */
+    ext_mask = castle_extent_get(dirtytree->ext_id);
+    if (MASK_ID_INVAL(ext_mask))
+        goto out;
 
     castle_cache_compress(dirtytree,
                           0,            /* end_off      */
@@ -6496,6 +6495,10 @@ void castle_cache_dirtytree_compress(struct work_struct *work)
                           0,            /* force        */
                           NULL);        /* compressed_p */
 
+    /* Put extent reference. */
+    castle_extent_put(ext_mask);
+
+out:
     /* Put reference taken by c2_dirtytree_insert() potentially freeing the
      * dirtytree if the extent has already been destroyed. */
     castle_extent_dirtytree_put(dirtytree);
@@ -7245,9 +7248,10 @@ static void _castle_cache_flush_dirtytree_flush(c2_ext_dirtytree_t *dirtytree,
     c_chk_cnt_t start_chk, end_chk;
     int flushed;
 
-    /* Check if extent is already dead. This shouldn't happen as before we delete
-     * the extent, we get rid off all dirty pages. It could happen only if after last
-     * link is gone. */
+    /* During flushing we must have a reference on all extent masks.  If we took
+     * just the active mask we might flush out data outside of the active mask
+     * to disk, potentially writing to areas on the disk that are in use by
+     * another extent. */
     mask_id = castle_extent_all_masks_get(dirtytree->ext_id);
     if (MASK_ID_INVAL(mask_id))
         goto err_out;
