@@ -3267,8 +3267,9 @@ static c_ext_t * castle_extent_virtual_ext_create(c_ext_t *comp_ext,
     set_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &virt_ext->flags);
 
     /* Link these two extents. */
-    comp_ext->dirtytree->compr_ext_id = comp_ext->linked_ext_id = virt_ext->ext_id;
-    virt_ext->dirtytree->compr_ext_id = virt_ext->linked_ext_id = comp_ext->ext_id;
+    comp_ext->linked_ext_id = virt_ext->ext_id;
+    virt_ext->linked_ext_id = comp_ext->ext_id;
+    virt_ext->dirtytree->compr_ext_id = comp_ext->ext_id;
 
     return virt_ext;
 }
