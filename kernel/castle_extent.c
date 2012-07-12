@@ -3949,7 +3949,9 @@ void castle_compr_map_set(c_ext_pos_t virt_cep, c_ext_pos_t comp_cep, c_byte_off
     BUG_ON(virt_cep.offset < atomic64_read(&virt_ext->next_comp_byte));
 
     map_c2b = castle_compr_map_c2b_get(virt_ext, virt_cep.offset, WRITE, &idx);
+
     write_lock_c2b(map_c2b);
+    /* If the idx is not 0, castle_compr_map_c2b_get() would have marked the c2b up2date. */
     if (!idx)
         update_c2b(map_c2b);
 
