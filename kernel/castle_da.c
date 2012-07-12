@@ -859,6 +859,9 @@ static int castle_ct_immut_iter_has_next(c_immut_iter_t *iter)
 
 static void castle_ct_immut_iter_cancel(c_immut_iter_t *iter)
 {
+    /* Return early if the iterator isn't initialised yet. */
+    if (!iter->inited)
+        return;
     debug("Cancelling immut enumerator for ct id=%d\n", iter->tree->seq);
     if (iter->curr_c2b)
         put_c2b(iter->curr_c2b);
