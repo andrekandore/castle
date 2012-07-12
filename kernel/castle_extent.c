@@ -6289,8 +6289,8 @@ static void writeback_rebuild_chunk(writeback_info_t *writeback_info)
                 (char *)(MASK_BLK_OFFSET((unsigned long)&ext->shadow_map[chunkno*k_factor])),
                 sizeof(c_disk_chk_t)*k_factor*chunks);
 
-            dirty_c2b(map_c2b);
             update_c2b(map_c2b);
+            dirty_c2b(map_c2b);
             write_unlock_c2b(map_c2b);
             put_c2b(map_c2b);
             map_c2b = NULL;
