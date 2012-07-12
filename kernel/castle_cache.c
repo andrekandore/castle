@@ -7298,7 +7298,7 @@ static void _castle_cache_flush_dirtytree_flush(c2_ext_dirtytree_t *dirtytree,
     /* Flushed will be set to an approximation of pages flushed. */
     if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
         castle_cache_compress(dirtytree,                            /* dirtytree    */
-                              (end_chk + 1) * C_CHK_SIZE - 1,       /* end_off      */
+                              0,                                    /* end_off      */
                              *to_flush,                             /* max_pgs      */
                               0,                                    /* force        */
                              &flushed);                             /* compressed_p */
