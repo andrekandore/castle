@@ -8393,6 +8393,7 @@ static void castle_ct_large_obj_writeback(struct castle_large_obj_entry *lo,
     mstore_entry.length = lo->length;
     mstore_entry.ct_seq = ct->seq;
 
+    castle_extent_last_consistant_byte_set(lo->ext_id, lo->length);
     castle_mstore_entry_insert(store,
                                &mstore_entry,
                                sizeof(struct castle_lolist_entry));
