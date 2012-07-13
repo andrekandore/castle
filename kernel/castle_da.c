@@ -1105,8 +1105,6 @@ static int castle_ct_modlist_iter_prep_next(c_modlist_iter_t *iter)
 {
     if(!iter->inited)
     {
-        castle_ct_immut_iter_init(iter->enumerator, castle_ct_modlist_iter_next_node, iter, NULL, 0);
-
         /* Finally, sort the data so we can return sorted entries to the caller. */
         castle_ct_modlist_iter_mergesort(iter);
         iter->inited = 1;
@@ -1497,17 +1495,29 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
         return;
     }
 
-    /* Allocate immutable iterator.
-     * For iterating over source entries during sort. */
-    iter->enumerator = castle_alloc(sizeof(c_immut_iter_t));
-    iter->enumerator->merge = NULL;
-
     /* Allocate btree-entry buffer, two indexes for the buffer (for sorting)
      * and space to define ranges of sorted nodes within the index. */
     iter->node_buffer = castle_alloc(buffer_size);
     iter->src_entry_idx = castle_alloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
     iter->dst_entry_idx = castle_alloc(atomic64_read(&ct->item_count) * sizeof(struct item_idx));
     iter->ranges = castle_alloc(iter->nr_nodes * sizeof(struct entry_range));
+
+    /* Allocate and initialise the immut iterator for iterating over source entries during sort.
+       This needs to be done before any possible castle_ct_modlist_iter_free, in order to
+       guarantee that the immutable iterator state is consistant, and can be cleaned up using
+       castle_ct_immut_iter_cancel(). */
+    iter->enumerator = castle_alloc(sizeof(c_immut_iter_t));
+    if(iter->enumerator)
+    {
+        iter->enumerator->merge = NULL;
+        iter->enumerator->tree = ct;
+        castle_ct_immut_iter_init(iter->enumerator,
+                                  castle_ct_modlist_iter_next_node,
+                                  iter,
+                                  NULL,
+                                  0);
+    }
+
 
     /* Return ENOMEM if we failed any of our allocations. */
     if(!iter->enumerator || !iter->node_buffer || !iter->src_entry_idx || !iter->dst_entry_idx)
@@ -1517,10 +1527,8 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
         return;
     }
 
-    /* Initialise the immutable iterator */
-    iter->enumerator->tree = ct;
-    iter->inited = 0;
     /* Good state before we accept requests. */
+    iter->inited = 0;
     iter->err = 0;
     iter->next_item = 0;
 }
