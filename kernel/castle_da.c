@@ -8156,7 +8156,9 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     da->root_version    = INVAL_VERSION;
     rwlock_init(&da->lock);
     da->flags           = 0;
-    set_bit(CASTLE_DA_COMPR_ENABLED, &da->flags);
+// XXX: Removed temporarily, in order to get perf tests done on non-compressed DAs
+//      - Gregor
+//set_bit(CASTLE_DA_COMPR_ENABLED, &da->flags);
     da->nr_trees        = 0;
     da->inc_backup.active_barrier_ct = INVAL_TREE;
     da->inc_backup.barrier_ct = NULL;
