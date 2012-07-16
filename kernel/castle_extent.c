@@ -17,6 +17,7 @@
 #include "castle_rebuild.h"
 #include "castle_events.h"
 #include "castle_freespace.h"
+#include "castle_systemtap.h"
 #include "castle_mstore.h"
 
 /* Extent manager - Every disk reserves few chunks in the beginning of the disk to
@@ -1994,6 +1995,35 @@ static int castle_extent_writeback(c_ext_t *ext, void *store)
     return 0;
 }
 
+/**
+ * Fire a tracepoint probe for one extent @see castle_extents_enumerate().
+ */
+static int castle_extent_enumerate(c_ext_t *ext, void *seq_id_p)
+{
+    int enumeration_seq_id = (int)(long)seq_id_p;
+
+    trace_CASTLE_EXTENTS_ENUMERATION_ITEM(enumeration_seq_id, ext);
+
+    return 0;
+}
+
+/**
+ * This enumeration is done for the benefit of any external tracing tools that might
+ * be interested in the current state of the extents. This lets them build up a view
+ * of the current extents layer state by intercepting relevant tracepoints.
+ */
+static void castle_extents_enumerate(void)
+{
+    static int enumeration_seq_id = 0;
+
+    trace_CASTLE_EXTENTS_ENUMERATION_START(enumeration_seq_id);
+    __castle_extents_hash_iterate(castle_extent_enumerate,
+                                  (void *)(long)enumeration_seq_id);
+    trace_CASTLE_EXTENTS_ENUMERATION_END(enumeration_seq_id);
+    enumeration_seq_id++;
+}
+
+
 int castle_extents_writeback(void)
 {
     struct castle_extents_superblock *ext_sblk;
@@ -2007,6 +2037,9 @@ int castle_extents_writeback(void)
         return -ENOMEM;
 
     castle_extent_transaction_start();
+
+    /* For the benefit of external traces, list all extents. */
+    castle_extents_enumerate();
 
     /* Note: This is important to make sure, nothing changes in extents. And
      * writeback() relinquishes hash spin_lock() while doing writeback. */

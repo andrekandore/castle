@@ -35,6 +35,23 @@ DEFINE_TRACE(CASTLE_REQUEST_START,
                 uint32_t tag),          /**< Type of request                                    */
         TPARGS(seq_id, tag));
 
+/** Extent enumeration about to start. */
+DEFINE_TRACE(CASTLE_EXTENTS_ENUMERATION_START,
+        TPPROTO(int seq_id),
+        TPARGS(seq_id));
+
+/** An extent, enumerated as part of the seq_id enumeration. */
+struct castle_extent;
+DEFINE_TRACE(CASTLE_EXTENTS_ENUMERATION_ITEM,
+        TPPROTO(int seq_id, struct castle_extent *extent),
+        TPARGS(seq_id, extent));
+
+/** Extent enumeration about to end. */
+DEFINE_TRACE(CASTLE_EXTENTS_ENUMERATION_END,
+        TPPROTO(int seq_id),
+        TPARGS(seq_id));
+
+
 /****************
  * CACHE EVENTS *
  ****************/
