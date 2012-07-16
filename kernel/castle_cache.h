@@ -309,7 +309,6 @@ int                        castle_stats_read               (void);
 int         submit_c2b                (int rw, c2_block_t *c2b);
 int         submit_c2b_sync           (int rw, c2_block_t *c2b);
 int         submit_c2b_sync_barrier   (int rw, c2_block_t *c2b);
-int         submit_c2b_rda            (int rw, c2_block_t *c2b);
 int         submit_c2b_remap_rda      (c2_block_t *c2b, c_disk_chk_t *remap_chunks, int nr_remaps);
 int         submit_direct_io          (int rw, struct block_device *bdev, sector_t sector,
                                        struct page **iopages, int nr_pages);

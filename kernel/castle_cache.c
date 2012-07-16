@@ -2681,21 +2681,16 @@ out:
     return ret;
 }
 
-int submit_c2b_rda(int rw, c2_block_t *c2b)
-{
-    return _submit_c2b_rda(rw, c2b, NULL);
-}
-
 static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int *submitted_c2ps);
 
 /**
  * Submit asynchronous c2b I/O.
  *
- * Updates statistics before passing I/O to submit_c2b_rda().
+ * Updates statistics before passing I/O to _submit_c2b_rda().
  *
  * NOTE: IOs can also be submitted via submit_c2b_remap_rda().
  *
- * @also submit_c2b_rda()
+ * @also _submit_c2b_rda()
  * @also submit_c2b_remap_rda()
  */
 int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)

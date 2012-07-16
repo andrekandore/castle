@@ -5084,7 +5084,7 @@ typedef struct process_work_item {
  * CLEANUP. The states and sequence is is follows:
  *
  * READ: Only if the remap c2b is not uptodate.
- * WRITE: Standard 'submit_c2b_rda' to pre-write-out c2b to non-remap slaves if c2b has dirty pages.
+ * WRITE: Standard 'submit_c2b' to pre-write-out c2b to non-remap slaves if c2b has dirty pages.
  * REMAP: submit_c2b_remap_rda to write out c2b to remap slave(s).
  * CLEANUP: post-I/O cleanup - unlocking c2b, work item back on freelist etc.
  */
@@ -5921,7 +5921,7 @@ static void castle_extent_process_async_end(c2_block_t *c2b, int did_io)
                 BUG_ON(c2b_dirty(wi->c2b)); /* c2b should not be dirty. */
 
                 /*
-                 * If the c2b was entirely populated with dirty pages, then the submit_c2b_rda will
+                 * If the c2b was entirely populated with dirty pages, then the submit_c2b will
                  * have written all pages to the remap slave disk chunk, so a further
                  * submit_c2b_remap_rda is not needed.
                  */
@@ -5976,8 +5976,7 @@ void process_io_do_work(struct work_struct *work)
     switch (wi->rw) {
         case WRITE:
             /* Need to do a (non-remap) write of the c2b data. */
-            set_c2b_in_flight(wi->c2b);
-            BUG_ON(submit_c2b_rda(wi->rw, wi->c2b));
+            BUG_ON(submit_c2b(wi->rw, wi->c2b));
             /* Note: Rebuild does i/o one chunk at a time, when we change it fix it properly.  */
             BUG_ON(wi->c2b->nr_pages != BLKS_PER_CHK);
             rebuild_write_chunks += wi->ext->k_factor;
@@ -6147,9 +6146,7 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
     } else
     {
         /* The c2b was already uptodate - we don't need to read the chunk. */
-        set_c2b_in_flight(c2b);
-
-        ret = submit_c2b_rda(WRITE, c2b);
+        ret = submit_c2b(WRITE, c2b);
         if (ret)
         {
             spin_lock_irq(&io_list_lock);
