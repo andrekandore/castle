@@ -7957,7 +7957,7 @@ void castle_checkpoint_ratelimit_set(unsigned long ratelimit)
     castle_checkpoint_ratelimit = ratelimit;
 }
 
-//#ifdef CASTLE_DEBUG
+#ifdef CASTLE_DEBUG
 /**
  * Debug function that floods the USER partition with dirty META extent c2bs.
  *
@@ -7969,7 +7969,7 @@ void castle_checkpoint_ratelimit_set(unsigned long ratelimit)
  */
 static void castle_cache_dirty_user_flood(void)
 {
-#define DIRTY_EXT_CHUNKS    3000
+#define DIRTY_EXT_CHUNKS    12000
     static c_ext_id_t dirty_ext_id = INVAL_EXT_ID;
     static int q = 0;
     int i;
@@ -8005,7 +8005,7 @@ static void castle_cache_dirty_user_flood(void)
         i++;
     }
 }
-//#endif
+#endif
 
 /**
  * Checkpoints system state with given periodicity.
