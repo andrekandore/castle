@@ -8153,12 +8153,12 @@ static int castle_periodic_checkpoint(void *unused)
             goto out;
         }
 
-//#ifdef CASTLE_DEBUG
+#ifdef CASTLE_DEBUG
         /* Flood the USER partition with dirty c2bs if requested.  Note
          * that nothing gets freed up when the parameter is turned back off. */
         if (unlikely(castle_cache_dirty_user_debug))
             castle_cache_dirty_user_flood();
-//#endif
+#endif
 
         castle_checkpoint_version_inc();
 
