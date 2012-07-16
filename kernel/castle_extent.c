@@ -5780,6 +5780,8 @@ int find_next_rebuild_chunk(c_ext_t *ext, int *curr_chunk, c_chk_cnt_t end_chunk
     return 0; /* No chunks to process. */
 }
 
+static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
+                                int remap_idx);
 /*
  * Process a rebuild chunk.
  * @param ext           The extent.
@@ -5842,29 +5844,37 @@ retry:
 
     FAULT(REBUILD_FAULT2);
 
-   /*
+    /*
      * The remap_chunks array now contains all the disk chunks for this chunkno.
      */
     if (remap_idx)
     {
-        /*
-         * If a chunk has been remapped, read it in (via the old map) and write it out (using
-         * the remap_chunks array as the map).
-         */
-        ret = submit_async_remap_io(ext, chunkno, remap_chunks, remap_idx);
-
-        if (ret)
+        if (ext->ext_type == EXT_T_INTERNAL_NODES || ext->ext_type == EXT_T_T0_INTERNAL_NODES)
         {
-            switch (ret)
+            submit_sync_remap_io(ext, chunkno, remap_chunks, remap_idx);
+            castle_free(remap_chunks);
+        }
+        else
+        {
+            /*
+             * If a chunk has been remapped, read it in (via the old map) and write it out (using
+             * the remap_chunks array as the map).
+             */
+            ret = submit_async_remap_io(ext, chunkno, remap_chunks, remap_idx);
+
+            if (ret)
             {
-                case -EAGAIN:
-                    goto retry;
-                case -ENOENT:
-                    /* No free work items - wait for one to become free. */
-                    castle_free(remap_chunks);
-                    return ret;
-                default:
-                    BUG();
+                switch (ret)
+                {
+                    case -EAGAIN:
+                        goto retry;
+                    case -ENOENT:
+                        /* No free work items - wait for one to become free. */
+                        castle_free(remap_chunks);
+                        return ret;
+                    default:
+                        BUG();
+                }
             }
         }
     }
@@ -6089,6 +6099,96 @@ void init_io_work_item(process_work_item_t *wi,
     wi->remap_idx = remap_idx;
     wi->chunkno = chunkno;
     wi->has_cleanpages = 0;
+}
+
+static void castle_cache_sync_remap_io_end(c2_block_t *c2b, int did_io)
+{
+    struct completion *completion = c2b->private;
+    complete(completion);
+}
+
+static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
+                                int remap_idx)
+{
+    int has_cleanpages, i, read;
+    struct completion completion;
+    c_byte_off_t offset;
+
+    castle_printk(LOG_UNLIMITED, "Remapping [%llu:%u]\n", ext->ext_id, chunkno);
+
+    for (i=0, offset=0; i<BLKS_PER_CHK; i++, offset += C_BLK_SIZE)
+    {
+        c2_block_t *c2b = castle_cache_block_get(CEP(ext->ext_id, offset), 1, USER);
+
+        write_lock_c2b(c2b);
+
+        /* READ */
+        /*
+         * Remap c2bs are handled slightly differently in the cache, as we can
+         * have clean c2bs with dirty pages.
+         */
+        set_c2b_remap(c2b);
+        c2b->end_io = c2b->private = NULL;
+        has_cleanpages = 0;
+        if (c2b_has_clean_pages(c2b))
+            has_cleanpages = 1;
+
+        if (!c2b_uptodate(c2b))
+        {
+            read = 1;
+            /* Submit read only. Read c2b endio will schedule the write.
+             * Since this is rebuild, we call submit_c2b_sync(READ, ...) directly
+             * as we do not want to record cache hit/miss statistics. */
+            BUG_ON(submit_c2b_sync(READ, c2b));
+        }
+
+        /* WRITE */
+        /* The c2b was already uptodate - we don't need to read the chunk. */
+
+        c2b->end_io = castle_cache_sync_remap_io_end;
+        c2b->private = &completion;
+        init_completion(&completion);
+
+        BUG_ON(submit_c2b(WRITE, c2b));
+
+        wait_for_completion(&completion);
+
+        BUG_ON(c2b_eio(c2b));
+
+        /* REMAP */
+        if (has_cleanpages)
+        {
+            set_c2b_in_flight(c2b);
+
+            c2b->end_io = castle_cache_sync_remap_io_end;
+            c2b->private = &completion;
+            init_completion(&completion);
+
+            BUG_ON(submit_c2b_remap_rda(c2b, remap_chunks, remap_idx));
+
+            wait_for_completion(&completion);
+
+            BUG_ON(c2b_eio(c2b));
+        }
+
+        /* CLEANUP */
+        /* Clean up the I/O structures. */
+        write_unlock_c2b(c2b);
+
+        /*
+         * This c2b is not needed any more, and it pollutes the cache, so destroy it (if there
+         * is nobody else using it).
+         */
+        castle_cache_block_destroy(c2b);
+    }
+
+    if (read)
+        rebuild_read_chunks++;
+
+    /* */
+    rebuild_write_chunks += ext->k_factor + 1;
+
+    return 0;
 }
 
 /*
@@ -6635,6 +6735,11 @@ static int castle_extents_process(void *unused)
 
             ext->shadow_map_range.start = ext_start;
             ext->shadow_map_range.end = ext_end;
+
+            if (ext->ext_type == EXT_T_INTERNAL_NODES || ext->ext_type == EXT_T_T0_INTERNAL_NODES)
+                castle_printk(LOG_UNLIMITED, "Rebuild ITRNL extent: %llu [%u:%u]\n",
+                                              ext->ext_id,
+                                              ext_start, ext_end);
 
             /* Don't process extent chunks if it is not live, or if our mask range is empty. */
             if (((ext_end - ext_start) == 0) || !LIVE_EXTENT(ext))
