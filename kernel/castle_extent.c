@@ -5959,6 +5959,10 @@ static void castle_extent_process_async_end(c2_block_t *c2b, int did_io)
     }
 }
 
+/* Keeps track of how many chunks I/Os we are handling. */
+static int rebuild_read_chunks = 0;
+static int rebuild_write_chunks = 0;
+
 /*
  * Handle queued up extent process work out of interrupt context.
  */
@@ -5973,12 +5977,16 @@ void process_io_do_work(struct work_struct *work)
         case WRITE:
             /* Need to do a (non-remap) write of the c2b data. */
             set_c2b_in_flight(wi->c2b);
-            submit_c2b_rda(wi->rw, wi->c2b);
+            BUG_ON(submit_c2b_rda(wi->rw, wi->c2b));
+            /* Note: Rebuild does i/o one chunk at a time, when we change it fix it properly.  */
+            BUG_ON(wi->c2b->nr_pages != BLKS_PER_CHK);
+            rebuild_write_chunks += wi->ext->k_factor;
             break;
         case REMAP:
             /* Need to do a (remap) write of the c2b data. */
             set_c2b_in_flight(wi->c2b);
             submit_c2b_remap_rda(wi->c2b, wi->remap_chunks, wi->remap_idx);
+            rebuild_write_chunks += wi->remap_idx;
             break;
         case CLEANUP:
             /* Clean up the I/O structures. */
@@ -6083,10 +6091,6 @@ void init_io_work_item(process_work_item_t *wi,
     wi->chunkno = chunkno;
     wi->has_cleanpages = 0;
 }
-
-/* Keeps track of how many chunks I/Os we are handling. */
-static int rebuild_read_chunks = 0;
-int rebuild_write_chunks = 0; /* Not static - needs to be accessed from castle cache code. */
 
 /*
  * Submit async remap I/O work

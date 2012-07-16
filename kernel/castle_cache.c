@@ -2424,8 +2424,6 @@ static void castle_cache_sync_io_end(c2_block_t *c2b, int did_io)
     complete(completion);
 }
 
-extern int rebuild_write_chunks;
-
 /**
  * Generates asynchronous write I/O for disk block(s) associated with a remap c2b.
  * A remap c2b maps just one logical chunk.
@@ -2525,9 +2523,6 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
             goto out;
     }
 
-    if (c2b_remap(c2b))
-        rebuild_write_chunks+=nr_remaps;
-
     /* Drop the 1 ref. */
 
 out:
@@ -2555,7 +2550,7 @@ out:
  * @see c_io_array_page_add()
  * @see c_io_array_submit()
  */
-int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
+static int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     c2_page_t    *c2p;
     c_io_array_t *io_array;
@@ -2566,7 +2561,6 @@ int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
     c_ext_id_t    ext_id = c2b->cep.ext_id;
     uint32_t      k_factor = castle_extent_kfactor_get(ext_id);
     c_disk_chk_t  chunks[k_factor*2]; /* May need to handle I/O to shadow map chunks as well. */
-    int           chunk;
     int           array_submitted_c2ps; /* Number of c2ps in current io_array.  */
 
     debug("%s::Submitting c2b "cep_fmt_str", for %s\n",
@@ -2654,19 +2648,6 @@ int _submit_c2b_rda(int rw, c2_block_t *c2b, int *submitted_c2ps)
             if (iochunks == 0)
                 /* Complete the IO by dropping our reference, return early. */
                 goto out;
-
-            /*
-             * Keep track of remap c2b IOs (we're only handling writes).
-             * Any chunks for non-oos slaves will (probably) result into a chunk write.
-             */
-            if (c2b_remap(c2b))
-            {
-                for (chunk=0; chunk<iochunks; chunk++)
-                {
-                    if (!test_bit(CASTLE_SLAVE_OOS_BIT, &chunks[chunk].slave_id))
-                    rebuild_write_chunks++;
-                }
-            }
 
             debug("chunks[0]="disk_chk_fmt_nl, disk_chk2str(chunks[0]));
             last_chk = cur_chk;
