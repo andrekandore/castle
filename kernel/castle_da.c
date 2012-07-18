@@ -7159,7 +7159,7 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
                     active_node->btree_level = i;
                     active_node->size_blocks = castle_immut_tree_node_size_get(merge->out_tree_constr, i);
                     BUG_ON(node->size != active_node->size_blocks);
-                    castle_printk(LOG_UNLIMITED, "%s::[merge %u, btree lvl %u] copying %u blocks (node->used:%u).\n",
+                    castle_printk(LOG_DEBUG, "%s::[merge %u, btree lvl %u] copying %u blocks (node->used:%u).\n",
                             __FUNCTION__,
                             merge->id,
                             i,
@@ -7357,7 +7357,7 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
 
             if(memcmp(node, node_entry->payload, node_entry->size_blocks * C_BLK_SIZE))
             {
-                castle_printk(LOG_WARN, "%s::[merge %u, node lvl %u] fixing node discrepeancy\n",
+                castle_printk(LOG_WARN, "%s::[merge %u, node lvl %u] fixing node discrepancy\n",
                     __FUNCTION__, merge->id, i);
                 memcpy(node, node_entry->payload, node_entry->size_blocks * C_BLK_SIZE);
             }
@@ -9456,7 +9456,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
 
     current_state = atomic_read(&merge->serdes.checkpointable.state);
 
-    castle_printk(LOG_UNLIMITED, "%s::[%p] checkpointing merge %u\n",
+    castle_printk(LOG_DEBUG, "%s::[%p] checkpointing merge %u\n",
             __FUNCTION__, merge, merge->id);
 
     /* writeback internal btree nodes */
@@ -9532,7 +9532,7 @@ static void __castle_da_merge_writeback(struct castle_da_merge *merge,
                 if(!EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]) &&
                    (merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE) != 0)
                 {
-                    castle_printk(LOG_UNLIMITED, "%s::calling shrink on cep "cep_fmt_str_nl,
+                    castle_printk(LOG_DEBUG, "%s::calling shrink on cep "cep_fmt_str_nl,
                             __FUNCTION__, cep2str(merge->serdes.shrinkable_cep[i]));
                     castle_extent_shrink(merge->serdes.shrinkable_cep[i].ext_id,
                                          merge->serdes.shrinkable_cep[i].offset/C_CHK_SIZE);
@@ -9955,7 +9955,7 @@ static int castle_da_merge_deser_mstore_outtree_int_nodes_recover(void)
         btree_node = (struct castle_btree_node *)entry->payload;
         BUG_ON(btree_node->magic != BTREE_NODE_MAGIC);
 
-        castle_printk(LOG_UNLIMITED, "%s::[merge %u] recovering %u block level %u node from mstore.\n",
+        castle_printk(LOG_DEBUG, "%s::[merge %u] recovering %u block level %u node from mstore.\n",
             __FUNCTION__, merge->id, entry->size_blocks, entry->btree_level);
 
         /* set up serdes recovery package. */
@@ -10083,7 +10083,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         merge->out_tree_constr->tree = out_tree;
         BUG_ON(!out_tree);
         BUG_ON(da_id != out_tree->da->id);
-        castle_printk(LOG_UNLIMITED, "%s::deserialising merge %u on da %u with partially-"
+        castle_printk(LOG_INIT "%s::deserialising merge %u on da %u with partially-"
                                  "complete ct, seq %llu\n",
                                  __FUNCTION__, merge->id, da_id, out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
