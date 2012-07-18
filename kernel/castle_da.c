@@ -10083,7 +10083,7 @@ static int castle_da_merge_deser_mstore_outtree_recover(void)
         merge->out_tree_constr->tree = out_tree;
         BUG_ON(!out_tree);
         BUG_ON(da_id != out_tree->da->id);
-        castle_printk(LOG_INIT "%s::deserialising merge %u on da %u with partially-"
+        castle_printk(LOG_INIT, "%s::deserialising merge %u on da %u with partially-"
                                  "complete ct, seq %llu\n",
                                  __FUNCTION__, merge->id, da_id, out_tree->seq);
         set_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
