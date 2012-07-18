@@ -6918,7 +6918,7 @@ static void castle_da_versionless_merge_serialise(struct castle_da_merge *merge)
         {
             if(EXT_POS_INVAL(merge->serdes.shrinkable_cep[i]))
                 continue;
-            castle_printk(LOG_DEVEL, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
+            castle_printk(LOG_DEBUG, "%s::[merge %p id %d] scheduling shrink of "cep_fmt_str"\n",
                     __FUNCTION__, merge, merge->id, cep2str(merge->serdes.shrinkable_cep[i]));
         }
 
