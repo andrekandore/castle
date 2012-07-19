@@ -13082,9 +13082,9 @@ castle_da_in_stream_start(struct castle_double_array    *da,
     if (!constr)
         goto err_0;
 
-    /* Calculate nr_rwcts from tree_ext_size and data_ext_size. Its best-effort, anyway. */
-    nr_rwcts = max((int)max(1, (int)(tree_ext_size/MAX_DYNAMIC_TREE_SIZE)),
-            (int)(data_ext_size/MAX_DYNAMIC_DATA_SIZE));
+    /* Ignore the size of the tree; set nr_rwcts=1 so that the nougat recognizes this tree
+       as a low level tree. */
+    nr_rwcts = 1;
 
     constr->tree = castle_ct_alloc(da,
                                    1,           /* Level - 1.               */
