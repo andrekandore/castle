@@ -5339,6 +5339,32 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b)
 }
 
 /**
+ * Get the last valid chunk of an extent for prefetching.
+ *
+ * Looks at next_compr_off for COMPRESSED extents.
+ */
+c_chk_cnt_t c2_pref_last_chunk_get(c_ext_id_t ext_id, c_chk_cnt_t end_chk)
+{
+    c2_ext_dirtytree_t *dirtytree;
+    c_ext_id_t virt_ext_id;
+
+    /* If cep is COMPRESSED, get the VIRTUAL extent ID, otherwise stick with
+     * whatever extent ID we were passed.  Only VIRTUAL extent dirtytrees store
+     * a valid compr_ext_id. */
+    if (!EXT_ID_INVAL(virt_ext_id = castle_compr_virtual_ext_id_get(ext_id)))
+        ext_id = virt_ext_id;
+
+    /* Get the dirtytree and calculate end_chk based on next_compr_off. */
+    dirtytree = castle_extent_dirtytree_by_ext_id_get(ext_id);
+    BUG_ON(!dirtytree);
+    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
+        end_chk = min(end_chk, (c_chk_cnt_t) CHUNK(dirtytree->next_compr_off));
+    castle_extent_dirtytree_put(dirtytree);
+
+    return end_chk;
+}
+
+/**
  * Hardpin 'chunks' chunk-sized c2bs from cep.
  *
  * @param cep       Extent and offset to pin
@@ -5355,22 +5381,14 @@ void castle_cache_prefetch_pin(c_ext_pos_t cep,
                                c2_partition_id_t part_id,
                                int chunks)
 {
-    c2_ext_dirtytree_t *dirtytree;
     c_chk_cnt_t end_chk;
     c2_block_t *c2b;
 
     BUG_ON(cep.offset % BLKS_PER_CHK != 0);
 
-    /* Calculate the chunk we must stop prefetching at.
-     *
-     * For VIRTUAL extents we can prefetch no further than the last complete
-     * chunk, which is why we round down the next available offset. */
-    end_chk   = castle_extent_size_get(cep.ext_id);
-    dirtytree = castle_extent_dirtytree_by_ext_id_get(cep.ext_id);
-    BUG_ON(!dirtytree);
-    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
-        end_chk = min(end_chk, (c_chk_cnt_t) CHUNK(dirtytree->next_compr_off));
-    castle_extent_dirtytree_put(dirtytree);
+    /* Calculate the chunk we must stop prefetching at. */
+    end_chk = c2_pref_last_chunk_get(cep.ext_id,
+                                     CHUNK(cep.offset) + chunks);
 
     while (chunks && CHUNK(cep.offset) < end_chk)
     {
@@ -5462,23 +5480,15 @@ static void c2_pref_window_submit(c2_pref_window_t *window,
                                   c2_partition_id_t part_id,
                                   int pages)
 {
-    c2_ext_dirtytree_t *dirtytree;
     c2_block_t *c2b;
     c_chk_cnt_t end_chk;
 
     BUG_ON(CHUNK_OFFSET(cep.offset));
     BUG_ON(pages % BLKS_PER_CHK);
 
-    /* Calculate the chunk we must stop prefetching at.
-     *
-     * For VIRTUAL extents we can prefetch no further than the last complete
-     * chunk, which is why we round down the next available offset. */
-    end_chk   = castle_extent_size_get(cep.ext_id);
-    dirtytree = castle_extent_dirtytree_by_ext_id_get(cep.ext_id);
-    BUG_ON(!dirtytree);
-    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
-        end_chk = min(end_chk, (c_chk_cnt_t) CHUNK(dirtytree->next_compr_off));
-    castle_extent_dirtytree_put(dirtytree);
+    /* Calculate the chunk we must stop prefetching at. */
+    end_chk = c2_pref_last_chunk_get(cep.ext_id,
+                                     castle_extent_size_get(cep.ext_id));
 
     while (pages && CHUNK(cep.offset) < end_chk)
     {
@@ -5661,6 +5671,13 @@ static int castle_cache_prefetch_advise(c_ext_pos_t cep,
  */
 int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t part_id, int chunks)
 {
+    c_ext_id_t compr_ext_id;
+
+    /* Prefetch compressed data if given a VIRTUAL cep.ext_id. */
+    compr_ext_id = castle_compr_compressed_ext_id_get(cep.ext_id);
+    if (!EXT_ID_INVAL(compr_ext_id))
+        cep.ext_id = compr_ext_id;
+
     /* Only hardpin if it is enabled. */
     if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;
@@ -5702,10 +5719,15 @@ int castle_cache_advise(c_ext_pos_t cep, c2_advise_t advise, c2_partition_id_t p
  *
  * @also castle_cache_prefetch_unpin()
  */
-int castle_cache_advise_clear(c_ext_pos_t cep,
-                              c2_advise_t advise,
-                              int chunks)
+int castle_cache_advise_clear(c_ext_pos_t cep, c2_advise_t advise, int chunks)
 {
+    c_ext_id_t compr_ext_id;
+
+    /* Prefetch compressed data if given a VIRTUAL cep.ext_id. */
+    compr_ext_id = castle_compr_compressed_ext_id_get(cep.ext_id);
+    if (!EXT_ID_INVAL(compr_ext_id))
+        cep.ext_id = compr_ext_id;
+
     /* Only hardpin if it is enabled. */
     if (!castle_cache_allow_hardpinning)
         advise &= ~C2_ADV_HARDPIN;

@@ -502,6 +502,12 @@ static void castle_extent_prefetch(c_ext_id_t ext_id)
     c_chk_cnt_t start = 0, end = 0;
     c_ext_pos_t cep;
     c_ext_mask_id_t ext_mask;
+    c_ext_id_t compr_ext_id;
+
+    /* Prefetch compressed data if given a VIRTUAL cep.ext_id. */
+    compr_ext_id = castle_compr_compressed_ext_id_get(ext_id);
+    if (!EXT_ID_INVAL(compr_ext_id))
+        ext_id = compr_ext_id;
 
     /* Get the mask, and work out prefetch range. */
     ext_mask = castle_extent_all_masks_get(ext_id);
