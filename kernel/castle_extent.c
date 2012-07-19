@@ -5882,33 +5882,32 @@ retry:
      */
     if (remap_idx)
     {
-        if (ext->ext_type == EXT_T_INTERNAL_NODES || ext->ext_type == EXT_T_T0_INTERNAL_NODES)
-        {
-            submit_sync_remap_io(ext, chunkno, remap_chunks, remap_idx);
-            castle_free(remap_chunks);
-        }
+        int is_sync = ext->ext_type == EXT_T_INTERNAL_NODES ||
+                        ext->ext_type == EXT_T_T0_INTERNAL_NODES;
+
+        /*
+         * If a chunk has been remapped, read it in (via the old map) and write it out (using
+         * the remap_chunks array as the map).
+         */
+        if (is_sync)
+            ret = submit_sync_remap_io(ext, chunkno, remap_chunks, remap_idx);
         else
-        {
-            /*
-             * If a chunk has been remapped, read it in (via the old map) and write it out (using
-             * the remap_chunks array as the map).
-             */
             ret = submit_async_remap_io(ext, chunkno, remap_chunks, remap_idx);
 
-            if (ret)
-            {
-                switch (ret)
-                {
-                    case -EAGAIN:
-                        goto retry;
-                    case -ENOENT:
-                        /* No free work items - wait for one to become free. */
-                        castle_free(remap_chunks);
-                        return ret;
-                    default:
-                        BUG();
-                }
-            }
+        switch (ret)
+        {
+            case EXIT_SUCCESS:
+                if (is_sync)
+                    castle_free(remap_chunks);
+                break;
+            case -EAGAIN:
+                goto retry;
+            case -ENOENT:
+                /* No free work items - wait for one to become free. */
+                castle_free(remap_chunks);
+                return ret;
+            default:
+                BUG();
         }
     }
 
@@ -6143,7 +6142,7 @@ static void castle_cache_sync_remap_io_end(c2_block_t *c2b, int did_io)
 static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
                                 int remap_idx)
 {
-    int has_cleanpages, i, read;
+    int has_cleanpages, i, read, ret = 0;
     struct completion completion;
     c_byte_off_t offset;
 
@@ -6177,16 +6176,10 @@ static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_c
 
         /* WRITE */
         /* The c2b was already uptodate - we don't need to read the chunk. */
-
-        c2b->end_io = castle_cache_sync_remap_io_end;
-        c2b->private = &completion;
-        init_completion(&completion);
-
-        BUG_ON(submit_c2b(WRITE, c2b));
-
-        wait_for_completion(&completion);
-
-        BUG_ON(c2b_eio(c2b));
+        ret = submit_c2b_sync(WRITE, c2b);
+        BUG_ON(ret && ret != -EAGAIN);
+        if (ret)
+            goto c2b_cleanup;
 
         /* REMAP */
         if (has_cleanpages)
@@ -6197,13 +6190,13 @@ static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_c
             c2b->private = &completion;
             init_completion(&completion);
 
-            BUG_ON(submit_c2b_remap_rda(c2b, remap_chunks, remap_idx));
+            ret = submit_c2b_remap_rda(c2b, remap_chunks, remap_idx);
+            BUG_ON(ret && ret != -EAGAIN);
 
             wait_for_completion(&completion);
-
-            BUG_ON(c2b_eio(c2b));
         }
 
+c2b_cleanup:
         /* CLEANUP */
         /* Clean up the I/O structures. */
         write_unlock_c2b(c2b);
@@ -6213,12 +6206,14 @@ static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_c
          * is nobody else using it).
          */
         castle_cache_block_destroy(c2b);
+
+        if (ret)
+            return ret;
     }
 
     if (read)
         rebuild_read_chunks++;
 
-    /* */
     rebuild_write_chunks += ext->k_factor + 1;
 
     return 0;
