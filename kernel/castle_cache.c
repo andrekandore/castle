@@ -333,6 +333,7 @@ int                   castle_last_checkpoint_ongoing = 0;
 #define               CASTLE_CACHE_MIN_SIZE         75      /* In MB */
 #define               CASTLE_CACHE_MIN_HARDPIN_SIZE 1000    /* In MB */
 static int            castle_cache_size           = 20000;  /* In pages */
+static int            castle_cache_min_evict_pgs  = 256;    /**< Tuned in castle_cache_init().  */
 
 module_param(castle_cache_size, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
 MODULE_PARM_DESC(castle_cache_size, "Cache size");
@@ -4117,6 +4118,7 @@ static int _castle_cache_freelists_grow(int nr_pgs, c2_partition_id_t part_id)
         target_pages = (10 * castle_cache_size - 900 * free_pages) / 1000;
 
     target_pages = max(target_pages, nr_pgs);
+    target_pages = min(target_pages, castle_cache_min_evict_pgs);
 
     /* Evict blocks from overbudget partition. */
     if (castle_cache_partition[part_id].use_evict)
@@ -8259,6 +8261,8 @@ int castle_cache_init(void)
     castle_printk(LOG_INIT, "Cache size: %d pages (%ld MB).\n",
             castle_cache_size, ((unsigned long)castle_cache_size * PAGE_SIZE) >> 20);
 
+    /* Calculate minimum number of pages to evict based on cache_size. */
+    castle_cache_min_evict_pgs = max(castle_cache_min_evict_pgs, castle_cache_size / 4000);
     /* Work out the # of c2bs and c2ps, as well as the hash sizes */
     castle_cache_page_freelist_size  = castle_cache_size / PAGES_PER_C2P;
     castle_cache_page_hash_buckets   = castle_cache_page_freelist_size / 2;
