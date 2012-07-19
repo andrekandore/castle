@@ -3068,8 +3068,9 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
                                        compr_size / PAGE_SIZE,
                                        c2b_partition_id_first_normal_get(c2b));
 
-    /* construct an enlarged virtual c2b, if necessary */
-    if (virt_off + virt_size < virt_top)
+    /* construct an enlarged virtual c2b, if necessary and possible */
+    if (virt_off + virt_size < virt_top &&
+        (virt_top - virt_off) / PAGE_SIZE <= CASTLE_CACHE_VMAP_VIRT_PGS)
     {
         virt_c2b = castle_cache_block_get(c2b->cep, (virt_top - virt_off) / PAGE_SIZE,
                                           c2b_partition_id_first_get(c2b));
