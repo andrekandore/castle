@@ -2753,7 +2753,6 @@ int _submit_c2b_sync(int rw, c2_block_t *c2b, int *submitted_c2ps)
     int ret;
 
     BUG_ON((rw == READ)  &&  c2b_uptodate(c2b));
-    BUG_ON((rw == WRITE) && !c2b_dirty(c2b));
     c2b->end_io = castle_cache_sync_io_end;
     c2b->private = &completion;
     init_completion(&completion);
