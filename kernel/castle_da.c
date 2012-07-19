@@ -7902,6 +7902,7 @@ static void castle_da_inserts_enable(unsigned long data)
 
     /* Enable inserts. */
     clear_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
+    castle_printk(LOG_WARN, "Enabling inserts.\n");
 
     /* Schedule drain of pending write IOs now inserts are enabled. */
     castle_da_queues_kick(da);
@@ -7987,6 +7988,7 @@ throttle_ios:
 
     /* Disable inserts. */
     set_bit(CASTLE_DA_INSERTS_DISABLED, &da->flags);
+    castle_printk(LOG_WARN, "Disabling inserts.\n");
 
     /* If write rate is 0, don't even set timer. */
     if (!throttle_time)
@@ -8029,6 +8031,7 @@ int castle_da_insert_rate_set(c_da_t da_id, uint32_t insert_rate)
         castle_da_inserts_enable((unsigned long)da);
 
     spin_unlock(&da->rate_ctrl_lock);
+    castle_printk(LOG_USERINFO, "Capping insert rate to %u MB/s\n", insert_rate);
 
     return 0;
 }
