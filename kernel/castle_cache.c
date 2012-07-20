@@ -3031,23 +3031,25 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
 {
     c_ext_pos_t virt_cep = c2b->cep, compr_cep;
     c_byte_off_t virt_size = c2b->nr_pages * PAGE_SIZE, compr_size;
-    c_byte_off_t virt_base, virt_off, virt_top, min_virt_top, compr_base, compr_off;
+    c_byte_off_t virt_base, virt_off, virt_top, min_virt_top,
+                 compr_base, compr_off, nr_bytes_compressed;
     c_byte_off_t compr_block_size = castle_compr_block_size_get(compr_ext_id);
     c2_block_t *virt_c2b, *compr_c2b;
     int i;
 
+    nr_bytes_compressed = castle_compr_nr_bytes_compressed_get(virt_cep.ext_id);
     /* get extent mapping for the start of the c2b */
     virt_off = virt_cep.offset;
     virt_base = virt_off & ~(compr_block_size - 1); /* align to compressed block boundary */
     virt_cep.offset = virt_base;
     virt_top = virt_base + compr_block_size;
+    min_virt_top = virt_top;
     compr_size = castle_compr_map_get(virt_cep, &compr_cep);
     BUG_ON(compr_cep.ext_id != compr_ext_id);
     compr_off = compr_cep.offset;
     compr_base = compr_off & ~(PAGE_SIZE - 1); /* align to page boundary */
 
     /* get extent mapping for the end of the c2b, if necessary */
-    min_virt_top = virt_top;
     if (virt_off + virt_size > virt_top)
     {
         /* We need to be careful here not to ask for a mapping beyond the end of the
@@ -3070,9 +3072,10 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
                                        c2b_partition_id_first_normal_get(c2b));
 
     /* construct an enlarged virtual c2b, if necessary and possible */
-    if (virt_off + virt_size < virt_top &&
-        virt_top <= min_virt_top &&
-        (virt_top - virt_off) / PAGE_SIZE <= CASTLE_CACHE_VMAP_VIRT_PGS)
+    if (virt_off + virt_size < virt_top
+            && virt_top <= min_virt_top
+            && virt_top + compr_block_size < nr_bytes_compressed
+            && (virt_top - virt_off) / PAGE_SIZE <= CASTLE_CACHE_VMAP_VIRT_PGS)
     {
         virt_c2b = castle_cache_block_get(c2b->cep, (virt_top - virt_off) / PAGE_SIZE,
                                           c2b_partition_id_first_get(c2b));
