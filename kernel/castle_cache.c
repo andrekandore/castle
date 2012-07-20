@@ -4324,12 +4324,9 @@ static inline void castle_cache_page_freelist_grow(int nr_pages,
  */
 static int castle_cache_evict(void *unused)
 {
-    c2_partition_id_t part_id = 0;
-
     while (!kthread_should_stop())
     {
-        _castle_cache_freelists_grow(0, part_id);
-        part_id = (part_id + 1) % NR_CACHE_PARTITIONS;
+        _castle_cache_freelists_grow(0, c2_partition_most_overbudget_find());
         msleep_interruptible(100); /* can be woken up if necessary */
     }
 
