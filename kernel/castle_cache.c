@@ -4118,7 +4118,8 @@ static int _castle_cache_freelists_grow(int nr_pgs, c2_partition_id_t part_id)
         target_pages = (10 * castle_cache_size - 900 * free_pages) / 1000;
 
     target_pages = max(target_pages, nr_pgs);
-    target_pages = max(target_pages, castle_cache_min_evict_pgs);
+    if (nr_pgs > 0)
+        target_pages = max(target_pages, castle_cache_min_evict_pgs);
 
     /* Evict blocks from overbudget partition. */
     if (castle_cache_partition[part_id].use_evict)
