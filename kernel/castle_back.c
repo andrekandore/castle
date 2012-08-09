@@ -1569,11 +1569,9 @@ int castle_back_get_reply_continue(struct castle_object_get *get,
     if (last)
     {
         uint32_t get_value_len = op->req.get.value_len;
-        castle_user_timestamp_t u_ts = ULLONG_MAX;
+        castle_user_timestamp_t u_ts = get->cvt.user_timestamp;
         castle_resp_flags_t resp_flags = CASTLE_RESPONSE_FLAG_NONE;
 
-        if (get->flags & CASTLE_RING_FLAG_RET_TIMESTAMP)
-            u_ts = get->cvt.user_timestamp;
 
         if (CVT_TOMBSTONE(get->cvt))
         {
