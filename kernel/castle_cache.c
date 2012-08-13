@@ -7158,6 +7158,29 @@ out:
     return cache_nr_slaves;
 }
 
+#define MIN_FLUSH_SIZE  128         /**< Max flush rate: 128*128pg/s = 64MB/s       */
+
+/**
+ * Is the cache dirty enough to warrant flushing to disk?
+ *
+ * @return  1   Yes, start flushing
+ * @return  0   No
+ */
+static int _castle_cache_flush_pages_wakeup_cond(int target_dirty_pgs)
+{
+    int do_flush;
+
+    do_flush = atomic_read(&castle_cache_dirty_pgs) - target_dirty_pgs >= MIN_FLUSH_SIZE
+        || (castle_cache_flush_part_id < NR_CACHE_PARTITIONS);
+
+    /* If we are not going to flush anything now, bump the flush_seq so any
+     * threads waiting on us to do work won't block. */
+    if (likely(!do_flush))
+        atomic_inc(&castle_cache_flush_seq);
+
+    return do_flush;
+}
+
 /**
  * Calculate and return the number of pages to flush.
  *
@@ -7166,7 +7189,6 @@ out:
 static int _castle_cache_flush_pages_calculate(int exiting)
 {
 #define MIN_FLUSH_FREQ  5           /**< Min flush rate: 5*128pgs/s = 2.5MB/s       */
-#define MIN_FLUSH_SIZE  128         /**< Max flush rate: 128*128pg/s = 64MB/s       */
 #define MAX_FLUSH_SIZE  (10*256*castle_cache_flush_nr_slaves()) /**< 10MB/s/slave   */
 
     int i, target_dirty_pgs, dirty_pgs, to_flush;
@@ -7190,9 +7212,8 @@ static int _castle_cache_flush_pages_calculate(int exiting)
      * and there are a worthwhile number of pages to flush.  This limits
      * us to a minimum of 10 MIN_BATCHES/s. */
     wait_event_interruptible_timeout(castle_cache_flush_wq,
-            (atomic_read(&castle_cache_dirty_pgs) - target_dirty_pgs >= MIN_FLUSH_SIZE)
-                || (castle_cache_flush_part_id < NR_CACHE_PARTITIONS),
-            HZ/MIN_FLUSH_FREQ);
+                                     _castle_cache_flush_pages_wakeup_cond(target_dirty_pgs),
+                                     HZ/MIN_FLUSH_FREQ);
     dirty_pgs = atomic_read(&castle_cache_dirty_pgs);
 
     /* We're not exiting, calculate the number of pages to flush.
