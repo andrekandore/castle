@@ -249,10 +249,9 @@ tree_seq_t castle_da_next_ct_seq(void);
 
 static int castle_da_inc_backup_needed(struct castle_component_tree *ct);
 
-static int castle_da_incremental_backup_start(struct castle_double_array *da);
+static int castle_da_backup_start(struct castle_double_array *da);
 
-static int castle_da_incremental_backup_finish(struct castle_double_array *da,
-                                               int                         err);
+static int castle_da_backup_finish(struct castle_double_array *da, int err);
 /**********************************************************************************************/
 /* Merges */
 #define MAX_IOS             (1000) /* Arbitrary constants */
@@ -2337,12 +2336,12 @@ void castle_da_rq_iter_cancel(c_da_rq_iter_t *iter)
     castle_da_cts_proxy_put(iter->cts_proxy);
 
     /* Complete incremental backup. */
-    if (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)
+    if ITER_BACKUP(iter->flags)
     {
         if (iter->err)
-            castle_printk(LOG_USERINFO, "Incremental backup has failed\n");
+            castle_printk(LOG_USERINFO, "Backup has failed\n");
 
-        castle_da_incremental_backup_finish(iter->da, iter->err);
+        castle_da_backup_finish(iter->da, iter->err);
     }
 }
 
@@ -2491,9 +2490,9 @@ alloc_fail:
     else
         BUG();
 
-    /* If the iterator is for incremental backup, get-rid of the backup state. */
-    if (iter->flags & CASTLE_RING_FLAG_INC_BACKUP)
-        castle_da_incremental_backup_finish(iter->da, -ENOMEM);
+    /* If the iterator is for backup, get-rid of the backup state. */
+    if ITER_BACKUP(iter->flags)
+        castle_da_backup_finish(iter->da, -ENOMEM);
 
     BUG_ON(iter->relevant_cts == NULL);
     castle_check_free(iter->relevant_cts);
@@ -2742,10 +2741,10 @@ void castle_da_rq_iter_init(c_da_rq_iter_t *iter,
     BUG_ON(!da);
     BUG_ON(!castle_version_is_ancestor(da->root_version, version));
 
-    /* If the iterator is for incremental backup, setup backup. */
-    if (flags & CASTLE_RING_FLAG_INC_BACKUP)
+    /* If the iterator is for backup, setup backup. */
+    if ITER_BACKUP(flags)
     {
-        iter->err = castle_da_incremental_backup_start(da);
+        iter->err = castle_da_backup_start(da);
         if (iter->err)
             goto backup_fail;
     }
@@ -2791,8 +2790,8 @@ alloc_fail:
     iter->err = -ENOMEM;
 
     /* If we set-up backup, destroy the state. */
-    if (flags & CASTLE_RING_FLAG_INC_BACKUP)
-        castle_da_incremental_backup_finish(da, iter->err);
+    if ITER_BACKUP(iter->flags)
+        castle_da_backup_finish(da, iter->err);
 backup_fail:
     init_cb(private);
 }
@@ -13385,9 +13384,9 @@ static int castle_da_inc_backup_needed(struct castle_component_tree *ct)
 }
 
 /**
- * Set-up DA for a incremental back-up.
+ * Set-up DA for a backup.
  */
-static int castle_da_incremental_backup_start(struct castle_double_array *da)
+static int castle_da_backup_start(struct castle_double_array *da)
 {
     /* Don't allow multiple backups concurrently. */
     if (test_and_set_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags))
@@ -13414,14 +13413,14 @@ static int castle_da_incremental_backup_start(struct castle_double_array *da)
     if (da->inc_backup.barrier_ct == NULL)
     {
         castle_printk(LOG_USERINFO, "Failed to create barrier CT for backup.\n");
-        castle_da_incremental_backup_finish(da, -ENOMEM);
+        castle_da_backup_finish(da, -ENOMEM);
         return -ENOMEM;
     }
 
     return 0;
 }
 
-static int castle_da_incremental_backup_finish(struct castle_double_array *da, int err)
+static int castle_da_backup_finish(struct castle_double_array *da, int err)
 {
     /* Sanity Checks. */
     BUG_ON(!test_bit(CASTLE_DA_BACK_UP_ONGOING, &da->flags));

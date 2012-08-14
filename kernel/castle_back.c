@@ -1679,15 +1679,6 @@ static void castle_back_get(struct castle_back_op *op)
     op->get.key = op->key;
     op->get.flags = op->req.flags;
 
-    if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
-        !castle_attachment_user_timestamping_check(op->attachment))
-    {
-        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-              op->req.get.collection_id);
-        err = -EINVAL;
-        goto err2;
-    }
-
     err = castle_object_get(&op->get, op->attachment, op->cpu_index, op->seq_id);
     if (err)
         goto err2;
@@ -2039,16 +2030,6 @@ static void castle_back_iter_start(struct castle_back_op *op)
     }
     castle_back_stateful_op_attach(stateful_op, attachment);
 
-    if ((op->req.flags & CASTLE_RING_FLAG_RET_TIMESTAMP) &&
-        !castle_attachment_user_timestamping_check(attachment))
-    {
-        error("User requested timestamp return on a non-timestamped collection, id=0x%x\n",
-              op->req.get.collection_id);
-        err = -EINVAL;
-        goto err2;
-    }
-
-
     /* Special case: if both start and end_key are NULL, the RQ will be over
        entire dataset, without any hypercube filtering. */
     if (unlikely((op->req.iter_start.start_key_ptr == NULL) &&
@@ -2102,8 +2083,8 @@ static void castle_back_iter_start(struct castle_back_op *op)
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[0], __castle_back_iter_next, stateful_op);
     CASTLE_INIT_WORK_AND_TRACE(&stateful_op->work[1], __castle_back_iter_finish, stateful_op);
 
-    /* For incremental backup we want to return tombstones also. */
-    if (stateful_op->flags & CASTLE_RING_FLAG_INC_BACKUP)
+    /* For backup we want to return tombstones also. */
+    if ITER_BACKUP(stateful_op->flags)
         stateful_op->flags |= CASTLE_RING_FLAG_RET_TOMBSTONE;
 
     err = castle_object_iter_init(attachment,

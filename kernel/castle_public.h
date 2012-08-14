@@ -14,7 +14,7 @@
 extern "C" {
 #endif
 
-#define CASTLE_PROTOCOL_VERSION 47 /* last updated by TR */
+#define CASTLE_PROTOCOL_VERSION 48 /* last updated by TR */
 
 #ifdef SWIG
 #define PACKED               //override gcc intrinsics for SWIG
@@ -984,9 +984,9 @@ enum {
     CASTLE_RING_FLAG_NO_CACHE         = (1 << 2),        /**< Don't evict other data to cache this request.  */
     CASTLE_RING_FLAG_ITER_NO_VALUES   = (1 << 3),        /**< Iterator to return only keys, not values.      */
     CASTLE_RING_FLAG_ITER_GET_OOL     = (1 << 4),        /**< Return out-of-line values inline.              */
-    CASTLE_RING_FLAG_RET_TIMESTAMP    = (1 << 5),        /**< Return value timestamps.                       */
-    CASTLE_RING_FLAG_RET_TOMBSTONE    = (1 << 6),        /**< Return tombstones (instead of ENOENT).         */
-    CASTLE_RING_FLAG_INC_BACKUP       = (1 << 7),        /**< Iterator for Incremental Backup.               */
+    CASTLE_RING_FLAG_RET_TOMBSTONE    = (1 << 5),        /**< Return tombstones (instead of ENOENT).         */
+    CASTLE_RING_FLAG_INC_BACKUP       = (1 << 6),        /**< Iterator for Incremental Backup.               */
+    CASTLE_RING_FLAG_FULL_BACKUP      = (1 << 7),        /**< Full backup iterator.                          */
     /* Note: Flags are stored in 8-bit fields. Don't overflow. */
 };
 

@@ -28,6 +28,9 @@ struct castle_da_merge_mstore_package {
 #define DAM_SERDES_BTREE_NODE_MIN_LEVEL_MSTORE (1)
 #define DAM_SERDES_LEVEL_ACTIVE_TO_MSTORE(_lvl) ((_lvl) >= DAM_SERDES_BTREE_NODE_MIN_LEVEL_MSTORE)
 
+#define ITER_BACKUP(_f) ( ( (_f) & CASTLE_RING_FLAG_INC_BACKUP) || \
+        ( (_f) & CASTLE_RING_FLAG_FULL_BACKUP) )
+
 void castle_da_merge_mstore_package_deep_copy(struct castle_da_merge_mstore_package *dest,
                                               struct castle_da_merge_mstore_package *source);
 void castle_da_merge_mstore_package_check_free(struct castle_da_merge_mstore_package *m);
