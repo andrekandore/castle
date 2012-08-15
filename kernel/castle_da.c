@@ -1009,7 +1009,7 @@ atomic64_t      castle_ct_modlist_iter_byte_budget;     /**< Byte budget remaini
  */
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
-    uint32_t buffer_size;
+    uint64_t buffer_size;
 
     if(iter->enumerator)
     {
@@ -1470,7 +1470,7 @@ struct castle_iterator_type castle_ct_modlist_iter = {
 static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 {
     struct castle_component_tree *ct = iter->tree;
-    uint32_t buffer_size;
+    uint64_t buffer_size;
 
     BUG_ON(!mutex_is_locked(&castle_da_level1_merge_init));
     BUG_ON(atomic64_read(&ct->item_count) == 0);
