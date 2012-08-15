@@ -12165,7 +12165,7 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
 int castle_double_array_init(void)
 {
     int ret, cpu, i, j;
-    int min_budget, budget;
+    unsigned long min_budget, budget;
 
     ret = -ENOMEM;
 
