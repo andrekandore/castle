@@ -1665,8 +1665,9 @@ void clean_c2b(c2_block_t *c2b, int clean_c2ps, int checklocked)
     BUG_ON(checklocked && !c2b_locked(c2b));
     BUG_ON(!c2b_dirty(c2b) && (!c2b_remap(c2b)));
 
-    /* Clean all c2ps. */
-    clean_c2b_c2ps(c2b);
+    /* Clean all c2ps, if requested. */
+    if (clean_c2ps)
+        clean_c2b_c2ps(c2b);
 
     if (c2b_remap(c2b) && !c2b_dirty(c2b))
         return;
@@ -6476,6 +6477,7 @@ static void castle_cache_dirtytree_compress(c2_ext_dirtytree_t *dirtytree,
         update_c2b_maybe(c_c2b);
         _castle_cache_compress(dirtytree, v_c2b, &c_buf, &c_rem);
         write_unlock_c2b(c_c2b);
+        clean_c2b_c2ps(v_c2b);
         read_unlock_c2b(v_c2b);
 
         /* Rotate buffers, dirty compressed data. */
