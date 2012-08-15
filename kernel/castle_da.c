@@ -7691,6 +7691,8 @@ static int castle_da_l1_merge_run(void *da_p)
         if(ret)
         {
             castle_printk(LOG_WARN, "Could not start a L1 merge for DA=%d.\n", da->id);
+            /* Merge failed, wait 10s to retry. */
+            msleep_interruptible(10000);
             continue;
         }
 
