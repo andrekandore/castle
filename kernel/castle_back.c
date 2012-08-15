@@ -3783,7 +3783,7 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         extent_size_limit = stateful_op->stream_in.expected_btree_chunks;
     }
 
-    if (castle_ext_freespace_available(&da_stream->tree->data_ext_free) < blocks_needed*C_BLK_SIZE)
+    if (castle_ext_freespace_available(ext_freespace) < blocks_needed*C_BLK_SIZE)
     {
         /* Growth necessary */
 
