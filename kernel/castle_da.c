@@ -1001,7 +1001,7 @@ typedef struct castle_modlist_iterator {
 
 struct mutex    castle_da_level1_merge_init;            /**< For level 1 merges serialise entry to
                                                              castle_da_merge_init()               */
-atomic_t        castle_ct_modlist_iter_byte_budget;     /**< Byte budget remaining for in-flight
+atomic64_t      castle_ct_modlist_iter_byte_budget;     /**< Byte budget remaining for in-flight
                                                              sorted modlist iter node buffers.    */
 
 /**
@@ -1009,7 +1009,7 @@ atomic_t        castle_ct_modlist_iter_byte_budget;     /**< Byte budget remaini
  */
 static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 {
-    int buffer_size;
+    uint32_t buffer_size;
 
     if(iter->enumerator)
     {
@@ -1023,7 +1023,7 @@ static void castle_ct_modlist_iter_free(c_modlist_iter_t *iter)
 
     /* Replenish the budget - no need to serialise. */
     buffer_size = iter->nr_nodes * iter->leaf_node_size * C_BLK_SIZE;
-    atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
+    atomic64_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
 }
 
 /**
@@ -1470,7 +1470,7 @@ struct castle_iterator_type castle_ct_modlist_iter = {
 static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
 {
     struct castle_component_tree *ct = iter->tree;
-    int buffer_size;
+    uint32_t buffer_size;
 
     BUG_ON(!mutex_is_locked(&castle_da_level1_merge_init));
     BUG_ON(atomic64_read(&ct->item_count) == 0);
@@ -1486,11 +1486,11 @@ static void castle_ct_modlist_iter_init(c_modlist_iter_t *iter)
      * budget for all DAs.  Size the node buffer based on leaf nodes only. */
     buffer_size = atomic64_read(&ct->tree_ext_free.used);
     iter->nr_nodes = buffer_size / (iter->leaf_node_size * C_BLK_SIZE);
-    if (atomic_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
+    if (atomic64_sub_return(buffer_size, &castle_ct_modlist_iter_byte_budget) < 0)
     {
         castle_printk(LOG_INFO,
                 "Couldn't allocate enough bytes for _modlist_iter_init from bytes budget.\n");
-        atomic_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
+        atomic64_add(buffer_size, &castle_ct_modlist_iter_byte_budget);
         iter->err = -ENOMEM;
         return;
     }
@@ -12165,7 +12165,7 @@ void castle_double_array_queue(c_bvec_t *c_bvec)
 int castle_double_array_init(void)
 {
     int ret, cpu, i, j;
-    unsigned long min_budget, budget;
+    long min_budget, budget;
 
     ret = -ENOMEM;
 
@@ -12186,9 +12186,9 @@ int castle_double_array_init(void)
     budget     = (castle_cache_size_get() * PAGE_SIZE) / 10;        /* 10% of cache. */
     if (budget < min_budget)
         budget = min_budget;
-    castle_printk(LOG_INIT, "Allocating %luMB for modlist iter byte budget.\n",
+    castle_printk(LOG_INIT, "Allocating %ldMB for modlist iter byte budget.\n",
             budget / C_CHK_SIZE);
-    atomic_set(&castle_ct_modlist_iter_byte_budget, budget);
+    atomic64_set(&castle_ct_modlist_iter_byte_budget, budget);
     mutex_init(&castle_da_level1_merge_init);
 
     /* Populate request_cpus with CPU ids ready to handle requests. */
