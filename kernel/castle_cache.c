@@ -7176,7 +7176,10 @@ static int _castle_cache_flush_pages_wakeup_cond(int target_dirty_pgs)
     /* If we are not going to flush anything now, bump the flush_seq so any
      * threads waiting on us to do work won't block. */
     if (likely(!do_flush))
+    {
         atomic_inc(&castle_cache_flush_seq);
+        wake_up(&castle_cache_flush_wq);
+    }
 
     return do_flush;
 }
