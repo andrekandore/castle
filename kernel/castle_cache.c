@@ -4336,8 +4336,9 @@ static void castle_cache_freelists_grow(int nr_c2bs,
         debug("Could not clean the hash table. Waking flush.\n");
         castle_cache_flush_wakeup();
         /* Make sure at least one extra IO is done */
-        wait_event(castle_cache_flush_wq,
-                (atomic_read(&castle_cache_flush_seq) != flush_seq));
+        wait_event_timeout(castle_cache_flush_wq,
+                (atomic_read(&castle_cache_flush_seq) != flush_seq),
+                 HZ);
         debug("We think there is some free memory now (clean pages: %d).\n",
                 atomic_read(&castle_cache_clean_pgs));
     }
