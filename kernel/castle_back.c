@@ -3405,15 +3405,35 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
     /* Work structure to run every queued op. Every stream_in_next gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_stream_in_continue, stateful_op);
 
+    /* Stream_in_start op completed, respond to it. */
+    castle_back_reply(op, 0, stateful_op->token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+    stateful_op->curr_op = NULL;
+
+    /* Now that the stream_in structures is valid, it is safe to enable expiry
+       functions (they are designed to destroy fully initialised stream in).
+       Also, check whether the connection is still alive. It's possible it got
+       released already, but it wouldn't have destroyed our stateful op, since
+       it wasn't marked in_use yet. */
     spin_lock(&stateful_op->lock);
     stateful_op->stream_in.da_stream = constr;
     castle_back_stateful_op_enable_expire(stateful_op);
+
+    if (unlikely(conn->flags & CASTLE_BACK_CONN_DEAD_FLAG))
+    {
+        /* Expire the stateful op. This deals with cleaning up the stream_in, the attachment
+           and releases the stateful op. */
+        stateful_op->expiring = 1;
+        spin_unlock(&stateful_op->lock);
+        stateful_op->expire(stateful_op);
+
+        return;
+    }
+    else
+        /* Stream in initialised, connection live. Set in_use flag, for the benefit of
+           castle_back_release. */
+        stateful_op->in_use = 1;
     spin_unlock(&stateful_op->lock);
 
-    /* stream_in_start is the first op, but we already finished it now. */
-    stateful_op->curr_op = NULL;
-    stateful_op->in_use = 1;
-    castle_back_reply(op, 0, stateful_op->token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
     /* To prevent #3144. */
     might_resched();
     return;
@@ -4041,12 +4061,7 @@ static void castle_back_stream_in_continue(void *data)
     int abort_stream = 0;
 
     spin_lock(&stateful_op->lock);
-    stateful_op->in_use = 1;
 
-    /* Check if stateful_op is expired, if so no need to handle anymore ops. Return back. */
-    /* drops the lock if return non-zero */
-    if (castle_back_stateful_op_completed_op(stateful_op))
-        return;
     attachment = stateful_op->attachment;
 
     switch (stateful_op->curr_op->req.tag)
@@ -4086,18 +4101,19 @@ static void castle_back_stream_in_continue(void *data)
             castle_da_in_stream_complete(stateful_op->stream_in.da_stream,
                     abort_stream);
 
+            castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
+
             spin_lock(&stateful_op->attachment->sop_lock);
             list_del_init(&stateful_op->attachment_list);
             spin_unlock(&stateful_op->attachment->sop_lock);
 
             spin_lock(&stateful_op->lock);
 
-            castle_back_stateful_op_finish_all(stateful_op, 0);
+            castle_back_stateful_op_finish_all(stateful_op, -EINVAL);
             stateful_op->curr_op = NULL;
             stateful_op->attachment = NULL;
             /* Will drop stateful_op->lock. */
             castle_back_put_stateful_op(stateful_op->conn, stateful_op);
-            castle_back_reply(op, ret, token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
             castle_attachment_put(attachment);
             break;
         default:
