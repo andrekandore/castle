@@ -439,7 +439,7 @@ void castle_control_collection_reattach(c_collection_id_t  collection,
     castle_version_detach(old_version);
 
     /* Send an event to userspace. */
-    castle_events_collection_reattach(ca->col.id, new_version);
+    castle_events_collection_reattach(ca);
 
     /* Put the temporary attachment reference. */
     castle_attachment_put(ca);
@@ -461,7 +461,7 @@ void castle_control_collection_detach(c_collection_id_t  collection,
     /* Matk attachment as deleted. */
     castle_attachment_free(ca);
 
-    castle_events_collection_detach(ca->col.id);
+    castle_events_collection_detach(ca);
 
     castle_printk(LOG_USERINFO, "Deleting Collection Attachment %u (%s, %u)/%u\n",
             collection, ca->col.name, ca->version, ca->ref_cnt);
@@ -531,7 +531,7 @@ void castle_control_collection_snapshot(c_collection_id_t collection,
     }
     up_write(&ca->lock);
 
-    castle_events_collection_snapshot(ver, ca->col.id);
+    //castle_events_collection_snapshot(ver, ca->col.id);
     castle_attachment_put(ca);
 #endif
 }

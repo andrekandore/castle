@@ -551,17 +551,10 @@ static void castle_version_deleted_list_add(struct castle_version *v)
  */
 int castle_version_delete(c_ver_t version)
 {
-    struct castle_version *v, *p, *n, *d, *sybling;
+    struct castle_version *v, *p, *sybling;
     c_da_t da_id;
-    int children_first, event_vs_idx;
-    c_ver_t *event_vs;
 
     BUG_ON(!CASTLE_IN_TRANSACTION);
-
-    /* Allocate memory for event notifications before taking the spinlock. */
-    event_vs = castle_alloc(sizeof(c_ver_t) * CASTLE_VERSIONS_MAX);
-    if(!event_vs)
-        castle_printk(LOG_WARN, "Cannot allocate memory to notify of version deletions.\n");
 
     /* Lock. */
     write_lock_irq(&castle_versions_hash_lock);
@@ -570,7 +563,6 @@ int castle_version_delete(c_ver_t version)
     if(!v)
     {
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_free(event_vs);
         return -EINVAL;
     }
     da_id = v->da_id;
@@ -584,10 +576,9 @@ int castle_version_delete(c_ver_t version)
 
     if (!castle_double_array_alive(da_id))
     {
-        castle_printk(LOG_INFO, "Couldn't find DA for version %u, must be marked deletion.\n",
+        castle_printk(LOG_INFO, "Couldn't find DA for version %u, must be marked for deletion.\n",
                                 version);
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_free(event_vs);
         return -EINVAL;
     }
 
@@ -598,7 +589,6 @@ int castle_version_delete(c_ver_t version)
 
         /* Release resources. */
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_free(event_vs);
 
         castle_printk(LOG_USERINFO, "Last version is getting deleted; destroying Version Tree.\n");
 
@@ -608,7 +598,6 @@ int castle_version_delete(c_ver_t version)
     if(test_and_set_bit(CV_DELETED_BIT, &v->flags))
     {
         write_unlock_irq(&castle_versions_hash_lock);
-        castle_free(event_vs);
         return -EAGAIN;
     }
 
@@ -648,53 +637,6 @@ int castle_version_delete(c_ver_t version)
         v = p;
     }
 
-    /* Collect all live children versions, for which we need to send the notifications. */
-    d = v = __castle_versions_hash_get(version);
-    event_vs_idx = 0;
-    children_first = !test_bit(CV_LEAF_BIT, &v->flags);
-    /* Keep walking until 'v' goes back to the root of the subtree, by which time
-       children_first will not be set. */
-    while((v != d) || children_first)
-    {
-        /* Select the next node in the following order of preference:
-           If children_first is true (i.e. we are trying to walk down the tree)
-           - first child, if child is deleted
-           - next sybling
-           - parent
-           If child first is false
-           - next sybling
-           - parent
-           This walk approximates the DFS walk to assign order numbers in
-           castle_versions_process().
-         */
-        n = NULL;
-        if(children_first)
-            n = v->first_child;
-        children_first = 1;
-        if(!n)
-            n = v->next_sybling;
-        if(!n)
-        {
-            n = v->parent;
-            BUG_ON(!n);
-            BUG_ON(!test_bit(CV_DELETED_BIT, &n->flags));
-            /* Stop the walk from going down the tree, if we are going back to the parent. */
-            children_first = 0;
-        }
-        /* Next version must always exist, at the end of the walk we'll get back to 'd'. */
-        BUG_ON(!n);
-        /* Stop the walk from going down the tree, if 'n' is not deleted. */
-        if(!test_bit(CV_DELETED_BIT, &n->flags))
-        {
-            children_first = 0;
-            /* Add next version to the list of notifications. */
-            BUG_ON(event_vs_idx >= CASTLE_VERSIONS_MAX);
-            if(event_vs)
-                event_vs[event_vs_idx++] = n->version;
-        }
-        v = n;
-    }
-
     write_unlock_irq(&castle_versions_hash_lock);
 
     if (castle_versions_deleted_sysfs_hide)
@@ -707,14 +649,11 @@ int castle_version_delete(c_ver_t version)
         BUG_ON(!test_bit(CV_IN_SYSFS_BIT, &v->flags));
         castle_sysfs_version_del(v);
     }
-    for(event_vs_idx--; event_vs_idx >= 0; event_vs_idx--)
-        castle_events_version_changed(event_vs[event_vs_idx]);
-    castle_check_free(event_vs);
 
     castle_versions_count_adjust(da_id, CVH_LIVE, 0 /*add*/);
 
     /* raise event */
-    castle_events_version_delete_version(version);
+    castle_events_version_delete_version(v);
 
     return 0;
 }
@@ -825,7 +764,7 @@ int castle_version_tree_delete(c_ver_t version)
          *       version in hash table, as it has been already removed above. And, this
          *       case is properly handled in sysfs. */
         castle_sysfs_version_del(del_v);
-        castle_events_version_delete_version(del_v->version);
+        castle_events_version_delete_version(del_v);
         list_del(pos);
         castle_version_struct_mem_free(del_v);
     }
@@ -872,7 +811,7 @@ int castle_version_free(c_ver_t version)
         return -EINVAL;
 
     castle_sysfs_version_del(v);
-    castle_events_version_delete_version(version);
+    castle_events_version_delete_version(v);
 
     BUG_ON(castle_version_delete_from_tree(v, NULL) == NULL);
 
@@ -1510,7 +1449,7 @@ static int castle_version_new_create(int snap_or_clone,
     set_bit(CV_LEAF_BIT, &v->flags);
     clear_bit(CV_LEAF_BIT, &p->flags);
 
-    castle_events_version_create(version);
+    castle_events_version_create(v);
     BUG_ON(version != atomic_read(&castle_versions_last) + 1);
     atomic_inc(&castle_versions_last);
 

@@ -1,4 +1,5 @@
 #include <linux/kernel.h>
+#include <linux/kobject.h>
 #include <linux/module.h>
 #include <linux/sched.h>
 #include <asm/signal.h>
@@ -178,11 +179,8 @@ static void castle_ctrl_prog_work_do(void *unused)
             /* If the nugget_disabled parameter is set, don't send event to start nugget. */
             if (!castle_ctrl_prog_disabled)
             {
-                struct timespec uptime;
-                do_posix_clock_monotonic_gettime(&uptime);
-                castle_printk(LOG_INIT,
-                        "Registering ctrl_prog with uptime stamp %lu.\n", uptime.tv_sec);
-                castle_uevent1(CASTLE_CTRL_PROG_REGISTER, (uint64_t)uptime.tv_sec);
+                castle_printk(LOG_INIT, "Registering ctrl_prog.\n");
+                kobject_uevent(&castle.kobj, KOBJ_CHANGE);
             }
             break;
         case CTRL_PROG_PRESENT:

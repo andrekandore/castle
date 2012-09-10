@@ -49,7 +49,7 @@ static void castle_events_slave_rebuild_handle(void *unused)
         if((test_bit(CASTLE_SLAVE_EVACUATE_BIT, &cs->flags) ||
             test_bit(CASTLE_SLAVE_OOS_BIT, &cs->flags)) &&
            (!test_bit(CASTLE_SLAVE_REMAPPED_BIT, &cs->flags)))
-            castle_events_slave_rebuild(cs->uuid);
+            castle_events_slave_rebuild(cs);
     }
     rcu_read_unlock();
     /* If the sequence number changed, re-notify. */

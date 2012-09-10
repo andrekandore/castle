@@ -1,6 +1,8 @@
 #ifndef __CASTLE_EVENTS_H__
 #define __CASTLE_EVENTS_H__
 
+#include <linux/kobject.h>
+
 void castle_uevent6(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
                     uint64_t arg5, uint64_t arg6);
 void castle_uevent5(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, uint64_t arg4,
@@ -33,42 +35,34 @@ void castle_netlink_fini(void);
 
 #define CASTLE_EVENTS_SUCCESS (0)
 
-#define castle_events_slave_claim(_slave_uuid) \
-    castle_uevent2(CASTLE_CTRL_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_uuid)
+#define CASTLE_EVENTS_NOOP do { } while (0)
 
-#define castle_events_slave_changed(_slave_uuid) \
-    castle_uevent2(CASTLE_CTRL_CLAIM, CASTLE_EVENTS_SUCCESS, _slave_uuid)
+#define castle_events_slave_claim(_slave) \
+    CASTLE_EVENTS_NOOP
 
-#define castle_events_slave_rebuild(_slave_uuid) \
-    castle_uevent2(CASTLE_CTRL_SLAVE_EVACUATE, CASTLE_EVENTS_SUCCESS, _slave_uuid)
+#define castle_events_slave_changed(_slave) \
+    kobject_uevent(&(_slave)->kobj, KOBJ_CHANGE)
 
-#define castle_events_collection_attach(_id, _version_id) \
-    castle_uevent3(CASTLE_CTRL_COLLECTION_ATTACH, CASTLE_EVENTS_SUCCESS, _id, _version_id)
+#define castle_events_slave_rebuild(_slave) \
+    kobject_uevent(&(_slave)->kobj, KOBJ_OFFLINE)
 
-#define castle_events_collection_reattach(_id, _version_id) \
-    castle_uevent3(CASTLE_CTRL_COLLECTION_REATTACH, CASTLE_EVENTS_SUCCESS, _id, _version_id)
+#define castle_events_collection_attach(_collection) \
+    CASTLE_EVENTS_NOOP
 
-#define castle_events_collection_detach(_id) \
-    castle_uevent2(CASTLE_CTRL_COLLECTION_DETACH, CASTLE_EVENTS_SUCCESS, _id)
+#define castle_events_collection_reattach(_collection) \
+    kobject_uevent(&(_collection)->kobj, KOBJ_CHANGE)
 
-#define castle_events_version_create(_version_id) \
-    castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
+#define castle_events_collection_detach(_collection) \
+    CASTLE_EVENTS_NOOP
 
-/* Version changed event piggybacks on CREATE id. */
-#define castle_events_version_changed(_version_id) \
-    castle_uevent2(CASTLE_CTRL_CREATE, CASTLE_EVENTS_SUCCESS, _version_id)
+#define castle_events_version_create(_version) \
+    CASTLE_EVENTS_NOOP
 
-#define castle_events_version_delete_version(_version_id) \
-    castle_uevent2(CASTLE_CTRL_DELETE_VERSION, CASTLE_EVENTS_SUCCESS, _version_id)
-
-#define castle_events_version_clone(_version_id) \
-    castle_uevent2(CASTLE_CTRL_CLONE, CASTLE_EVENTS_SUCCESS, _version_id)
-
-#define castle_events_collection_snapshot(_version_id, _id) \
-    castle_uevent3(CASTLE_CTRL_COLLECTION_SNAPSHOT, CASTLE_EVENTS_SUCCESS, _version_id, _id)
+#define castle_events_version_delete_version(_version) \
+    CASTLE_EVENTS_NOOP
 
 #define castle_events_init() \
-    castle_uevent1(CASTLE_CTRL_INIT, CASTLE_EVENTS_SUCCESS)
+    CASTLE_EVENTS_NOOP
 
 #define castle_events_new_tree_added(_array_id, _da_id) \
     castle_uevent3(CASTLE_EVENT_NEW_TREE_ADDED, CASTLE_EVENTS_SUCCESS, _array_id, _da_id)
