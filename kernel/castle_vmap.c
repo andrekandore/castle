@@ -1,5 +1,8 @@
+#undef CONFIG_TRACK_DIRTY_PAGES
+
 #include <linux/sched.h>
 #include <linux/list.h>
+#include <asm/mmu_context.h>
 #include <asm/tlbflush.h>
 #include "castle.h"
 #include "castle_debug.h"
@@ -51,6 +54,238 @@ static void                         castle_vmap_freelist_add(castle_vmap_freelis
 static uint32_t                     castle_vmap_freelist_get(castle_vmap_freelist_t
                                                              *castle_vmap_freelist);
 static void                         castle_vmap_freelist_grow(int freelist_bucket_idx, int slots);
+
+/**********************************************************************************************
+ * Utilities for vmapping/vunmapping pages. Assumes that virtual address to map/unmap is known.
+ * Copied from RHEL mm/vmalloc.c.
+ */
+
+#ifdef CONFIG_XEN
+void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
+{
+    struct mmuext_op op;
+    op.cmd = MMUEXT_TLB_FLUSH_ALL;
+    BUG_ON(HYPERVISOR_mmuext_op(&op, 1, NULL, DOMID_SELF) < 0);
+}
+#else
+static void castle_do_flush_tlb_all(void* info)
+{
+    unsigned long cpu = smp_processor_id();
+
+    __flush_tlb_all();
+    if (read_pda(mmu_state) == TLBSTATE_LAZY) {
+        cpu_clear(cpu, read_pda(active_mm)->cpu_vm_mask);
+        load_cr3(init_mm.pgd);
+    }
+}
+
+void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
+{
+    on_each_cpu(castle_do_flush_tlb_all, NULL, 1, 1);
+}
+#endif
+
+/* The following three functions are needed under Xen by set_{pgd,pud,pmd}(), which are in
+ * turn needed by {pgd,pud,pmd}_clear(). */
+
+#ifdef CONFIG_XEN
+void xen_l2_entry_update(pmd_t *ptr, pmd_t val)
+{
+    mmu_update_t u;
+    u.ptr = virt_to_machine(ptr);
+    u.val = val.pmd;
+    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+}
+
+void xen_l3_entry_update(pud_t *ptr, pud_t val)
+{
+    mmu_update_t u;
+    u.ptr = virt_to_machine(ptr);
+    u.val = val.pud;
+    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+}
+
+void xen_l4_entry_update(pgd_t *ptr, pgd_t val)
+{
+    mmu_update_t u;
+    u.ptr = virt_to_machine(ptr);
+    u.val = val.pgd;
+    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+}
+#endif
+
+/* The following three functions are needed by {pgd,pud,pmd}_none_or_clear_bad(). */
+
+void pgd_clear_bad(pgd_t *pgd)
+{
+    pgd_ERROR(*pgd);
+    pgd_clear(pgd);
+}
+
+void pud_clear_bad(pud_t *pud)
+{
+    pud_ERROR(*pud);
+    pud_clear(pud);
+}
+
+void pmd_clear_bad(pmd_t *pmd)
+{
+    pmd_ERROR(*pmd);
+    pmd_clear(pmd);
+}
+
+static void castle_vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
+{
+    pte_t *pte;
+
+    pte = pte_offset_kernel(pmd, addr);
+    do {
+        pte_t ptent = ptep_get_and_clear(&init_mm, addr, pte);
+        WARN_ON(!pte_none(ptent) && !pte_present(ptent));
+    } while (pte++, addr += PAGE_SIZE, addr != end);
+}
+
+static inline void castle_vunmap_pmd_range(pud_t *pud, unsigned long addr, unsigned long end)
+{
+    pmd_t *pmd;
+    unsigned long next;
+
+    pmd = pmd_offset(pud, addr);
+    do {
+        next = pmd_addr_end(addr, end);
+        if (pmd_none_or_clear_bad(pmd))
+            continue;
+        castle_vunmap_pte_range(pmd, addr, next);
+    } while (pmd++, addr = next, addr != end);
+}
+
+static void castle_vunmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned long end)
+{
+    pud_t *pud;
+    unsigned long next;
+
+    pud = pud_offset(pgd, addr);
+    do {
+        next = pud_addr_end(addr, end);
+        if (pud_none_or_clear_bad(pud))
+            continue;
+        castle_vunmap_pmd_range(pud, addr, next);
+    } while (pud++, addr = next, addr != end);
+}
+
+void castle_unmap_vm_area(void *addr_p, int nr_pages)
+{
+    pgd_t *pgd;
+    unsigned long next;
+    unsigned long addr = (unsigned long) addr_p;
+    unsigned long end = addr + nr_pages * PAGE_SIZE;
+
+    BUG_ON(addr >= end);
+    pgd = pgd_offset_k(addr);
+    flush_cache_vunmap(addr, end);
+    do {
+        next = pgd_addr_end(addr, end);
+        if (pgd_none_or_clear_bad(pgd))
+            continue;
+        castle_vunmap_pud_range(pgd, addr, next);
+    } while (pgd++, addr = next, addr != end);
+    castle_flush_tlb_kernel_range((unsigned long) addr_p, end);
+}
+
+static inline pud_t *castle_pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
+{
+    BUG_ON(pgd_none(*pgd));
+    return pud_offset(pgd, address);
+}
+
+static inline pmd_t *castle_pmd_alloc(struct mm_struct *mm, pud_t *pud, unsigned long address)
+{
+    BUG_ON(pud_none(*pud));
+    return pmd_offset(pud, address);
+}
+
+static inline pte_t *castle_pte_alloc_kernel(pmd_t *pmd, unsigned long address)
+{
+    BUG_ON(!pmd_present(*pmd));
+    return pte_offset_kernel(pmd, address);
+}
+
+static int castle_vmap_pte_range(pmd_t *pmd, unsigned long addr,
+                                 unsigned long end, pgprot_t prot, struct page ***pages)
+{
+    pte_t *pte;
+
+    pte = castle_pte_alloc_kernel(pmd, addr);
+    if (!pte)
+        return -ENOMEM;
+    do {
+        struct page *page = **pages;
+        WARN_ON(!pte_none(*pte));
+        if (!page)
+            return -ENOMEM;
+        set_pte_at(&init_mm, addr, pte, mk_pte(page, prot));
+        (*pages)++;
+    } while (pte++, addr += PAGE_SIZE, addr != end);
+    return 0;
+}
+
+static inline int castle_vmap_pmd_range(pud_t *pud, unsigned long addr,
+                                        unsigned long end, pgprot_t prot, struct page ***pages)
+{
+    pmd_t *pmd;
+    unsigned long next;
+
+    pmd = castle_pmd_alloc(&init_mm, pud, addr);
+    if (!pmd)
+        return -ENOMEM;
+    do {
+        next = pmd_addr_end(addr, end);
+        if (castle_vmap_pte_range(pmd, addr, next, prot, pages))
+            return -ENOMEM;
+    } while (pmd++, addr = next, addr != end);
+    return 0;
+}
+
+static int castle_vmap_pud_range(pgd_t *pgd, unsigned long addr,
+                                 unsigned long end, pgprot_t prot, struct page ***pages)
+{
+    pud_t *pud;
+    unsigned long next;
+
+    pud = castle_pud_alloc(&init_mm, pgd, addr);
+    if (!pud)
+        return -ENOMEM;
+    do {
+        next = pud_addr_end(addr, end);
+        if (castle_vmap_pmd_range(pud, addr, next, prot, pages))
+            return -ENOMEM;
+    } while (pud++, addr = next, addr != end);
+    return 0;
+}
+
+int castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot)
+{
+    pgd_t *pgd;
+    unsigned long next;
+    unsigned long addr = (unsigned long) addr_p;
+    unsigned long end = addr + nr_pages * PAGE_SIZE;
+    int err;
+
+    BUG_ON(addr >= end);
+    pgd = pgd_offset_k(addr);
+    do {
+        next = pgd_addr_end(addr, end);
+        err = castle_vmap_pud_range(pgd, addr, next, prot, &pages);
+        if (err)
+            break;
+    } while (pgd++, addr = next, addr != end);
+    flush_cache_vmap((unsigned long) addr_p, end);
+    return err;
+}
+
+/**********************************************************************************************
+ * Castle fast vmap implementation.
+ */
 
 int castle_vmap_fast_map_init(void)
 {
