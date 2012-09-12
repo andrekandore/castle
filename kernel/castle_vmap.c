@@ -117,7 +117,7 @@ castle_HYPERVISOR_mmuext_op(struct mmuext_op *op, int count, int *success_count,
 /* Our version of flush_tlb_kernel_range(), needed by unmap_vm_area(). */
 
 #ifdef CONFIG_XEN
-void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
+static void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
 {
     struct mmuext_op op;
     op.cmd = MMUEXT_TLB_FLUSH_ALL;
@@ -135,7 +135,7 @@ static void castle_do_flush_tlb_all(void* info)
     }
 }
 
-void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
+static void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
 {
     on_each_cpu(castle_do_flush_tlb_all, NULL, 1, 1);
 }
@@ -231,7 +231,7 @@ static void castle_vunmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned lon
     } while (pud++, addr = next, addr != end);
 }
 
-void castle_unmap_vm_area(void *addr_p, int nr_pages)
+static void castle_unmap_vm_area(void *addr_p, int nr_pages)
 {
     pgd_t *pgd;
     unsigned long next;
@@ -332,7 +332,7 @@ static int castle_vmap_pud_range(pgd_t *pgd, unsigned long addr,
     return 0;
 }
 
-int castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot)
+static int castle_map_vm_area(void *addr_p, struct page **pages, int nr_pages, pgprot_t prot)
 {
     pgd_t *pgd;
     unsigned long next;
