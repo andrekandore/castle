@@ -11,6 +11,7 @@
 #include "castle_da.h"
 #include "castle_debug.h"
 #include "castle_systemtap.h"
+#include "castle_compat.h"
 
 //#define DEBUG
 #ifndef DEBUG

@@ -20,6 +20,7 @@
 #include "castle_rebuild.h"
 #include "castle_ctrl_prog.h"
 #include "castle_mstore.h"
+#include "castle_compat.h"
 
 /* Define string array for userspace error-codes. */
 #undef CASTLE_ERROR_CODE

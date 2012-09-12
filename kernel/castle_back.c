@@ -28,6 +28,7 @@
 #include "castle_da.h"
 #include "castle_freespace.h"
 #include "castle_btree.h"
+#include "castle_compat.h"
 
 DEFINE_RING_TYPES(castle, castle_request_t, castle_response_t);
 

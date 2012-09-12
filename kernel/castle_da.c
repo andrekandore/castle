@@ -21,6 +21,7 @@
 #include "castle_mstore.h"
 #include "castle_ctrl_prog.h"
 #include "castle_systemtap.h"
+#include "castle_compat.h"
 
 //#define DEBUG
 #ifndef DEBUG
