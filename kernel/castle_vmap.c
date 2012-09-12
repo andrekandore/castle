@@ -60,12 +60,68 @@ static void                         castle_vmap_freelist_grow(int freelist_bucke
  * Copied from RHEL mm/vmalloc.c.
  */
 
+/* For Xen, reimplement the hypercall macros with a hardcoded hypercall_page address. */
+
+#ifdef CONFIG_XEN
+//char hypercall_page[PAGE_SIZE]; /* this is here solely to prevent external references */
+
+#define CASTLE_HYPERCALL_STR(name)                                     \
+    "call 0xffffffff80206000 + ("STR(__HYPERVISOR_##name)" * 32)"
+
+#define _castle_hypercall3(type, name, a1, a2, a3)              \
+({                                                              \
+    long __res, __ign1, __ign2, __ign3;                         \
+    asm volatile (                                              \
+        CASTLE_HYPERCALL_STR(name)                              \
+        : "=a" (__res), "=D" (__ign1), "=S" (__ign2),           \
+        "=d" (__ign3)                                           \
+        : "1" ((long)(a1)), "2" ((long)(a2)),                   \
+        "3" ((long)(a3))                                        \
+        : "memory" );                                           \
+    (type)__res;                                                \
+})
+
+#define _castle_hypercall4(type, name, a1, a2, a3, a4)          \
+({                                                              \
+        long __res, __ign1, __ign2, __ign3;                     \
+        asm volatile (                                          \
+                "movq %7,%%r10; "                               \
+                CASTLE_HYPERCALL_STR(name)                      \
+                : "=a" (__res), "=D" (__ign1), "=S" (__ign2),   \
+                "=d" (__ign3)                                   \
+                : "1" ((long)(a1)), "2" ((long)(a2)),           \
+                "3" ((long)(a3)), "g" ((long)(a4))              \
+                : "memory", "r10" );                            \
+        (type)__res;                                            \
+})
+
+static inline int
+castle_HYPERVISOR_update_va_mapping(unsigned long va, pte_t new_val, unsigned long flags)
+{
+    return _castle_hypercall3(int, update_va_mapping, va, new_val.pte, flags);
+}
+
+static inline int
+castle_HYPERVISOR_mmu_update(mmu_update_t *req, int count, int *success_count, domid_t domid)
+{
+    return _castle_hypercall4(int, mmu_update, req, count, success_count, domid);
+}
+
+static inline int
+castle_HYPERVISOR_mmuext_op(struct mmuext_op *op, int count, int *success_count, domid_t domid)
+{
+    return _castle_hypercall4(int, mmuext_op, op, count, success_count, domid);
+}
+#endif
+
+/* Our version of flush_tlb_kernel_range(), needed by unmap_vm_area(). */
+
 #ifdef CONFIG_XEN
 void castle_flush_tlb_kernel_range(unsigned long start, unsigned long end)
 {
     struct mmuext_op op;
     op.cmd = MMUEXT_TLB_FLUSH_ALL;
-    BUG_ON(HYPERVISOR_mmuext_op(&op, 1, NULL, DOMID_SELF) < 0);
+    BUG_ON(castle_HYPERVISOR_mmuext_op(&op, 1, NULL, DOMID_SELF) < 0);
 }
 #else
 static void castle_do_flush_tlb_all(void* info)
@@ -94,7 +150,7 @@ void xen_l2_entry_update(pmd_t *ptr, pmd_t val)
     mmu_update_t u;
     u.ptr = virt_to_machine(ptr);
     u.val = val.pmd;
-    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+    BUG_ON(castle_HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
 }
 
 void xen_l3_entry_update(pud_t *ptr, pud_t val)
@@ -102,7 +158,7 @@ void xen_l3_entry_update(pud_t *ptr, pud_t val)
     mmu_update_t u;
     u.ptr = virt_to_machine(ptr);
     u.val = val.pud;
-    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+    BUG_ON(castle_HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
 }
 
 void xen_l4_entry_update(pgd_t *ptr, pgd_t val)
@@ -110,7 +166,7 @@ void xen_l4_entry_update(pgd_t *ptr, pgd_t val)
     mmu_update_t u;
     u.ptr = virt_to_machine(ptr);
     u.val = val.pgd;
-    BUG_ON(HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
+    BUG_ON(castle_HYPERVISOR_mmu_update(&u, 1, NULL, DOMID_SELF) < 0);
 }
 #endif
 
@@ -133,6 +189,8 @@ void pmd_clear_bad(pmd_t *pmd)
     pmd_ERROR(*pmd);
     pmd_clear(pmd);
 }
+
+/* Our version of unmap_vm_area() and friends. */
 
 static void castle_vunmap_pte_range(pmd_t *pmd, unsigned long addr, unsigned long end)
 {
@@ -191,6 +249,17 @@ void castle_unmap_vm_area(void *addr_p, int nr_pages)
     } while (pgd++, addr = next, addr != end);
     castle_flush_tlb_kernel_range((unsigned long) addr_p, end);
 }
+
+/* Our version of map_vm_area() and friends. */
+
+#ifdef CONFIG_XEN
+#undef set_pte_at
+#define set_pte_at(_mm,addr,ptep,pteval) do {                           \
+    if (((_mm) != current->mm && (_mm) != &init_mm) ||                  \
+        castle_HYPERVISOR_update_va_mapping((addr), (pteval), 0))       \
+            set_pte((ptep), (pteval));                                  \
+} while (0)
+#endif
 
 static inline pud_t *castle_pud_alloc(struct mm_struct *mm, pgd_t *pgd, unsigned long address)
 {
