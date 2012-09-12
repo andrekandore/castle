@@ -9,6 +9,7 @@
 #include "castle_events.h"
 #include "castle_utils.h"
 #include "castle_debug.h"
+#include "castle_compat.h"
 
 //#define DEBUG
 #ifndef DEBUG
