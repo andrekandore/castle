@@ -77,136 +77,6 @@ typedef enum {
     LAST_ENV_VAR_ID,
 } c_env_var_t;
 
-/**
- * Trace providers.
- */
-typedef enum {
-    TRACE_CACHE,            /**< Cache events        */
-    TRACE_DA,               /**< DA events           */
-    TRACE_DA_MERGE,         /**< Merge events        */
-    TRACE_DA_MERGE_UNIT,    /**< Merge unit events   */
-    TRACE_IO_SCHED,         /**< IO scheduler events */
-} c_trc_prov_t;
-
-/**
- * Event types.
- */
-typedef enum {
-    TRACE_PERCENTAGE,   /**< Percentage value       */
-    TRACE_VALUE,        /**< Value being reported   */
-    TRACE_MARK,         /**< Event has occurred     */
-    TRACE_START,        /**< Event has started      */
-    TRACE_END,          /**< Event has ended        */
-} c_trc_type_t;
-
-/**
- * Cache trace variables.
- */
-typedef enum {
-    TRACE_CACHE_CHECKPOINT_ID,            /**< Checkpoint running.                                */
-    TRACE_CACHE_DIRTY_PGS_ID,             /**< Number of c2ps on the dirtylist.                   */
-    TRACE_CACHE_CLEAN_PGS_ID,             /**< Number of c2ps on the cleanlist.                   */
-    TRACE_CACHE_FREE_PGS_ID,              /**< Number of c2ps on the freelist.                    */
-    TRACE_CACHE_RESERVE_PGS_ID,           /**< Number of c2ps on the reserve freelist.            */
-    TRACE_CACHE_CLEAN_BLKS_ID,            /**< Number of c2bs on the cleanlist.                   */
-    TRACE_CACHE_FREE_BLKS_ID,             /**< Number of c2bs on the freelist.                    */
-    TRACE_CACHE_RESERVE_BLKS_ID,          /**< Number of c2bs on the reserve freelist.            */
-    TRACE_CACHE_BLOCK_VICTIMS_ID,         /**< Number of c2bs evicted from the cache.             */
-    TRACE_CACHE_READS_ID,                 /**< Number of reads this tick.                         */
-    TRACE_CACHE_WRITES_ID,                /**< Number of writes this tick.                        */
-    TRACE_CACHE_RESERVE_PGS_USED_ID,      /**< Number of c2ps from reserve freelist in use.       */
-    TRACE_CACHE_RESERVE_BLKS_USED_ID,     /**< Number of c2bs from reserve freelist in use.       */
-    TRACE_CACHE_META_DATA_IOS_ID,         /**< IOs to meta extent                                 */
-    TRACE_CACHE_INTERNAL_NODES_IOS_ID,    /**< IOs to non T0 internal btree nodes                 */
-    TRACE_CACHE_LEAF_NODES_IOS_ID,        /**< IOs to non T0 leaf btree nodes                     */
-    TRACE_CACHE_MEDIUM_OBJECTS_IOS_ID,    /**< IOs to non T0 medium objects                       */
-    TRACE_CACHE_T0_INTERNAL_NODES_IOS_ID, /**< IOs to T0 internal btree nodes                     */
-    TRACE_CACHE_T0_LEAF_NODES_IOS_ID,     /**< IOs to T0 leaf btree nodes                         */
-    TRACE_CACHE_T0_MEDIUM_OBJECTS_IOS_ID, /**< IOs to T0 medium objects                           */
-    TRACE_CACHE_LARGE_OBJECT_IOS_ID,      /**< IOs to large objects                               */
-    TRACE_CACHE_BLOOM_FILTER_IOS_ID,      /**< IOs to bloom filters                               */
-    TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,   /**< Hits, misses T0 internal nodes                     */
-    TRACE_CACHE_BLK_T0_INT_HITS_ID,       /**< Hits  T0 internal nodes                            */
-    TRACE_CACHE_BLK_T0_INT_MISSES_ID,     /**< Misses T0 internal nodes                           */
-    TRACE_CACHE_BLK_T0_INT_HITS_PCT_ID,   /**< %Hits  T0 internal nodes                           */
-    TRACE_CACHE_BLK_T0_INT_MISSES_PCT_ID, /**< %Misses T0 internal nodes                          */
-    TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,  /**< Hits, misses T0 leaf nodes                         */
-    TRACE_CACHE_BLK_T0_LEAF_HITS_ID,      /**< Hits  T0 leaf nodes                                */
-    TRACE_CACHE_BLK_T0_LEAF_MISSES_ID,    /**< Misses T0 leaf nodes                               */
-    TRACE_CACHE_BLK_T0_LEAF_HITS_PCT_ID,  /**< %Hits  T0 leaf nodes                               */
-    TRACE_CACHE_BLK_T0_LEAF_MISSES_PCT_ID,/**< %Misses T0 leaf nodes                              */
-    TRACE_CACHE_BLK_INT_HIT_MISS_ID,      /**< Hits, misses ROCT internal nodes                   */
-    TRACE_CACHE_BLK_INT_HITS_ID,          /**< Hits  ROCT internal nodes                          */
-    TRACE_CACHE_BLK_INT_MISSES_ID,        /**< Misses ROCT internal nodes                         */
-    TRACE_CACHE_BLK_INT_HITS_PCT_ID,      /**< %Hits  ROCT internal nodes                         */
-    TRACE_CACHE_BLK_INT_MISSES_PCT_ID,    /**< %Misses ROCT internal nodes                        */
-    TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,     /**< Hits, misses ROCT leaf nodes                       */
-    TRACE_CACHE_BLK_LEAF_HITS_ID,         /**< Hits ROCT leaf nodes                               */
-    TRACE_CACHE_BLK_LEAF_MISSES_ID,       /**< Misses ROCT leaf nodes                             */
-    TRACE_CACHE_BLK_LEAF_HITS_PCT_ID,     /**< %Hits  ROCT leaf nodes                             */
-    TRACE_CACHE_BLK_LEAF_MISSES_PCT_ID,   /**< %Misses ROCT leaf nodes                            */
-    TRACE_CACHE_BLK_GET_HIT_MISS_ID,      /**< Hits, misses within the cache                      */
-    TRACE_CACHE_BLK_GET_HITS_ID,          /**< Block hits within the cache                        */
-    TRACE_CACHE_BLK_GET_MISSES_ID,        /**< Block misses within the cache                      */
-    TRACE_CACHE_BLK_GET_HITS_PCT_ID,      /**< % of block hits within the cache                   */
-    TRACE_CACHE_BLK_GET_MISSES_PCT_ID,    /**< % of block misses within the cache                 */
-    TRACE_CACHE_BLK_MERGE_HIT_MISS_ID,    /**< Hits, misses  of merges within the cache           */
-    TRACE_CACHE_BLK_MERGE_HITS_ID,        /**< Merge hits within the cache                        */
-    TRACE_CACHE_BLK_MERGE_MISSES_ID,      /**< Merge misses within the cache                      */
-    TRACE_CACHE_BLK_MERGE_HITS_PCT_ID,    /**< % of merge hits within the cache                   */
-    TRACE_CACHE_BLK_MERGE_MISSES_PCT_ID,  /**< % of merge misses within the cache                 */
-    TRACE_CACHE_BLK_NON_MERGE_HIT_MISS_ID,/**< Hits, misses  of merges within the cache           */
-    TRACE_CACHE_BLK_NON_MERGE_HITS_ID,    /**< Merge hits within the cache                        */
-    TRACE_CACHE_BLK_NON_MERGE_MISSES_ID,  /**< Merge misses within the cache                      */
-    TRACE_CACHE_BLK_NON_MERGE_HITS_PCT_ID,/**< % of merge hits within the cache                   */
-    TRACE_CACHE_BLK_NON_MERGE_MISSES_PCT_ID,/**< % of merge misses within the cache               */
-} c_trc_cache_var_t;
-
-/**
- * DA trace variables.
- */
-typedef enum {
-    TRACE_DA_INSERTS_DISABLED_ID,                   /**< Whether inserts are enabled or not.    */
-    TRACE_DA_MERGE_ID,                              /**< Merge                                  */
-    TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,            /**< Modlist iter init                      */
-    TRACE_DA_MERGE_UNIT_ID,                         /**< Merge unit                             */
-    TRACE_DA_MERGE_UNIT_CACHE_BTREE_EFFICIENCY_ID,  /**< % of up2date btree chunk-c2bs.         */
-    TRACE_DA_MERGE_UNIT_CACHE_DATA_EFFICIENCY_ID,   /**< % of up2date data chunk-c2bs.          */
-} c_trc_da_var_t;
-#define MERGE_START_FLAG    (1U<<0)
-#define MERGE_END_FLAG      (1U<<1)
-
-/**
- * IO scheduler trace variables.
- */
-typedef enum {
-    TRACE_IO_SCHED_NUM_READ_IOS_ID,          /**< Number of IOs done due to reads               */
-    TRACE_IO_SCHED_NUM_MERGE_RD_IOS_ID,      /**< Number of RD IOs done due to merges (and writes) */
-    TRACE_IO_SCHED_NUM_MERGE_WR_IOS_ID,      /**< Number of WR IOs done due to merges (and writes) */
-    TRACE_IO_SCHED_NUM_CHECKPOINT_IOS_ID,    /**< Number of IOs done due to checkpoints         */
-    TRACE_IO_SCHED_BYTES_READ_IOS_ID,        /**< Amount of IO data due to reads                */
-    TRACE_IO_SCHED_BYTES_MERGE_RD_IOS_ID,    /**< Amount of RD IO data due to merges (and writes)  */
-    TRACE_IO_SCHED_BYTES_MERGE_WR_IOS_ID,    /**< Amount of WR data due to merges (and writes)  */
-    TRACE_IO_SCHED_BYTES_CHECKPOINT_IOS_ID,  /**< Amount of IO data due to checkpoints          */
-} c_trc_io_sched_var_t;
-
-
-/* Bump the magic version byte (LSB) when c_trc_evt_t changes. */
-#define CASTLE_TRACE_MAGIC          0xCAE5E112
-typedef struct castle_trace_event {
-    uint32_t                    magic;
-    struct timeval              timestamp;
-    int                         cpu;        /**< CPU ID that allocated structure.       */
-    c_trc_prov_t                provider;   /**< Event provider                         */
-    c_trc_type_t                type;       /**< Event type                             */
-    int                         var;        /**< Event variable                         */
-    uint64_t                    v1;
-    uint64_t                    v2;
-    uint64_t                    v3;
-    uint64_t                    v4;
-    uint64_t                    v5;
-} c_trc_evt_t;
-
 typedef uint32_t c_transfer_id_t;
 typedef uint32_t c_slave_uuid_t;
 typedef uint32_t c_collection_id_t;
@@ -291,10 +161,6 @@ typedef struct castle_merge_config {
 #define CASTLE_CTRL_PROTOCOL_VERSION         21
 #define CASTLE_CTRL_FAULT                    22
 #define CASTLE_CTRL_ENVIRONMENT_SET          23
-#define CASTLE_CTRL_TRACE_SETUP              24
-#define CASTLE_CTRL_TRACE_START              25
-#define CASTLE_CTRL_TRACE_STOP               26
-#define CASTLE_CTRL_TRACE_TEARDOWN           27
 #define CASTLE_CTRL_SLAVE_EVACUATE           28
 #define CASTLE_CTRL_THREAD_PRIORITY          29
 #define CASTLE_CTRL_SLAVE_SCAN               30
@@ -437,24 +303,6 @@ typedef struct castle_control_cmd_fault {
     int       ret;             /* OUT */
 } cctrl_cmd_fault_t;
 
-typedef struct castle_control_cmd_trace_setup {
-    const char *dir_str;       /* IN  */
-    size_t      dir_len;       /* IN  */
-    int         ret;           /* OUT */
-} cctrl_cmd_trace_setup_t;
-
-typedef struct castle_control_cmd_trace_start {
-    int         ret;           /* OUT */
-} cctrl_cmd_trace_start_t;
-
-typedef struct castle_control_cmd_trace_stop {
-    int         ret;           /* OUT */
-} cctrl_cmd_trace_stop_t;
-
-typedef struct castle_control_cmd_trace_teardown {
-    int         ret;           /* OUT */
-} cctrl_cmd_trace_teardown_t;
-
 typedef struct castle_control_slave_evacuate {
     c_slave_uuid_t id;           /* IN  */
     uint32_t       force;        /* IN  */
@@ -590,11 +438,6 @@ typedef struct castle_control_ioctl {
 
         cctrl_cmd_fault_t               fault;
 
-        cctrl_cmd_trace_setup_t         trace_setup;
-        cctrl_cmd_trace_start_t         trace_start;
-        cctrl_cmd_trace_stop_t          trace_stop;
-        cctrl_cmd_trace_teardown_t      trace_teardown;
-
         cctrl_cmd_slave_evacuate_t      slave_evacuate;
         cctrl_cmd_slave_scan_t          slave_scan;
 
@@ -658,14 +501,6 @@ enum {
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_ENVIRONMENT_SET, cctrl_ioctl_t),
     CASTLE_CTRL_FAULT_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_FAULT, cctrl_ioctl_t),
-    CASTLE_CTRL_TRACE_SETUP_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_SETUP, cctrl_ioctl_t),
-    CASTLE_CTRL_TRACE_START_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_START, cctrl_ioctl_t),
-    CASTLE_CTRL_TRACE_STOP_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_STOP, cctrl_ioctl_t),
-    CASTLE_CTRL_TRACE_TEARDOWN_IOCTL =
-        _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_TRACE_TEARDOWN, cctrl_ioctl_t),
     CASTLE_CTRL_SLAVE_EVACUATE_IOCTL =
         _IOWR(CASTLE_CTRL_IOCTL_TYPE, CASTLE_CTRL_SLAVE_EVACUATE, cctrl_ioctl_t),
     CASTLE_CTRL_THREAD_PRIORITY_IOCTL =

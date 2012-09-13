@@ -21,7 +21,6 @@
 #include "castle_sysfs.h"
 #include "castle_time.h"
 #include "castle_debug.h"
-#include "castle_trace.h"
 #include "castle_events.h"
 #include "castle_back.h"
 #include "castle_extent.h"
@@ -1979,7 +1978,6 @@ static int __init castle_init(void)
     if((ret = castle_printk_init()))            goto err_out1;
     if((ret = castle_debug_init()))             goto err_out2;
     if((ret = castle_time_init()))              goto err_out3;
-    if((ret = castle_trace_init()))             goto err_out4;
     if((ret = castle_wqs_init()))               goto err_out5;
     if((ret = castle_slaves_init()))            goto err_out6;
     if((ret = castle_extents_init()))           goto err_out7;
@@ -2033,8 +2031,6 @@ err_out7:
 err_out6:
     castle_wqs_fini();
 err_out5:
-    castle_trace_fini();
-err_out4:
     castle_time_fini();
 err_out3:
     castle_debug_fini();
@@ -2084,7 +2080,6 @@ static void __exit castle_exit(void)
     castle_slaves_free();
     castle_wqs_fini();
     /* All finished, stop the debuggers */
-    castle_trace_fini();
     castle_time_fini();
     castle_debug_fini();
     castle_printk_fini();

@@ -13,7 +13,6 @@
 #include "castle_extent.h"
 #include "castle_ctrl.h"
 #include "castle_da.h"
-#include "castle_trace.h"
 #include "castle_sysfs.h"
 #include "castle_objects.h"
 #include "castle_bloom.h"
@@ -2849,13 +2848,7 @@ static void castle_da_iterator_create(struct castle_da_merge *merge,
             return;
         iter->tree = tree;
         iter->merge = merge;
-        if (tree->level == 1)
-            castle_trace_da_merge(TRACE_START, TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,
-                    merge->da->id, tree->level, 0, 0);
         castle_ct_modlist_iter_init(iter);
-        if (tree->level == 1)
-            castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_MODLIST_ITER_INIT_ID,
-                    merge->da->id, tree->level, 0, 0);
         if (iter->err)
         {
             castle_free(iter);
@@ -6395,70 +6388,6 @@ error_out:
 
     return NULL;
 }
-#ifdef CASTLE_PERF_DEBUG
-static void castle_da_merge_cache_efficiency_stats_flush_reset(struct castle_double_array *da,
-                                                               struct castle_da_merge *merge,
-                                                               uint32_t units_cnt,
-                                                           struct castle_component_tree *in_trees[])
-{
-    int i, percentage;
-    int pref_chunks_not_up2date, pref_chunks_up2date;
-
-    /* Btree (internal + leaf) cache efficiency. */
-    percentage = 0;
-    pref_chunks_not_up2date = 0;
-    pref_chunks_up2date = 0;
-    FOR_EACH_MERGE_TREE(i, merge)
-    {
-        c_ext_id_t ext_id;
-
-        ext_id = in_trees[i]->internal_ext_free.ext_id;
-
-        pref_chunks_not_up2date += castle_extent_not_up2date_get_reset(ext_id);
-        pref_chunks_up2date += castle_extent_up2date_get_reset(ext_id);
-
-        ext_id = in_trees[i]->tree_ext_free.ext_id;
-        pref_chunks_not_up2date += castle_extent_not_up2date_get_reset(ext_id);
-        pref_chunks_up2date += castle_extent_up2date_get_reset(ext_id);
-    }
-    if (pref_chunks_up2date)
-        percentage = (100 * pref_chunks_up2date) / (pref_chunks_not_up2date + pref_chunks_up2date);
-
-    if (pref_chunks_up2date || pref_chunks_not_up2date)
-        castle_trace_da_merge_unit(TRACE_VALUE,
-                                   TRACE_DA_MERGE_UNIT_CACHE_BTREE_EFFICIENCY_ID,
-                                   da->id,
-                                   merge->level,
-                                   units_cnt,
-                                   percentage);
-
-    /* Medium object cache efficiency. */
-    percentage = 0;
-    pref_chunks_not_up2date = 0;
-    pref_chunks_up2date = 0;
-    FOR_EACH_MERGE_TREE(i, merge)
-    {
-        c_ext_id_t ext_id;
-
-        ext_id = in_trees[i]->data_ext_free.ext_id;
-        if (EXT_ID_INVAL(ext_id))
-            continue;
-
-        pref_chunks_not_up2date += castle_extent_not_up2date_get_reset(ext_id);
-        pref_chunks_up2date += castle_extent_up2date_get_reset(ext_id);
-    }
-    if (pref_chunks_up2date)
-        percentage = (100 * pref_chunks_up2date) / (pref_chunks_not_up2date + pref_chunks_up2date);
-
-    if (pref_chunks_up2date || pref_chunks_not_up2date)
-        castle_trace_da_merge_unit(TRACE_VALUE,
-                                   TRACE_DA_MERGE_UNIT_CACHE_DATA_EFFICIENCY_ID,
-                                   da->id,
-                                   merge->level,
-                                   units_cnt,
-                                   percentage);
-}
-#endif /* CASTLE_PERF_DEBUG */
 
 /* Macro to compute space needed to store a single btree node of a given size _b, within a
    single castle_active_btree_node_entry struct. */
@@ -7505,11 +7434,6 @@ static int castle_da_merge_do(struct castle_da_merge *merge, uint64_t nr_bytes)
     /* Perform the merge work. Specify hardpin if merging RWCTs. */
     ret = castle_da_merge_unit_do(merge, nr_bytes, (merge->level == 1) /*hardpin*/);
 
-#ifdef CASTLE_PERF_DEBUG
-    /* Output & reset cache efficiency stats. */
-    castle_da_merge_cache_efficiency_stats_flush_reset(da, merge, 0, merge->in_trees);
-#endif
-
     /* Release the locks and return straight away if the unit of work completed
        successfully (common path), or got failed due to an exit condition. */
     if ((ret == EAGAIN) || (ret == -ESHUTDOWN))
@@ -7664,13 +7588,6 @@ static int castle_da_l1_merge_run(void *da_p)
             continue;
         }
 
-        castle_trace_da_merge(TRACE_START,
-                              TRACE_DA_MERGE_ID,
-                              da->id,
-                              level,
-                              in_trees[0]->seq,
-                              in_trees[0]->seq);
-
         /* Initialise the merge, including merged iterator and component iterators.
          * Level 1 merges have modlist component btrees that need sorting - this is
          * currently done using a malloc'd buffer.  Serialise function entry across
@@ -7717,8 +7634,6 @@ static int castle_da_l1_merge_run(void *da_p)
             msleep_interruptible(10000);
             continue;
         }
-
-        castle_trace_da_merge(TRACE_END, TRACE_DA_MERGE_ID, da->id, level, 0, 0);
 
     } while(1);
 

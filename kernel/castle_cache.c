@@ -15,7 +15,6 @@
 #include "castle_cache.h"
 #include "castle_vmap.h"
 #include "castle_debug.h"
-#include "castle_trace.h"
 #include "castle_utils.h"
 #include "castle_btree.h"
 #include "castle_extent.h"
@@ -400,10 +399,6 @@ static atomic_t                castle_cache_clean_blks;             /**< Clean b
 static atomic_t                castle_cache_dirty_pgs;              /**< Dirty pages in cache     */
 static atomic_t                castle_cache_clean_pgs;              /**< Clean pages in cache     */
 
-static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
-                                                                    /**< TODO, should be made per
-                                                                         cache partition          */
-
 /**
  * Castle cache partition states.
  */
@@ -442,23 +437,6 @@ static               LIST_HEAD(castle_cache_partitions_by_cur); /**< Partitions 
 static               LIST_HEAD(castle_cache_partitions_by_dirty); /**< Partitions sorted by dirty */
 #define C2_PART_VIRT(_part_id)  (castle_cache_partition[_part_id].virt_id == _part_id)/**< Is
                                                  specified part_id VIRTUAL?                       */
-
-/**
- * Extent-related stats.
- */
-typedef struct castle_cache_extent_stats {
-    atomic_t        hits;                   /**< c2b_get() where c2b_uptodate(c2b)                */
-    atomic_t        misses;                 /**< c2b_get() where !c2b_uptodate(c2b)               */
-    atomic_t        ios_cnt;                /**< Number of submit_c2b_io() calls                  */
-} c2_extent_stats_t;
-
-/* Merge related stats */
-static atomic_t merge_misses;
-static atomic_t merge_hits;
-static atomic_t non_merge_misses;
-static atomic_t non_merge_hits;
-
-static c2_extent_stats_t       extent_stats[EXT_T_INVALID];
 
 static atomic_t                c2_pref_active_window_size;  /**< Number of chunk-sized c2bs that are
                                                     marked as C2B_prefetch and covered by a prefetch
@@ -560,7 +538,6 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
  */
 void castle_cache_stats_print(int verbose)
 {
-    int hits, misses, count1, count2, i;
     int reads      = atomic_read(&castle_cache_read_stats);
     int writes     = atomic_read(&castle_cache_write_stats);
     int compressed = atomic_read(&castle_cache_compress_stats);
@@ -593,79 +570,6 @@ void castle_cache_stats_print(int verbose)
             castle_cache_partition[MERGE_VIRT].cur_pct,
             castle_cache_partition[MERGE_VIRT].dirty_pct);
     }
-
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_CLEAN_PGS_ID,
-                       atomic_read(&castle_cache_clean_pgs), 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_DIRTY_PGS_ID,
-                       atomic_read(&castle_cache_dirty_pgs), 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_FREE_PGS_ID,
-                       castle_cache_page_freelist_size * PAGES_PER_C2P, 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_RESERVE_PGS_ID,
-                       atomic_read(&castle_cache_page_reservelist_size), 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_CLEAN_BLKS_ID,
-                       atomic_read(&castle_cache_clean_blks), 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_FREE_BLKS_ID,
-                       castle_cache_block_freelist_size, 0);
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_RESERVE_BLKS_ID,
-                       atomic_read(&castle_cache_block_reservelist_size), 0);
-    count1 = atomic_read(&castle_cache_block_victims);
-    atomic_sub(count1, &castle_cache_block_victims);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_BLOCK_VICTIMS_ID, count1, 0);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_READS_ID, reads, 0);
-    castle_trace_cache(TRACE_VALUE, TRACE_CACHE_WRITES_ID, writes, 0);
-
-    hits = misses = 0;
-    for (i = 0; i < EXT_T_INVALID; i++)
-    {
-        count1 = atomic_read(&extent_stats[i].ios_cnt);
-        atomic_sub(count1, &extent_stats[i].ios_cnt);
-        castle_trace_cache(TRACE_VALUE, TRACE_CACHE_META_DATA_IOS_ID + i, count1, 0);
-
-        count1 = atomic_read(&extent_stats[i].hits);
-        atomic_sub(count1, &extent_stats[i].hits);
-        hits += count1;
-
-        count2 = atomic_read(&extent_stats[i].misses);
-        atomic_sub(count2, &extent_stats[i].misses);
-        misses += count2;
-
-        if(i == EXT_T_T0_INTERNAL_NODES) {
-            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_INT_HIT_MISS_ID,
-                               count1, count2);
-        }
-        else if(i == EXT_T_T0_LEAF_NODES) {
-            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_T0_LEAF_HIT_MISS_ID,
-                               count1, count2);
-        }
-        else if(i == EXT_T_INTERNAL_NODES) {
-            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_INT_HIT_MISS_ID,
-                               count1, count2);
-        }
-        else if(i == EXT_T_LEAF_NODES) {
-            castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_LEAF_HIT_MISS_ID,
-                               count1, count2);
-        }
-    }
-    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_GET_HIT_MISS_ID, hits, misses);
-    count1 = atomic_read(&merge_hits);
-    count2 = atomic_read(&merge_misses);
-    atomic_sub(count1, &merge_hits);
-    atomic_sub(count2, &merge_misses);
-    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_MERGE_HIT_MISS_ID, count1,
-                       count2);
-    count1 = atomic_read(&non_merge_hits);
-    count2 = atomic_read(&non_merge_misses);
-    atomic_sub(count1, &non_merge_hits);
-    atomic_sub(count2, &non_merge_misses);
-    castle_trace_cache(TRACE_PERCENTAGE, TRACE_CACHE_BLK_NON_MERGE_HIT_MISS_ID, count1,
-                       count2);
 }
 
 EXPORT_SYMBOL(castle_cache_stats_print);
@@ -2146,7 +2050,6 @@ int submit_c2b_io(int           rw,
     struct bio *bio;
     struct bio_info *bio_info;
     int i, j, batch;
-    c_ext_type_t ext_type;
 
 #ifdef CASTLE_DEBUG
     /* Check that we are submitting IO to the right ceps. */
@@ -2171,11 +2074,6 @@ int submit_c2b_io(int           rw,
         dcep.offset += PAGE_SIZE;
     }
 #endif
-
-    /* Update extent-type statistics */
-    ext_type = castle_extent_type_get(cep.ext_id);
-    if (ext_type != EXT_T_INVALID)
-        atomic_inc(&extent_stats[ext_type].ios_cnt);
 
     /* Work out the slave structure. */
     cs = castle_slave_find_by_uuid(disk_chk.slave_id);
@@ -3662,11 +3560,6 @@ static c2_page_t** castle_cache_page_reservelist_get(int nr_pages)
 #endif
     BUG_ON(nr_pages > 0); /* verify we got nr_pages of c2ps */
 
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_RESERVE_PGS_USED_ID,
-                       CASTLE_CACHE_RESERVELIST_QUOTA
-                            - atomic_read(&castle_cache_page_reservelist_size), 0);
-
     return c2ps;
 }
 
@@ -3717,11 +3610,6 @@ static c2_block_t *castle_cache_block_reservelist_get(void)
         atomic_dec(&castle_cache_block_reservelist_size);
     }
     spin_unlock(&castle_cache_reservelist_lock);
-
-    castle_trace_cache(TRACE_VALUE,
-                       TRACE_CACHE_RESERVE_BLKS_USED_ID,
-                       CASTLE_CACHE_RESERVELIST_QUOTA
-                           - atomic_read(&castle_cache_block_reservelist_size), 0);
 
     return c2b;
 }
@@ -4082,7 +3970,6 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
          */
 
         BUG_ON(atomic_dec_return(&castle_cache_block_clock_size) < 0);
-        atomic_inc(&castle_cache_block_victims);
         BUG_ON(!test_clear_c2b_clock(c2b));
         BUG_ON(!test_leave_c2b_partition(c2b, part_id));
 
@@ -4171,7 +4058,6 @@ static int castle_cache_evictlist_process(int target_pages, c2_partition_id_t pa
          */
 
         BUG_ON(atomic_dec_return(&evict_part->evict_size) < 0);
-        atomic_inc(&castle_cache_block_victims);
         BUG_ON(!test_clear_c2b_evictlist(c2b));
         BUG_ON(!test_leave_c2b_partition(c2b, evict_part->id));
 
@@ -4323,7 +4209,6 @@ int castle_cache_block_destroy(c2_block_t *c2b)
         return -EINVAL;
     }
     BUG_ON(atomic_dec_return(&castle_cache_clean_blks) < 0);
-    atomic_inc(&castle_cache_block_victims);
     hlist_del(&c2b->hlist);
     write_unlock(&castle_cache_block_hash_lock);
 
@@ -4595,9 +4480,6 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
                                    int nr_pages,
                                    c2_partition_id_t part_id)
 {
-#ifdef CASTLE_PERF_DEBUG
-    c_ext_type_t ext_type;
-#endif
     int grown_block_freelist = 0;   /* how many times we've grown c2b freelist  */
     int grown_page_freelist  = 0;   /* how many times we've grown c2p freelist  */
     int for_virt             = 0;   /* did caller pass a VIRTUAL partition ID?  */
@@ -4720,22 +4602,6 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
     BUG(); /* can't reach here */
 
 out:
-#ifdef CASTLE_PERF_DEBUG
-    /* Update per-extent type cache statistics. */
-    ext_type = castle_extent_type_get(c2b->cep.ext_id);
-    if (ext_type != EXT_T_INVALID)
-    {
-        if (c2b_uptodate(c2b)) {
-            atomic_add(c2b->nr_pages, &extent_stats[ext_type].hits);
-            atomic_add(c2b->nr_pages, &non_merge_hits);
-        }
-        else {
-            atomic_add(c2b->nr_pages, &extent_stats[ext_type].misses);
-            atomic_add(c2b->nr_pages, &non_merge_misses);
-        }
-    }
-#endif
-
     /*
      * c2b is now in the hash and has at least one reference taken.
      *
@@ -8363,13 +8229,11 @@ static int castle_periodic_checkpoint(void *unused)
 
         castle_printk(LOG_USERINFO, "***** Checkpoint start (period %ds) *****\n",
                       castle_checkpoint_period);
-        castle_trace_cache(TRACE_START, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
 
         /* Perform any necessary work before we take the transaction lock. */
         if (castle_mstores_pre_writeback(version) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -1;
             goto out;
         }
@@ -8401,7 +8265,6 @@ static int castle_periodic_checkpoint(void *unused)
 
         if (castle_mstores_writeback(version, castle_last_checkpoint_ongoing))
         {
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -2;
             CASTLE_TRANSACTION_END;
 
@@ -8426,7 +8289,6 @@ static int castle_periodic_checkpoint(void *unused)
         if (castle_superblocks_writeback(version))
         {
             castle_printk(LOG_WARN, "Superblock writeback failed\n");
-            castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
             ret = -3;
             goto out;
         }
@@ -8462,8 +8324,6 @@ static int castle_periodic_checkpoint(void *unused)
             version,
             USED_CHUNK(atomic64_read(&mstore_ext_free.used)),
             CHUNK(mstore_ext_free.ext_size));
-
-        castle_trace_cache(TRACE_END, TRACE_CACHE_CHECKPOINT_ID, 0, 0);
 
         castle_extents_used_bytes_check();
     } while (!castle_last_checkpoint_ongoing);
@@ -8575,16 +8435,10 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_dirty_pgs, 0);
     atomic_set(&castle_cache_clean_pgs, 0);
 
-    atomic_set(&castle_cache_block_victims, 0);
-
     atomic_set(&castle_cache_flush_seq, 0);
     atomic_set(&castle_cache_compress_seq, 0);
     atomic_set(&c2_pref_active_window_size, 0);
 
-    atomic_set(&merge_misses, 0);
-    atomic_set(&merge_hits, 0);
-    atomic_set(&non_merge_misses, 0);
-    atomic_set(&non_merge_hits, 0);
     c2_pref_total_window_size = 0;
 
     /* Decide whether we have enough memory to allow hardpinning. Note that this should

@@ -68,10 +68,6 @@ typedef struct castle_extent {
     struct castle_cache_extent_dirtytree *dirtytree; /**< Dirty c2bs in this extent.    */
     c_ext_type_t        ext_type;       /**< Type of extent.                            */
     c_da_t              da_id;          /**< DA that extent corresponds to.             */
-#ifdef CASTLE_PERF_DEBUG
-    atomic_t            pref_chunks_up2date;    /**< Chunks no prefetch required for.   */
-    atomic_t            pref_chunks_not_up2date;/**< Chunks prefetched.                 */
-#endif
 } c_ext_t;
 
 typedef struct meta_pool_entry {
@@ -134,12 +130,6 @@ uint32_t            castle_extent_map_get                   (c_ext_id_t     ext_
                                                              c_chk_t        offset,
                                                              c_disk_chk_t  *chk_maps,
                                                              int            rw, c_byte_off_t boff);
-#ifdef CASTLE_PERF_DEBUG
-void                castle_extent_not_up2date_inc           (c_ext_id_t         ext_id);
-void                castle_extent_up2date_inc               (c_ext_id_t         ext_id);
-int                 castle_extent_not_up2date_get_reset     (c_ext_id_t         ext_id);
-int                 castle_extent_up2date_get_reset         (c_ext_id_t         ext_id);
-#endif
 struct castle_cache_extent_dirtytree *castle_extent_dirtytree_by_ext_id_get (c_ext_id_t  ext_id);
 void                castle_extent_dirtytree_get   (struct castle_cache_extent_dirtytree *dirtytree);
 void                castle_extent_dirtytree_put   (struct castle_cache_extent_dirtytree *dirtytree);
