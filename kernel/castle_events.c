@@ -328,11 +328,9 @@ void castle_uevent6(uint16_t cmd, uint64_t arg1, uint64_t arg2, uint64_t arg3, u
     debug("Sending the event. CMD=%d ARG1=0x%Lx ARG2=0x%Lx ARG3=0x%Lx ARG4=0x%Lx ARG5=0x%Lx ARG6=0x%Lx\n",
             cmd, arg1, arg2, arg3, arg4, arg5, arg6);
 
-    if((cmd >= CASTLE_CTRL_PROG_EVENT_RANGE_START) &&
-       (cmd <= CASTLE_CTRL_PROG_EVENT_RANGE_END))
-        err = castle_uevent(env);
-    else
-        err = kobject_uevent_env(&castle.kobj, KOBJ_CHANGE, env->envp);
+    BUG_ON(cmd < CASTLE_CTRL_PROG_EVENT_RANGE_START ||
+           cmd > CASTLE_CTRL_PROG_EVENT_RANGE_END);
+    err = castle_uevent(env);
 
     if (err) debug("Error sending event err=%d\n", err);
 
