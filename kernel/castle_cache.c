@@ -1083,11 +1083,6 @@ static USED int c2p_read_locked(c2_page_t *c2p)
 }
 #endif
 
-static USED int c2p_locked(c2_page_t *c2p)
-{
-    return rwsem_is_locked(&c2p->lock);
-}
-
 /**
  * Downgrade a c2p write-lock to read-lock.
  */
