@@ -65,7 +65,7 @@ static void                         castle_vmap_freelist_grow(int freelist_bucke
 #ifdef CONFIG_XEN
 //char hypercall_page[PAGE_SIZE]; /* this is here solely to prevent external references */
 
-#define CASTLE_HYPERCALL_STR(name)                                     \
+#define CASTLE_HYPERCALL_STR(name)                              \
     "call 0xffffffff80206000 + ("STR(__HYPERVISOR_##name)" * 32)"
 
 #define _castle_hypercall3(type, name, a1, a2, a3)              \
