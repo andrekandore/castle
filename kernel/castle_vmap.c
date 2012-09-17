@@ -212,7 +212,7 @@ static inline void castle_vunmap_pmd_range(pud_t *pud, unsigned long addr, unsig
     do {
         next = pmd_addr_end(addr, end);
         if (pmd_none_or_clear_bad(pmd))
-            continue;
+            BUG();
         castle_vunmap_pte_range(pmd, addr, next);
     } while (pmd++, addr = next, addr != end);
 }
@@ -226,7 +226,7 @@ static void castle_vunmap_pud_range(pgd_t *pgd, unsigned long addr, unsigned lon
     do {
         next = pud_addr_end(addr, end);
         if (pud_none_or_clear_bad(pud))
-            continue;
+            BUG();
         castle_vunmap_pmd_range(pud, addr, next);
     } while (pud++, addr = next, addr != end);
 }
@@ -244,7 +244,7 @@ static void castle_unmap_vm_area(void *addr_p, int nr_pages)
     do {
         next = pgd_addr_end(addr, end);
         if (pgd_none_or_clear_bad(pgd))
-            continue;
+            BUG();
         castle_vunmap_pud_range(pgd, addr, next);
     } while (pgd++, addr = next, addr != end);
     castle_flush_tlb_kernel_range((unsigned long) addr_p, end);
