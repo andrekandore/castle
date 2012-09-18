@@ -110,7 +110,7 @@ struct castle_cache_block {
  * Castle cache partition descriptors.
  */
 typedef enum {
-    INVAL_CACHE_PARTITION = -1,     /**< Invalid cache partition                                */
+    INVAL_PART_ID = -1,             /**< Invalid cache partition                                */
 
     /*
      * On-disk-extent cache partitions (e.g. COMPRESSED and NORMAL).
@@ -326,7 +326,7 @@ c2_block_t* castle_cache_block_get    (c_ext_pos_t cep,
 void        castle_cache_block_hardpin  (c2_block_t *c2b);
 void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
-void        castle_cache_dirtytree_compress(struct work_struct *work);
+void        castle_cache_dirtytree_async_compress(struct work_struct *work);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 int                        castle_checkpoint_init          (void);

@@ -403,9 +403,6 @@ static atomic_t                castle_cache_clean_pgs;              /**< Clean p
 static atomic_t                castle_cache_block_victims;          /**< Clean blocks evicted     */
                                                                     /**< TODO, should be made per
                                                                          cache partition          */
-static c_ext_id_t              castle_cache_flush_hint_ext_id = 0;  /**< Extent ID to flush next  */
-static c2_partition_id_t       castle_cache_flush_part_id = NR_CACHE_PARTITIONS; /**< Cache
-                                                                         partition to flush       */
 
 /**
  * Castle cache partition states.
@@ -414,13 +411,20 @@ typedef struct castle_cache_partition {
     uint8_t             id;                 /**< Cache partition ID                               */
     uint8_t             virt_id;            /**< Associated partition for VIRTUAL data            */
     uint8_t             normal_id;          /**< Associated partition for NORMAL/COMPRESSED data  */
-    struct list_head    sort;               /**< Position on castle_cache_partitions              */
+    struct list_head    sort_cur;           /**< Position on castle_cache_partitions_by_cur       */
+    struct list_head    sort_dirty;         /**< Position on castle_cache_partitions_by_dirty     */
 
     atomic_t            max_pgs;            /**< Total pages available for this partition         */
     atomic_t            cur_pgs;            /**< Current pages used by this partition             */
     atomic_t            dirty_pgs;          /**< cur_pgs which are c2b_dirty()                    */
-    uint16_t            use_pct;            /**< cur_pgs as a percentage of max_pgs               */
-    uint16_t            dirty_pct;          /**< dirty_pgs as a percentage of cur_pgs             */
+    uint16_t            cur_pct;            /**< cur_pgs as a percentage of max_pgs               */
+    uint8_t             dirty_pct;          /**< dirty_pgs as a percentage of cur_pgs             */
+
+    uint8_t             dirty_pct_lo_thresh;/**< Dirty percentage flush thread should actively
+                                                 try and maintain (background flushing may take
+                                                 this lower).                                     */
+    uint8_t             dirty_pct_hi_thresh;/**< Dirty percentage above which allocations from
+                                                 partition will be blocked.                       */
 
     uint8_t             use_max;            /**< Should max_pgs be enforced for allocations from
                                                  the block/page freelists (ignored for hash gets) */
@@ -434,7 +438,10 @@ typedef struct castle_cache_partition {
 
 static c2_partition_t          castle_cache_partition[NR_CACHE_PARTITIONS]; /**< Cache partitions */
 static         DEFINE_SPINLOCK(castle_cache_partitions_lock);   /**< castle_cache_partitions lock */
-static               LIST_HEAD(castle_cache_partitions);        /**< Partitions sorted by use_pct */
+static               LIST_HEAD(castle_cache_partitions_by_cur); /**< Partitions sorted by cur_pct */
+static               LIST_HEAD(castle_cache_partitions_by_dirty); /**< Partitions sorted by dirty */
+#define C2_PART_VIRT(_part_id)  (castle_cache_partition[_part_id].virt_id == _part_id)/**< Is
+                                                 specified part_id VIRTUAL?                       */
 
 /**
  * Extent-related stats.
@@ -471,10 +478,10 @@ static               LIST_HEAD(castle_cache_block_freelist);    /**< Freelist of
  * for the exclusive use of the flush thread.  The flush thread gets single c2p
  * c2bs and these are used to perform I/O on the metaextent to allow RDA chunk
  * disks+disk offsets to be looked up. */
-#define CASTLE_CACHE_FLUSH_BATCH_SIZE       64      /**< Number of c2bs to flush per batch.       */
-#define CASTLE_CACHE_COMPR_BATCH_SIZE       64      /**< Number of c2bs to track in
-                                                         ..._compress_compr_unit_get()_.
-                                                         64KB/4KB==16 and we overallocate by 4x.  */
+#define CASTLE_CACHE_FLUSH_BATCH_SIZE   64          /**< Number of c2bs to flush per batch.       */
+#define CASTLE_CACHE_COMPR_BATCH_SIZE   4*C_COMPR_MAX_PGS /**< Number of c2bs to track in
+                                                         ..._v_c2b_get() with 4x overalloc.       */
+STATIC_BUG_ON(CASTLE_CACHE_COMPR_BATCH_SIZE > 64);  /**< Look at c2bs[] in ..._v_c2b_get().       */
 #define CASTLE_CACHE_RESERVELIST_QUOTA  2*CASTLE_CACHE_FLUSH_BATCH_SIZE /**< Number of c2bs/c2ps to
                                                                              reserve for _flush() */
 static         DEFINE_SPINLOCK(castle_cache_reservelist_lock);      /**< Lock for reservelists    */
@@ -497,8 +504,16 @@ DEFINE_PER_CPU(struct mutex, castle_cache_vmap_lock);
 struct task_struct            *castle_cache_flush_thread;   /**< Thread running background flush  */
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_flush_wq);      /**< Wait on flush thread to do work  */
 static atomic_t                castle_cache_flush_seq;      /**< Detect flush thread work         */
+static c_ext_id_t              c2_flush_hint_ext_id = INVAL_EXT_ID;/**< To pass ext_id hint to
+                                                                 castle_cache_flush() thread.     */
 
-struct task_struct            *castle_cache_evict_thread;
+struct task_struct            *castle_cache_compress_thread;/**< On-demand compress thread        */
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_compress_wq);   /**< Wait on compression thread work  */
+static atomic_t                castle_cache_compress_seq;   /**< Detect compression thread work   */
+static c_ext_id_t              c2_compress_hint_ext_id = INVAL_EXT_ID;/**< To pass ext_id hint to
+                                                                 castle_cache_compress() thread.  */
+
+struct task_struct            *castle_cache_evict_thread;   /**< Background eviction thread       */
 
 #define CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS    5           /**< Minimum available VIRTUAL data
                                                                  before scheduling async compress */
@@ -568,14 +583,14 @@ void castle_cache_stats_print(int verbose)
             compressed,
             writes,
 
-            castle_cache_partition[USER].use_pct,
+            castle_cache_partition[USER].cur_pct,
             castle_cache_partition[USER].dirty_pct,
-            castle_cache_partition[MERGE_OUT].use_pct,
+            castle_cache_partition[MERGE_OUT].cur_pct,
             castle_cache_partition[MERGE_OUT].dirty_pct,
 
-            castle_cache_partition[USER_VIRT].use_pct,
+            castle_cache_partition[USER_VIRT].cur_pct,
             castle_cache_partition[USER_VIRT].dirty_pct,
-            castle_cache_partition[MERGE_VIRT].use_pct,
+            castle_cache_partition[MERGE_VIRT].cur_pct,
             castle_cache_partition[MERGE_VIRT].dirty_pct);
     }
 
@@ -738,7 +753,7 @@ inline int c2b_accessed(c2_block_t *c2b)
 }
 
 /**
- * Iterate through all cache partitions and recalculate use_pct and dirty_pct.
+ * Iterate through all cache partitions and recalculate cur_pct and dirty_pct.
  */
 static void c2_partition_budgets_pct_calculate(void)
 {
@@ -751,7 +766,7 @@ static void c2_partition_budgets_pct_calculate(void)
 
         partition = &castle_cache_partition[i];
         cur_pgs = atomic_read(&partition->cur_pgs);
-        partition->use_pct   = 100 * cur_pgs / atomic_read(&partition->max_pgs);
+        partition->cur_pct   = 100 * cur_pgs / atomic_read(&partition->max_pgs);
         partition->dirty_pct = 100 * atomic_read(&partition->dirty_pgs) / (cur_pgs + 1);
     }
 }
@@ -763,20 +778,61 @@ static void c2_partition_budgets_pct_calculate(void)
  * @return >1   l1 >  l2
  * @return  0   l1 == l2
  */
-static int c2_partition_budget_use_pct_cmp(struct list_head *l1, struct list_head *l2)
+static int c2_partition_budget_cur_pct_cmp(struct list_head *l1, struct list_head *l2)
 {
     c2_partition_t *p1, *p2;
 
-    p1 = list_entry(l1, c2_partition_t, sort);
-    p2 = list_entry(l2, c2_partition_t, sort);
+    p1 = list_entry(l1, c2_partition_t, sort_cur);
+    p2 = list_entry(l2, c2_partition_t, sort_cur);
 
-    if (p1->use_pct > p2->use_pct)
+    if (p1->cur_pct > p2->cur_pct)
         return 1;
 
-    if (p1->use_pct < p2->use_pct)
+    if (p1->cur_pct < p2->cur_pct)
         return -1;
 
     return 0;
+}
+
+/**
+ * Compare weighted dirtyness of two cache partitions, l1 and l2.
+ *
+ * @return <1   l1 <  l2
+ * @return >1   l1 >  l2
+ * @return  0   l1 == l2
+ */
+static int c2_partition_budget_dirty_cmp(struct list_head *l1, struct list_head *l2)
+{
+    c2_partition_t *p[2];
+    int i, p_weight[2];
+
+    p[0] = list_entry(l1, c2_partition_t, sort_dirty);
+    p[1] = list_entry(l2, c2_partition_t, sort_dirty);
+
+    /* Calculate partition weights. */
+    for (i = 0; i < 2; i++)
+    {
+        p_weight[i] = 0;
+
+        /* Above hi threshold. */
+        if (p[i]->dirty_pct > p[i]->dirty_pct_hi_thresh)
+            p_weight[i] += 2;
+        /* Or above lo threshold. */
+        else if (p[i]->dirty_pct > p[i]->dirty_pct_lo_thresh)
+            p_weight[i] += 1;
+        /* If above either threshold bump priority if partition has many
+         * dirty pages. */
+        if (p_weight[i] && p[i]->cur_pct >= 50)
+            p_weight[i] += 4;
+    }
+
+    if (p_weight[0] > p_weight[1])
+        return 1;
+
+    if (p_weight[0] < p_weight[1])
+        return -1;
+
+    return atomic_read(&p[0]->dirty_pgs) > atomic_read(&p[1]->dirty_pgs);
 }
 
 /**
@@ -804,8 +860,42 @@ static c2_partition_id_t c2_partition_most_overbudget_find(void)
 
     c2_partition_budgets_pct_calculate();
     spin_lock(&castle_cache_partitions_lock);
-    list_sort(&castle_cache_partitions, c2_partition_budget_use_pct_cmp);
-    partition = list_entry(castle_cache_partitions.prev, c2_partition_t, sort);
+    list_sort(&castle_cache_partitions_by_cur, c2_partition_budget_cur_pct_cmp);
+    partition = list_entry(castle_cache_partitions_by_cur.prev, c2_partition_t, sort_cur);
+    spin_unlock(&castle_cache_partitions_lock);
+
+    return partition->id;
+}
+STATIC_BUG_ON(NR_CACHE_PARTITIONS > 4); /* you'll want to make list_sort() not O(n^2) */
+
+/**
+ * Return the partition ID that is currently most dirty.
+ *
+ * @param   virtual     0 => Return an ONDISK partition
+ * @param   virtual     * => Return a VIRTUAL partition
+ *
+ * Dirtyness is determined by a weighting calculated on:
+ *
+ * - whether the partition is over the lo dirty threshold
+ * - whether the partition is over the hi dirty threshold
+ * - how many dirty pages are in the partition
+ */
+static c2_partition_id_t c2_partition_most_dirty_find(int virtual)
+{
+    c2_partition_t *partition = NULL;
+    struct list_head *l;
+
+    c2_partition_budgets_pct_calculate();
+    spin_lock(&castle_cache_partitions_lock);
+    list_sort(&castle_cache_partitions_by_dirty, c2_partition_budget_dirty_cmp);
+    list_for_each_prev(l, &castle_cache_partitions_by_dirty)
+    {
+        partition = list_entry(l, c2_partition_t, sort_dirty);
+        if ( virtual && partition->id >= NR_ONDISK_CACHE_PARTITIONS)
+            break;
+        if (!virtual && partition->id <  NR_ONDISK_CACHE_PARTITIONS)
+            break;
+    }
     spin_unlock(&castle_cache_partitions_lock);
 
     return partition->id;
@@ -846,7 +936,7 @@ static void c2_partition_budget_update(c2_partition_id_t part_id, int nr_pgs)
     partition = &castle_cache_partition[part_id];
     cur_pgs   = atomic_add_return(nr_pgs, &partition->cur_pgs);
     BUG_ON(cur_pgs < 0);
-    partition->use_pct = 100 * cur_pgs / atomic_read(&partition->max_pgs);
+    partition->cur_pct = 100 * cur_pgs / atomic_read(&partition->max_pgs);
 }
 
 /**
@@ -1000,9 +1090,13 @@ static inline void c2_partitions_init(void)
         part->id        = part_id;
         part->virt_id   = part_id;
         part->normal_id = part_id;
-        list_add_tail(&part->sort, &castle_cache_partitions);
+        list_add_tail(&part->sort_cur, &castle_cache_partitions_by_cur);
+        list_add_tail(&part->sort_dirty, &castle_cache_partitions_by_dirty);
 
         atomic_set(&part->max_pgs, pgs);
+
+        part->dirty_pct_lo_thresh = 60;
+        part->dirty_pct_hi_thresh = 75;
 
         spin_lock_init(&part->evict_lock);
         INIT_LIST_HEAD(&part->evict_list);
@@ -1010,25 +1104,25 @@ static inline void c2_partitions_init(void)
 
     /* Initialise USER partition. */
     part = &castle_cache_partition[USER];
-    part->use_clock = 1;            /* use CLOCK                            */
     part->virt_id   = USER_VIRT;    /* partition for VIRTUAL-extent c2bs    */
+    part->use_clock = 1;            /* use CLOCK                            */
 
     /* Initialise USER_VIRT partition. */
     part = &castle_cache_partition[USER_VIRT];
+    part->normal_id = USER;         /* partition for !VIRTUAL-extent c2bs   */
     part->use_max   = 1;            /* can not use more than max_pgs        */
     part->use_clock = 1;            /* use CLOCK                            */
-    part->normal_id = USER;         /* partition for !VIRTUAL-extent c2bs   */
 
     /* Initialise MERGE partition. */
     part = &castle_cache_partition[MERGE_OUT];
-    part->use_evict = 1;            /* use evictlist, not CLOCK             */
     part->virt_id   = MERGE_VIRT;   /* partition for VIRTUAL-extent c2bs    */
+    part->use_evict = 1;            /* use evictlist, not CLOCK             */
 
     /* Initialise MERGE_VIRT partition. */
     part = &castle_cache_partition[MERGE_VIRT];
+    part->normal_id = MERGE_OUT;    /* partition for !VIRTUAL-extent c2bs   */
     part->use_max   = 1;            /* can not use more than max_pgs        */
     part->use_evict = 1;            /* use evictlist, not CLOCK             */
-    part->normal_id = MERGE_OUT;    /* partition for !VIRTUAL-extent c2bs   */
 }
 
 /**
@@ -3965,14 +4059,18 @@ static int castle_cache_block_clock_process(int target_pages, c2_partition_id_t 
             continue;
         }
 
-        /* Skip dirty blocks but record the extent ID for the flush thread. */
+        /* Skip dirty c2bs but record extent ID for flush/compress threads. */
         if (c2b_dirty(c2b))
         {
-            if (!c2b_flushing(c2b)
-//                    && castle_cache_partition[part_id].dirty_pct > 75
-                    && !castle_cache_flush_hint_ext_id)
-                castle_cache_flush_hint_ext_id = c2b->cep.ext_id;
+            if (!c2b_flushing(c2b))
+            {
+                if (C2_PART_VIRT(part_id) && EXT_ID_INVAL(c2_compress_hint_ext_id))
+                    c2_compress_hint_ext_id = c2b->cep.ext_id;
+                else if (!C2_PART_VIRT(part_id) && EXT_ID_INVAL(c2_flush_hint_ext_id))
+                    c2_flush_hint_ext_id = c2b->cep.ext_id;
+            }
             unevictable_pages += c2b->nr_pages;
+
             continue;
         }
 
@@ -4116,6 +4214,34 @@ void castle_cache_flush_wakeup(void)
 }
 
 /**
+ * Wake up the castle_cache_compress() thread.
+ */
+void castle_cache_compress_wakeup(void)
+{
+    wake_up_process(castle_cache_compress_thread);
+}
+
+/**
+ * Wake thread to clean specified part_id and return when progress made.
+ */
+void castle_cache_clean_wait(c2_partition_id_t part_id, int seq)
+{
+    if (C2_PART_VIRT(part_id))
+    {
+        castle_cache_compress_wakeup();
+        wait_event(castle_cache_compress_wq,
+                atomic_read(&castle_cache_compress_seq) != seq);
+    }
+    else
+    {
+        castle_cache_flush_wakeup();
+        wait_event_timeout(castle_cache_flush_wq,
+                atomic_read(&castle_cache_flush_seq) != seq,
+                HZ);
+    }
+}
+
+/**
  * Evict c2bs to the freelist so they can be used by specified partition.
  *
  * @param   nr_pgs      Number of pages required by caller
@@ -4123,23 +4249,21 @@ void castle_cache_flush_wakeup(void)
  */
 static int _castle_cache_freelists_grow(int nr_pgs, c2_partition_id_t part_id)
 {
-    int target_pages, free_pages;
+    c2_partition_t *part = &castle_cache_partition[part_id];
+    int target_pgs, free_pgs;
 
-    /* Return immediately if the partition to evict from is > 75% dirty.
+    /* Return immediately if the partition to evict from is more dirty than
+     * its dirty threshold (used to be fixed at 75%).
      *
-     * By doing this we expect the caller to wake the flush thread to write back
-     * dirty c2ps to disk.
+     * By doing this we expect the caller to wake one of the clean threads to
+     * compress VIRTUAL c2bs or write back dirty ONDISK data to disk.
      *
-     * If we are the flush thread, skip this check and instead attempt to return
-     * as much as we can to the freelist so the active flush can progress. */
-    if (likely(current != castle_cache_flush_thread)
-            && castle_cache_partition[part_id].dirty_pct > 75)
-    {
-        /* Inform the flush thread which partition is too dirty. */
-        castle_cache_flush_part_id = part_id;
-
+     * If we are the flush or compress thread, skip this check so we can try
+     * and make progress quickly. */
+    if (part->dirty_pct > part->dirty_pct_hi_thresh
+            && current != castle_cache_flush_thread
+            && current != castle_cache_compress_thread)
         return 2;
-    }
 
     /* Determine how much of the cache to evict:
      *
@@ -4149,28 +4273,26 @@ static int _castle_cache_freelists_grow(int nr_pgs, c2_partition_id_t part_id)
      *
      * These figures are overriden if they are less than the requested number of pages. */
 
-    spin_lock(&castle_cache_freelist_lock);
-    free_pages = castle_cache_page_freelist_size;
-    spin_unlock(&castle_cache_freelist_lock);
+    free_pgs = castle_cache_page_freelist_size;
 
-    if (free_pages >= castle_cache_size / 50)
-        target_pages = 0;
-    else if (free_pages >= castle_cache_size / 100)
-        target_pages = castle_cache_size / 1000;
+    if (free_pgs >= castle_cache_size / 50)
+        target_pgs = 0;
+    else if (free_pgs >= castle_cache_size / 100)
+        target_pgs = castle_cache_size / 1000;
     else
-        target_pages = (10 * castle_cache_size - 900 * free_pages) / 1000;
+        target_pgs = (10 * castle_cache_size - 900 * free_pgs) / 1000;
 
-    target_pages = max(target_pages, nr_pgs);
+    target_pgs = max(target_pgs, nr_pgs);
     if (nr_pgs > 0)
-        target_pages = max(target_pages, castle_cache_min_evict_pgs);
+        target_pgs = max(target_pgs, castle_cache_min_evict_pgs);
 
     /* Evict blocks from overbudget partition. */
-    if (castle_cache_partition[part_id].use_evict)
-        return castle_cache_evictlist_process(target_pages, part_id);
+    if (part->use_evict)
+        return castle_cache_evictlist_process(target_pgs, part_id);
     else
     {
-        BUG_ON(!castle_cache_partition[part_id].use_clock);
-        return castle_cache_block_clock_process(target_pages, part_id);
+        BUG_ON(!part->use_clock);
+        return castle_cache_block_clock_process(target_pgs, part_id);
     }
 }
 
@@ -4266,7 +4388,8 @@ static void castle_cache_freelists_grow(int nr_c2bs,
                                         c2_partition_id_t part_id,
                                         int for_virt)
 {
-    int flush_seq, success;
+    c2_partition_id_t evict_part_id;
+    int success, seq;
 
     /* Decide which cache partition to evict blocks from.
      *
@@ -4281,25 +4404,26 @@ static void castle_cache_freelists_grow(int nr_c2bs,
      * Therefore it makes sense to evict from the most overbudget partition or
      * we are not fairly sharing available resources between partitions. */
     if (for_virt)   /* (1) */
-        part_id = castle_cache_partition[part_id].normal_id;
+        evict_part_id = castle_cache_partition[part_id].normal_id;
     else if (c2_partition_can_satisfy(part_id, nr_pgs))  /* (3) */
-        part_id = c2_partition_most_overbudget_find();
+        evict_part_id = c2_partition_most_overbudget_find();
+    else    /* (2) */
+        evict_part_id = part_id;
 
-    while (_castle_cache_freelists_grow(nr_pgs, part_id) != EXIT_SUCCESS)
+    while (1)
     {
-        debug("Failed to clean the hash.\n");
+        /* Store relevant clean thread sequence id. */
+        seq = C2_PART_VIRT(evict_part_id)
+                ? atomic_read(&castle_cache_compress_seq)
+                : atomic_read(&castle_cache_flush_seq);
 
-        /* The cache is < 10% clean pages or we failed to find any clean pages.
-         *
-         * Another thread might have raced us in castle_cache_block_hash_clean()
-         * so get the relevant lock and check whether the freelist can satisfy
-         * our request. */
-        flush_seq = atomic_read(&castle_cache_flush_seq);
+        /* Try and evict nr_pgs from calculated evict_part_id. */
+        if (!_castle_cache_freelists_grow(nr_pgs, evict_part_id))
+            break;
 
-        spin_lock(&castle_cache_freelist_lock);
+        /* Check if the freelists can satisfy our request. */
         success = (castle_cache_page_freelist_size * PAGES_PER_C2P >= nr_pgs)
             && (castle_cache_block_freelist_size >= nr_c2bs);
-        spin_unlock(&castle_cache_freelist_lock);
 
         if (success && (for_virt || c2_partition_can_satisfy(part_id, nr_pgs)))
             return;
@@ -4332,17 +4456,9 @@ static void castle_cache_freelists_grow(int nr_c2bs,
             }
         }
 
-        /* If there are still no clean c2bs, wake the flush thread. */
-        debug("Could not clean the hash table. Waking flush.\n");
-        castle_cache_flush_wakeup();
-        /* Make sure at least one extra IO is done */
-        wait_event_timeout(castle_cache_flush_wq,
-                (atomic_read(&castle_cache_flush_seq) != flush_seq),
-                 HZ);
-        debug("We think there is some free memory now (clean pages: %d).\n",
-                atomic_read(&castle_cache_clean_pgs));
+        /* Wake up a thread to clean some c2bs and wait for it to progress. */
+        castle_cache_clean_wait(evict_part_id, seq);
     }
-    debug("Grown the list.\n");
 }
 
 /**
@@ -4467,7 +4583,7 @@ out:
  * If we fail to get c2bs/c2ps and the consumer (cache only) provided a VIRTUAL
  * cache partition (e.g. >= NR_ONDISK_CACHE_PARTITIONS) then a non-VIRTUAL cache
  * partition will be the target of any evictions.  This is necessary for
- * _c2_compress_compr_unit_get() to be able to get a compression unit c2b for
+ * _c2_compress_v_c2b_get() to be able to get a compression unit c2b for
  * compression (and therefore eviction) to proceed.
  *
  * @return  Block matching cep, nr_pages.
@@ -5853,7 +5969,7 @@ void castle_cache_debug_fini(void)
 /*******************************************************************************
  * Compression.
  *
- * Primary entry-point is castle_cache_compress().
+ * Primary entry-point is castle_cache_dirtytree_compress().
  *
  * See also comments for castle_cache_extent_dirtytree{} which stores relevant
  * offsets required for compression in the VIRTUAL extent.
@@ -5924,6 +6040,17 @@ static inline int COMPR_C2B_COMPRESS(c2_ext_dirtytree_t *dirtytree, c2_block_t *
 #endif
 }
 
+/**
+ * Bump castle_cache_compress_seq and notify waiters if pages were compressed.
+ */
+void castle_cache_compress_notify(int compressed)
+{
+    if (!compressed)
+        return;
+
+    atomic_inc(&castle_cache_compress_seq);
+    wake_up(&castle_cache_compress_wq);
+}
 
 /**
  * Advise cache of next offset required to reach disk for crash consistency.
@@ -6039,8 +6166,8 @@ static void _c2_compress_c2bs_put(c2_ext_dirtytree_t *dirtytree)
  * call force-got a sub-compr_unit_size c2b) then another sub-compr_unit_size
  * c2b will be returned.
  */
-static c2_block_t * _c2_compress_compr_unit_get(c2_ext_dirtytree_t *dirtytree,
-                                                int force)
+static c2_block_t * _c2_compress_v_c2b_get(c2_ext_dirtytree_t *dirtytree,
+                                           int force)
 {
     struct rb_node *parent;
     c2_block_t *c2b = NULL, *ret_c2b = NULL;
@@ -6368,7 +6495,7 @@ static void _c2_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
         BUG_ON(!dirtytree->c_strad_c2b);
         BUG_ON((c_cep.offset != c2b_end_off(dirtytree->c_strad_c2b))
                 || (size >> PAGE_SHIFT != BLKS_PER_CHK));
-        BUG_ON(castle_cache_block_destroy(dirtytree->c_strad_c2b));
+        castle_cache_block_destroy(dirtytree->c_strad_c2b);
     }
     dirtytree->c_strad_c2b  = castle_cache_block_get(c_cep,
                                                      size >> PAGE_SHIFT,
@@ -6391,11 +6518,11 @@ static void _c2_compress_c2bs_get(c2_ext_dirtytree_t *dirtytree,
  *
  * NOTE: Caller must hold a reference on dirtytree->ext_id while compressing.
  */
-static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
-                                  c_byte_off_t        end_off,
-                                  int                 max_pgs,
-                                  int                 force,
-                                  int                *compressed_p)
+static void castle_cache_dirtytree_compress(c2_ext_dirtytree_t *dirtytree,
+                                            c_byte_off_t        end_off,
+                                            int                 max_pgs,
+                                            int                 force,
+                                            int                *compressed_p)
 {
     c2_block_t     *v_c2b,          /* VIRTUAL c2b (compression-unit aligned and sized).        */
                    *c_c2b = NULL;   /* Pointer to active COMPRESSED-extent c2b (flush/stad).    */
@@ -6405,6 +6532,7 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
     int             create = 1;     /* For _c2_compress_c2bs_get().                             */
     c_byte_off_t    size;           /* Transient, for calculations.                             */
 
+    BUG_ON(EXT_ID_INVAL(dirtytree->compr_ext_id));
     BUG_ON(end_off && (!force || max_pgs));
 
     /* Only wait for compr_mutex if we are force flushing. */
@@ -6448,7 +6576,7 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
         BUG_ON(!c_buf);
 
         /* Try and get source VIRTUAL c2b for compression. */
-        v_c2b = _c2_compress_compr_unit_get(dirtytree, force);
+        v_c2b = _c2_compress_v_c2b_get(dirtytree, force);
         if (unlikely(!v_c2b))
         {
             int didnt_flush;
@@ -6475,8 +6603,8 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
 
         /* Take c2b locks, compress and set maps.
          *
-         * _c2_compress_compr_unit_get() returned v_c2b with a
-         * read-lock taken, so don't try and get it again here. */
+         * _c2_compress_v_c2b_get() returned v_c2b with a read-lock
+         * taken, so don't try and get it again here. */
         write_lock_c2b(c_c2b);
         update_c2b_maybe(c_c2b);
         _castle_cache_compress(dirtytree, v_c2b, &c_buf, &c_rem);
@@ -6529,6 +6657,9 @@ static void castle_cache_compress(c2_ext_dirtytree_t *dirtytree,
     mutex_unlock(&dirtytree->compr_mutex);
 
 out:
+    /* Wake castle_cache_compress_wq waiters. */
+    castle_cache_compress_notify(compressed);
+
     /* Inform caller how many (VIRTUAL) pages were compressed. */
     if (compressed_p)
         *compressed_p = compressed;
@@ -6538,8 +6669,9 @@ out:
 /**
  * Asynchronous compression workqueue wrapper.
  */
-void castle_cache_dirtytree_compress(struct work_struct *work)
+void castle_cache_dirtytree_async_compress(struct work_struct *work)
 {
+#define MAX_ASYNC_COMPRESS_SIZE 5*256       /**< 5MB            */
     c2_ext_dirtytree_t *dirtytree;
     c_ext_mask_id_t ext_mask;
 
@@ -6551,11 +6683,11 @@ void castle_cache_dirtytree_compress(struct work_struct *work)
     if (MASK_ID_INVAL(ext_mask))
         goto out;
 
-    castle_cache_compress(dirtytree,
-                          0,            /* end_off      */
-                          0,            /* max_pgs      */
-                          0,            /* force        */
-                          NULL);        /* compressed_p */
+    castle_cache_dirtytree_compress(dirtytree,
+                                    0,                          /* end_off      */
+                                    MAX_ASYNC_COMPRESS_SIZE,    /* max_pgs      */
+                                    0,                          /* force        */
+                                    NULL);                      /* compressed_p */
 
     /* Put extent reference. */
     castle_extent_put(ext_mask);
@@ -6564,6 +6696,108 @@ out:
     /* Put reference taken by c2_dirtytree_insert() potentially freeing the
      * dirtytree if the extent has already been destroyed. */
     castle_extent_dirtytree_put(dirtytree);
+}
+
+static c2_ext_dirtytree_t * _castle_cache_next_dirtytree_get(c_ext_flush_prio_t prio,
+                                                             int *max_scan,
+                                                             int need_compr,
+                                                             int aggressive);
+
+/**
+ * On-demand compress thread.
+ *
+ * Woken by castle_cache_compress_wakeup(), notifies callers of pages having
+ * been compressed via a call to castle_cache_compress_notify() from
+ * castle_cache_dirtytree_compress().
+ */
+static int castle_cache_compress(void *unused)
+{
+#define MIN_COMPRESS_SIZE   128
+    int to_compress, total_compressed, compressed, prio;
+    c2_ext_dirtytree_t *dirtytree;
+    c_ext_mask_id_t ext_mask;
+
+    while (1)
+    {
+        /* Sleep until somebody needs us. */
+        preempt_disable();
+        set_current_state(TASK_INTERRUPTIBLE);
+        if (kthread_should_stop())
+        {
+            set_current_state(TASK_RUNNING);
+            break;
+        }
+        preempt_enable();
+        schedule();
+        if (kthread_should_stop())
+            break;
+
+        to_compress      = MIN_COMPRESS_SIZE;
+        total_compressed = 0;
+
+        if (!EXT_ID_INVAL(c2_compress_hint_ext_id))
+        {
+            dirtytree = castle_extent_dirtytree_by_ext_id_get(c2_compress_hint_ext_id);
+            if (dirtytree)
+            {
+                ext_mask = castle_extent_get(dirtytree->ext_id);
+                if (!MASK_ID_INVAL(ext_mask))
+                {
+                    castle_cache_dirtytree_compress(dirtytree,
+                                                    0,          /* end_off      */
+                                                    to_compress,/* max_pgs      */
+                                                    0,          /* force        */
+                                                   &compressed);/* compressed_p */
+                    castle_extent_dirtytree_put(dirtytree);
+                    total_compressed += compressed;
+                    to_compress      -= compressed;
+
+                    castle_extent_put(ext_mask);
+                }
+            }
+            c2_compress_hint_ext_id = INVAL_EXT_ID;
+        }
+
+        for (prio = 0; prio < NR_EXTENT_FLUSH_PRIOS && to_compress > 0; prio++)
+        {
+            int nr_dirtytrees;
+
+            nr_dirtytrees = atomic_read(&c2_ext_virtual_dirtylists_sizes[prio]);
+
+            while (likely(to_compress > 0))
+            {
+                dirtytree = _castle_cache_next_dirtytree_get(prio,
+                                                            &nr_dirtytrees,
+                                                             1,     /* virtual      */
+                                                             0);    /* aggressive   */
+                /* Try the next priority level if we didn't find a dirtytree. */
+                if (!dirtytree)
+                    break;
+
+                ext_mask = castle_extent_get(dirtytree->ext_id);
+                if (MASK_ID_INVAL(ext_mask))
+                    continue;
+
+                /* Try and flush the dirtytree, then put the reference. */
+                castle_cache_dirtytree_compress(dirtytree,
+                                                0,          /* end_off      */
+                                                to_compress,/* max_pgs      */
+                                                0,          /* force        */
+                                               &compressed);/* compressed_p */
+                castle_extent_dirtytree_put(dirtytree);
+                total_compressed += compressed;
+                to_compress      -= compressed;
+
+                castle_extent_put(ext_mask);
+            }
+        }
+
+        /* Wake waiters if we failed to compress to prevent deadlocks. */
+        if (!total_compressed)
+            castle_cache_compress_notify(1);
+    }
+
+    return 0;
 }
 
 /**********************************************************************************************
@@ -6867,11 +7101,11 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
         compr_debug("dirtytree=%p compressing to end_off=%lu\n",
                 dirtytree, end_off);
 
-        castle_cache_compress(dirtytree,   /* dirtytree    */
-                              end_off,     /* end_off      */
-                              0,           /* max_pgs      */
-                              1,           /* force        */
-                              NULL);       /* compressed_p */
+        castle_cache_dirtytree_compress(dirtytree,  /* dirtytree    */
+                                        end_off,    /* end_off      */
+                                        0,          /* max_pgs      */
+                                        1,          /* force        */
+                                        NULL);      /* compressed_p */
 
         /* Continue to flush COMPRESSED extent.
          *
@@ -7159,94 +7393,67 @@ out:
     return cache_nr_slaves;
 }
 
-#define MIN_FLUSH_SIZE  128         /**< Max flush rate: 128*128pg/s = 64MB/s       */
-
 /**
- * Is the cache dirty enough to warrant flushing to disk?
+ * Are any cache partitions dirty enough to warrant flushing to disk?
  *
  * @return  1   Yes, start flushing
  * @return  0   No
  */
-static int _castle_cache_flush_pages_wakeup_cond(int target_dirty_pgs)
+static int _c2_flush_pages_wakeup_cond(void)
 {
-    int do_flush;
+    c2_partition_id_t part_id;
 
-    do_flush = atomic_read(&castle_cache_dirty_pgs) - target_dirty_pgs >= MIN_FLUSH_SIZE
-        || (castle_cache_flush_part_id < NR_CACHE_PARTITIONS);
+    /* Wake flush thread if an extent has been hinted for flushing. */
+    if (!EXT_ID_INVAL(c2_flush_hint_ext_id))
+        return 1;
+
+    /* Wake flush thread if any partition is above its low dirty threshold
+     * and is using at least 50% of its quota. */
+    c2_partition_budgets_pct_calculate();
+    for (part_id = 0; part_id < NR_ONDISK_CACHE_PARTITIONS; part_id++)
+    {
+        c2_partition_t *part = &castle_cache_partition[part_id];
+        if (part->cur_pct >= 50 && part->dirty_pct > part->dirty_pct_lo_thresh)
+            return 1;
+    }
 
     /* If we are not going to flush anything now, bump the flush_seq so any
      * threads waiting on us to do work won't block. */
-    if (likely(!do_flush))
-        atomic_inc(&castle_cache_flush_seq);
-
-    return do_flush;
+    atomic_inc(&castle_cache_flush_seq);
+    return 0;
 }
 
 /**
  * Calculate and return the number of pages to flush.
- *
- * @param exiting   Is the flush thread exiting?
  */
-static int _castle_cache_flush_pages_calculate(int exiting)
+static int _castle_cache_flush_pages_calculate(void)
 {
 #define MIN_FLUSH_FREQ  5           /**< Min flush rate: 5*128pgs/s = 2.5MB/s       */
+#define MIN_FLUSH_SIZE  128         /**< Max flush rate: 128*128pg/s = 64MB/s       */
 #define MAX_FLUSH_SIZE  (10*256*castle_cache_flush_nr_slaves()) /**< 10MB/s/slave   */
 
-    int i, target_dirty_pgs, dirty_pgs, to_flush;
-
-    /* Exit if we've finished waiting for all outstanding IOs. */
-    if (unlikely(exiting))
-    {
-        for (i = 0; i < NR_EXTENT_FLUSH_PRIOS; i++)
-            if (atomic_read(&c2_ext_ondisk_dirtylists_sizes[i]) != 0)
-                return INT_MAX;
-
-        /* All dirtytrees flushed and freed, flush is complete. */
-        BUG_ON(i < NR_EXTENT_FLUSH_PRIOS);
-        return 0;
-    }
-
-    /* Try and keep 3/4 of pages in the cache dirty. */
-    target_dirty_pgs = 3 * (castle_cache_size / 4);
+    int dirty_pgs, to_flush;
+    c2_partition_id_t part_id;
+    c2_partition_t *part;
 
     /* Wake up MIN_FLUSH_FREQ times per second, or when somebody wakes us
      * and there are a worthwhile number of pages to flush.  This limits
      * us to a minimum of 10 MIN_BATCHES/s. */
     wait_event_interruptible_timeout(castle_cache_flush_wq,
-                                     _castle_cache_flush_pages_wakeup_cond(target_dirty_pgs),
-                                     HZ/MIN_FLUSH_FREQ);
-    dirty_pgs = atomic_read(&castle_cache_dirty_pgs);
+            _c2_flush_pages_wakeup_cond(),
+            HZ/MIN_FLUSH_FREQ);
 
-    /* We're not exiting, calculate the number of pages to flush.
-     *
-     * If _castle_cache_freelists_grow() gave us a hint as to which
-     * partition is too dirty and we're not already going to flush the
-     * MAX_FLUSH_SIZE pages then set to_flush so that 3/4 of the target
-     * partition is dirty.
-     *
-     * Flush at least MIN_FLUSH_SIZE, at most MAX_FLUSH_SIZE and not
-     * more than the number of dirty pages within the cache. */
-    to_flush = dirty_pgs - target_dirty_pgs;    /* ~#pgs dirtied since last iter    */
-    if (to_flush < MAX_FLUSH_SIZE
-            && castle_cache_flush_part_id < NR_CACHE_PARTITIONS)
-    {
-        c2_partition_t *partition;
-        int target, dirty, cur;
+    /* Determine which part_id to use for calculating pages to flush. */
+    part_id = c2_partition_most_dirty_find(0 /*virtual*/);
+    BUG_ON(part_id >= NR_ONDISK_CACHE_PARTITIONS);
 
-        partition = &castle_cache_partition[castle_cache_flush_part_id];
-
-        dirty  = atomic_read(&partition->dirty_pgs);
-        cur    = atomic_read(&partition->cur_pgs);
-        target = 3 * (cur / 4);
-        if (dirty > target)
-            to_flush = dirty - target;
-
-        /* Clear dirty partition hint. */
-        castle_cache_flush_part_id = NR_CACHE_PARTITIONS;
-    }
-    to_flush = max(MIN_FLUSH_SIZE, to_flush);   /* at least MIN_FLUSH_SIZE pgs      */
-    to_flush = min(MAX_FLUSH_SIZE, to_flush);   /* at max MAX_FLUSH_SIZE pgs        */
-    to_flush = min(dirty_pgs,      to_flush);   /* and no more than are dirty.      */
+    /* Calculate how many pages to flush based on the dirtiest partition. */
+    part = &castle_cache_partition[part_id];
+    dirty_pgs = atomic_read(&part->dirty_pgs);
+    to_flush  = dirty_pgs - 3 * (atomic_read(&part->cur_pgs) / 4);
+    to_flush  = max(MIN_FLUSH_SIZE, to_flush);  /* at least MIN_FLUSH_SIZE pgs      */
+    to_flush  = min(MAX_FLUSH_SIZE, to_flush);  /* at most MAX_FLUSH_SIZE pgs       */
+    to_flush  = min(dirty_pgs,      to_flush);  /* no more than is dirty            */
 
     return to_flush;
 }
@@ -7258,16 +7465,16 @@ static int _castle_cache_flush_pages_calculate(int exiting)
  * @param max_scan      [in/out]    Maximum number of dirtytrees to consider at
  *                                  this priority level.  Decremented for each
  *                                  dirtytree that is considered
- * @param need_compr    [in]        Look at VIRTUAL dirtylists?
+ * @param virtual       [in]        Look at VIRTUAL dirtylists?
  * @param aggressive    [in]        Whether to skip flush efficiency check
  *
  * @return  *           Pointer to next dirtytree to flush, with reference taken
  *          NULL        No more dirtytrees available at this priority level
  */
-static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_prio_t prio,
-                                                                   int *max_scan,
-                                                                   int need_compr,
-                                                                   int aggressive)
+static c2_ext_dirtytree_t * _castle_cache_next_dirtytree_get(c_ext_flush_prio_t prio,
+                                                             int *max_scan,
+                                                             int virtual,
+                                                             int aggressive)
 {
 #define MIN_EFFICIENT_DIRTYTREE     (5*256)   /* In pages, equals 5MB                 */
     c2_ext_dirtytree_t *dirtytree = NULL;
@@ -7277,7 +7484,7 @@ static c2_ext_dirtytree_t * _castle_cache_flush_next_dirtytree_get(c_ext_flush_p
 
     /* If the flush thread needs to do compression, look at the list of VIRTUAL
      * extent dirtylists, otherwise the ONDISK dirtylists. */
-    if (need_compr)
+    if (virtual)
         dirtylist = &c2_ext_virtual_dirtylists[prio];
     else
         dirtylist = &c2_ext_ondisk_dirtylists[prio];
@@ -7358,21 +7565,14 @@ static void _castle_cache_flush_dirtytree_flush(c2_ext_dirtytree_t *dirtytree,
     castle_extent_mask_read_all(dirtytree->ext_id, &start_chk, &end_chk);
 
     /* Flushed will be set to an approximation of pages flushed. */
-    if (!EXT_ID_INVAL(dirtytree->compr_ext_id))
-        castle_cache_compress(dirtytree,                            /* dirtytree    */
-                              0,                                    /* end_off      */
-                             *to_flush,                             /* max_pgs      */
-                              0,                                    /* force        */
-                             &flushed);                             /* compressed_p */
-    else
-        __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
-                                    start_chk * C_CHK_SIZE,         /* start offset */
-                                    (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
-                                   *to_flush,                       /* max_pgs      */
-                                    castle_cache_flush_endio,       /* Callback     */
-                                    (atomic_t *)data,               /* Callback data*/
-                                   &flushed,                        /* flushed_p    */
-                                    0);                             /* waitlock     */
+    __castle_cache_extent_flush(dirtytree,                      /* dirtytree    */
+                                start_chk * C_CHK_SIZE,         /* start offset */
+                                (end_chk + 1) * C_CHK_SIZE - 1, /* end offset   */
+                               *to_flush,                       /* max_pgs      */
+                                castle_cache_flush_endio,       /* Callback     */
+                                (atomic_t *)data,               /* Callback data*/
+                               &flushed,                        /* flushed_p    */
+                                0);                             /* waitlock     */
     *to_flush -= flushed;
 
     /* Return immediately if IOs are still flushing.  Otherwise, if all IOs have
@@ -7416,7 +7616,7 @@ err_out:
  */
 static int castle_cache_flush(void *unused)
 {
-    int exiting, to_flush, last_flush, prio, aggressive, need_compr;
+    int exiting, to_flush, last_flush, prio, aggressive;
     atomic_t in_flight = ATOMIC(0);
     c2_ext_dirtytree_t *dirtytree;
 
@@ -7441,29 +7641,24 @@ static int castle_cache_flush(void *unused)
         if (unlikely(exiting))
             break;
 
-        /* Do compression if somebody has hinted that we need to flush a VIRTUAL
-         * cache partition. */
-        need_compr = (castle_cache_flush_part_id < NR_EXTENT_FLUSH_PRIOS
-                && castle_compr_type_get(castle_cache_flush_part_id) == C_COMPR_VIRTUAL);
-
         /* Calculate how many pages need flushing.  This function sleeps with an
          * interruptible timeout, waking up if a sufficient number of pages are
          * ready for flushing, otherwise MIN_FLUSH_FREQ times per second. */
-        to_flush   = _castle_cache_flush_pages_calculate(0 /*exiting*/);
+        to_flush   = _castle_cache_flush_pages_calculate();
         last_flush = to_flush;
         if (to_flush == 0)
             continue; /* wait until we have something to flush */
 
         /* Here we will flush the extent hinted by CLOCK. */
-        if (castle_cache_flush_hint_ext_id)
+        if (!EXT_ID_INVAL(c2_flush_hint_ext_id))
         {
-            dirtytree = castle_extent_dirtytree_by_ext_id_get(castle_cache_flush_hint_ext_id);
+            dirtytree = castle_extent_dirtytree_by_ext_id_get(c2_flush_hint_ext_id);
             if (dirtytree)
             {
                 _castle_cache_flush_dirtytree_flush(dirtytree, &to_flush, &in_flight);
                 castle_extent_dirtytree_put(dirtytree);
             }
-            castle_cache_flush_hint_ext_id = 0;
+            c2_flush_hint_ext_id = INVAL_EXT_ID;
         }
 
         aggressive = 0;
@@ -7473,14 +7668,12 @@ aggressive:
          * Start with 'non-aggressive' flush (i.e. when only extents that are deemed
          * to be worth-while flushing are flushed), if to_flush pages aren't found,
          * switch to aggressive. */
-        for (prio = 0; prio < NR_EXTENT_FLUSH_PRIOS && to_flush > 0; prio++)
+        prio = (aggressive == 2) ? META_FLUSH_PRIO : 0;
+        while (prio < NR_EXTENT_FLUSH_PRIOS && to_flush > 0)
         {
             int nr_dirtytrees;
 
-            if (need_compr)
-                nr_dirtytrees = atomic_read(&c2_ext_virtual_dirtylists_sizes[prio]);
-            else
-                nr_dirtytrees = atomic_read(&c2_ext_ondisk_dirtylists_sizes[prio]);
+            nr_dirtytrees = atomic_read(&c2_ext_ondisk_dirtylists_sizes[prio]);
 
             while (likely(to_flush > 0))
             {
@@ -7489,10 +7682,10 @@ aggressive:
                 /* Select and take a reference to the next dirtytree to flush at
                  * this priority level.  The reference ensures that it does not
                  * go away while we dispatch IOs on any non-flushing c2bs. */
-                dirtytree = _castle_cache_flush_next_dirtytree_get(prio,
-                                                                   &nr_dirtytrees,
-                                                                   need_compr,
-                                                                   aggressive);
+                dirtytree = _castle_cache_next_dirtytree_get(prio,
+                                                            &nr_dirtytrees,
+                                                             0,       /* virtual  */
+                                                             aggressive);
                 /* Try the next priority level if we didn't find a dirtytree. */
                 if (!dirtytree)
                     break;
@@ -7501,14 +7694,25 @@ aggressive:
                 _castle_cache_flush_dirtytree_flush(dirtytree, &to_flush, &in_flight);
                 castle_extent_dirtytree_put(dirtytree);
             }
+
+            prio++;
         }
 
-        /* If we failed to flush sufficient pages, try again without trying to
-         * optimise for IO seeks. */
-        if (!aggressive && (to_flush > 0))
+        if (!aggressive)
         {
-            aggressive = 1;
-            goto aggressive;
+            /* We failed to flush sufficient pages, try again without trying to
+             * optimise for IO seeks. */
+            if (to_flush > 0)
+                aggressive = 1; /* Aggressively flush all extents. */
+
+            /* We flushed enough data but the USER partition is still beyond its
+             * high threshold so flush the META_FLUSH_PRIO extents. */
+            else if (castle_cache_partition[USER].dirty_pct
+                            > castle_cache_partition[USER].dirty_pct_hi_thresh)
+                aggressive = 2; /* Flush USER-only partition extents. */
+
+            if (aggressive)
+                goto aggressive;
         }
     }
 
@@ -7522,14 +7726,16 @@ aggressive:
 /***** Init/fini functions *****/
 static int castle_cache_threads_init(void)
 {
-    castle_cache_flush_thread = kthread_run(castle_cache_flush, NULL, "castle_flush");
-    castle_cache_evict_thread = kthread_run(castle_cache_evict, NULL, "castle_evict");
+    castle_cache_flush_thread    = kthread_run(castle_cache_flush, NULL, "castle_flush");
+    castle_cache_compress_thread = kthread_run(castle_cache_compress, NULL, "castle_compress");
+    castle_cache_evict_thread    = kthread_run(castle_cache_evict, NULL, "castle_evict");
     return 0;
 }
 
 static void castle_cache_threads_fini(void)
 {
     kthread_stop(castle_cache_evict_thread);
+    kthread_stop(castle_cache_compress_thread);
     kthread_stop(castle_cache_flush_thread);
 }
 
@@ -8369,6 +8575,7 @@ int castle_cache_init(void)
     atomic_set(&castle_cache_block_victims, 0);
 
     atomic_set(&castle_cache_flush_seq, 0);
+    atomic_set(&castle_cache_compress_seq, 0);
     atomic_set(&c2_pref_active_window_size, 0);
 
     atomic_set(&merge_misses, 0);

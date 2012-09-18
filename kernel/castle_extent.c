@@ -1448,7 +1448,7 @@ static c_ext_t * castle_ext_alloc(c_ext_id_t ext_id)
     ext->dirtytree->next_compr_mutable_off = 0;
     ext->dirtytree->virt_consistent_off_1  = 0;
     ext->dirtytree->virt_consistent_off_2  = 0;
-    CASTLE_INIT_WORK(&ext->dirtytree->compr_work, castle_cache_dirtytree_compress);
+    CASTLE_INIT_WORK(&ext->dirtytree->compr_work, castle_cache_dirtytree_async_compress);
     ext->global_mask = EMPTY_MASK_RANGE;
 
     set_bit(CASTLE_EXT_ALIVE_BIT, &ext->flags);
