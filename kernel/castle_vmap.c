@@ -83,16 +83,16 @@ static void                         castle_vmap_freelist_grow(int freelist_bucke
 
 #define _castle_hypercall4(type, name, a1, a2, a3, a4)          \
 ({                                                              \
-        long __res, __ign1, __ign2, __ign3;                     \
-        asm volatile (                                          \
-                "movq %7,%%r10; "                               \
-                CASTLE_HYPERCALL_STR(name)                      \
-                : "=a" (__res), "=D" (__ign1), "=S" (__ign2),   \
-                "=d" (__ign3)                                   \
-                : "1" ((long)(a1)), "2" ((long)(a2)),           \
-                "3" ((long)(a3)), "g" ((long)(a4))              \
-                : "memory", "r10" );                            \
-        (type)__res;                                            \
+    long __res, __ign1, __ign2, __ign3;                         \
+    asm volatile (                                              \
+        "movq %7,%%r10; "                                       \
+        CASTLE_HYPERCALL_STR(name)                              \
+        : "=a" (__res), "=D" (__ign1), "=S" (__ign2),           \
+        "=d" (__ign3)                                           \
+        : "1" ((long)(a1)), "2" ((long)(a2)),                   \
+        "3" ((long)(a3)), "g" ((long)(a4))                      \
+        : "memory", "r10" );                                    \
+    (type)__res;                                                \
 })
 
 static inline int
