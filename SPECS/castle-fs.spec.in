@@ -5,7 +5,7 @@
 
 %define kmod_name castle
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
-%define kvariants "" xen debug
+%define kvariants "" xen
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 %define krel_nohg %(echo %{krel} | sed -e 's/\.hg.*$//')
 
@@ -49,12 +49,7 @@ for kvariant in %{kvariants}
 do
     ksrc=%{_usrsrc}/kernels/%{kverrel}${kvariant:+-$kvariant}-%{_target_cpu}
     pushd _kmod_build_$kvariant
-    if [[ $kvariant == *debug* ]]; then
-        # TODO: enable PERF_DEBUG once Trac#4954 is fixed
-        make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=y PERF_DEBUG=n %{?_smp_mflags}
-    else
-        make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n %{?_smp_mflags}
-    fi
+    make KVER=%{kversion} KERNEL_DIR="${ksrc}" DEBUG=n PERF_DEBUG=n %{?_smp_mflags}
     popd
 done
 
