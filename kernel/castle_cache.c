@@ -4228,12 +4228,14 @@ void castle_cache_clean_wait(c2_partition_id_t part_id, int seq)
 {
     if (C2_PART_VIRT(part_id))
     {
+        BUG_ON(current == castle_cache_compress_thread);
         castle_cache_compress_wakeup();
         wait_event(castle_cache_compress_wq,
                 atomic_read(&castle_cache_compress_seq) != seq);
     }
     else
     {
+        BUG_ON(current == castle_cache_flush_thread);
         castle_cache_flush_wakeup();
         wait_event_timeout(castle_cache_flush_wq,
                 atomic_read(&castle_cache_flush_seq) != seq,
@@ -4393,7 +4395,8 @@ static void castle_cache_freelists_grow(int nr_c2bs,
 
     /* Decide which cache partition to evict blocks from.
      *
-     * 1. Evict from a non-VIRTUAL partition if for_virt is specified.
+     * 1. Evict from a non-VIRTUAL partition if for_virt is specified or if
+     *    the calling thread is the compress thread.
      * 2. Evict from the requesting partition if it is overbudget and has
      *    use_max set (except if for_virt is specified and it is VIRTUAL).
      * 3. If none of the above are true then evict from the most overbudget
@@ -4403,7 +4406,7 @@ static void castle_cache_freelists_grow(int nr_c2bs,
      * are overbudget at all times (with the exclusion of use_max partitions).
      * Therefore it makes sense to evict from the most overbudget partition or
      * we are not fairly sharing available resources between partitions. */
-    if (for_virt)   /* (1) */
+    if (for_virt || current == castle_cache_compress_thread)    /* (1) */
         evict_part_id = castle_cache_partition[part_id].normal_id;
     else if (c2_partition_can_satisfy(part_id, nr_pgs))  /* (3) */
         evict_part_id = c2_partition_most_overbudget_find();
