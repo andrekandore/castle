@@ -2408,7 +2408,6 @@ struct castle_double_array {
     struct castle_da_io_wait_queue {
         spinlock_t              lock;               /**< Protects list,cnt (accessed by 1 CPU so
                                                          should be no need for rwlock)          */
-        atomic_t                cnt;                /**< Number of pending write IOs            */
         struct list_head        list;               /**< List of pending write IOs              */
         struct castle_double_array *da;             /**< Back pointer to parent DA              */
         struct work_struct      work;               /**< For queue kicks                        */

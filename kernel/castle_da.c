@@ -7873,7 +7873,6 @@ static int castle_da_wait_queue_create(struct castle_double_array *da, void *unu
         spin_lock_init(&da->ios_waiting[i].lock);
         INIT_LIST_HEAD(&da->ios_waiting[i].list);
         CASTLE_INIT_WORK(&da->ios_waiting[i].work, castle_da_queue_kick);
-        atomic_set(&da->ios_waiting[i].cnt, 0);
         da->ios_waiting[i].da = da;
     }
 
@@ -10876,7 +10875,6 @@ static void castle_da_bvec_queue(struct castle_double_array *da, c_bvec_t *c_bve
     list_add_tail(&c_bvec->io_list, &wq->list);
 
     /* Increment IO waiting counters. */
-    atomic_inc(&wq->cnt);
     atomic_inc(&da->ios_waiting_cnt);
 }
 
@@ -10915,7 +10913,6 @@ static void castle_da_queue_kick(struct work_struct *work)
         list_add(&c_bvec->io_list, &submit_list);
 
         /* Decrement IO waiting counters. */
-        BUG_ON(atomic_dec_return(&wq->cnt) < 0);
         BUG_ON(atomic_dec_return(&wq->da->ios_waiting_cnt) < 0);
     }
     spin_unlock(&wq->lock);
@@ -10954,8 +10951,7 @@ static void castle_da_queues_kick(struct castle_double_array *da)
 
         wq = &da->ios_waiting[i];
 
-        if (atomic_read(&wq->cnt))
-            queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
+        queue_work_on(request_cpus.cpus[i], castle_wqs[0], &wq->work);
     }
 }
 
