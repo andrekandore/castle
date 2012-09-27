@@ -4050,7 +4050,6 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
     struct castle_immut_tree_level *level = tree_constr->levels + depth;
     struct castle_btree_type *btree = tree_constr->btree;
     struct castle_component_tree *out_tree = tree_constr->tree;
-    struct castle_double_array *da = tree_constr->da;
     struct castle_btree_node *node;
     int key_cmp;
     c_val_tup_t  preadoption_cvt = INVAL_VAL_TUP;
@@ -4160,14 +4159,14 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
     if(new_root_node)
     {
         /* only have contention on output tree if tree queriable */
-        write_lock(&da->lock);
+        down_write(&out_tree->lock);
         out_tree->root_node = new_cep;
         /* tree_depth is weird; it goes from -1 to 1, no 0 */
         if (unlikely(atomic_read(&out_tree->tree_depth) == -1))
             atomic_add(2, &out_tree->tree_depth);
         else
             atomic_inc(&out_tree->tree_depth);
-        write_unlock(&da->lock);
+        up_write(&out_tree->lock);
     }
 
     /* Work out if the current/previous entry could be a valid node end.
