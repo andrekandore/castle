@@ -2388,7 +2388,9 @@ struct castle_double_array {
                                                          input, output, not-merging, queriable
                                                          and non-queriable CTs.                 */
     struct {
-        int                     nr_trees;           /**< Number of queriable CTs at level.      */
+        int                     nr_rwcts;           /**< Number of rwcts at level.              */
+        int                     nr_trees;           /**< Number of queriable CTs and barriers
+                                                         at level.                              */
         int                     nr_output_trees;    /**< Number of output trees at level.       */
         struct list_head        trees;              /**< List of (nr_trees) at level            */
     } levels[MAX_DA_LEVEL];

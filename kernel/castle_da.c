@@ -4972,7 +4972,7 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
     /* FIXME: This again looks hacky. Need to fix rate control in clean way - BM. */
     /* If this is a level 1 merge, check if this is time to restart inserts. */
     if ((merge->level == 1) &&
-        (castle_da_exiting || (merge->da->levels[1].nr_trees < 4 * castle_double_array_request_cpus())) &&
+        (castle_da_exiting || (merge->da->levels[1].nr_rwcts < 4 * castle_double_array_request_cpus())) &&
         test_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags))
     {
         clear_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags);
@@ -7965,7 +7965,7 @@ void castle_da_write_rate_check(struct castle_double_array *da, uint32_t nr_byte
     }
 
     /* If the number of trees in level 1 are more than 4 - disable inserts. */
-    if (da->levels[1].nr_trees >= 4 * castle_double_array_request_cpus())
+    if (da->levels[1].nr_rwcts >= 4 * castle_double_array_request_cpus())
     {
         set_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &da->flags);
         /* Note: This could be starving ios, unnecessary long time. Fix it. */
@@ -8101,6 +8101,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
         /* Initialise merge serdes */
         INIT_LIST_HEAD(&da->levels[i].trees);
         da->levels[i].nr_trees             = 0;
+        da->levels[i].nr_rwcts             = 0;
         da->levels[i].nr_output_trees      = 0;
     }
 
@@ -8118,6 +8119,7 @@ static struct castle_double_array* castle_da_alloc(c_da_t da_id, c_da_opts_t opt
     /* allocate top-level */
     INIT_LIST_HEAD(&da->levels[MAX_DA_LEVEL-1].trees);
     da->levels[MAX_DA_LEVEL-1].nr_trees = 0;
+    da->levels[MAX_DA_LEVEL-1].nr_rwcts = 0;
 
     /* Init rate control parameters. */
     atomic64_set(&da->write_key_bytes, 0);
@@ -8275,6 +8277,8 @@ static void castle_component_tree_add(struct castle_double_array *da,
 
     list_add(&ct->da_list, head);
     da->levels[ct->level].nr_trees++;
+    if (CT_DYNAMIC(ct))
+        da->levels[ct->level].nr_rwcts++;
     da->nr_trees++;
 
     if (ct->level > da->top_level)
@@ -8298,6 +8302,8 @@ static void castle_component_tree_del(struct castle_double_array *da,
     ct->da_list.next = NULL;
     ct->da_list.prev = NULL;
     da->levels[ct->level].nr_trees--;
+    if (CT_DYNAMIC(ct))
+        da->levels[ct->level].nr_rwcts--;
     da->nr_trees--;
 }
 
@@ -9732,6 +9738,7 @@ err_out:
     write_lock(&da->lock);
     list_splice_init(&da->levels[0].trees, &list);
     da->levels[0].nr_trees = 0;
+    da->levels[0].nr_rwcts = 0;
     write_unlock(&da->lock);
 
     list_for_each_safe(l, p, &list)
