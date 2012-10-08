@@ -6926,7 +6926,7 @@ static void __castle_cache_extent_flush(c2_ext_dirtytree_t *dirtytree,
     int batch_idx, flushed = 0;
 
     /* We should never try and flush a VIRTUAL extent. */
-    BUG_ON(castle_compr_type_get(dirtytree->ext_id) == C_COMPR_VIRTUAL);
+    BUG_ON(!EXT_ID_INVAL(dirtytree->compr_ext_id));
 
     /* Flush from the beginning of the extent to end_off.
      * If end_off is not specified, flush the entire extent. */

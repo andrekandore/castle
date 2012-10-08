@@ -109,7 +109,9 @@ STATIC_BUG_ON(C_COMPR_BLK_SZ <= C_BLK_SIZE);                /* must be at least 
         (_ext)->flags                  |= (_me)->flags;                     \
         (_ext)->used_bytes              = (_me)->used_bytes;                \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
-        (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;             \
+        (_ext)->dirtytree->compr_ext_id = test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &(_me)->flags) \
+                                                ? (_me)->linked_ext_id      \
+                                                : INVAL_EXT_ID;             \
         (_ext)->dirtytree->ext_size     = (_me)->size;                      \
         (_ext)->dirtytree->ext_type     = (_me)->ext_type;
 #else
@@ -125,7 +127,9 @@ STATIC_BUG_ON(C_COMPR_BLK_SZ <= C_BLK_SIZE);                /* must be at least 
         (_ext)->flags                  |= (_me)->flags;                     \
         (_ext)->used_bytes              = (_me)->used_bytes;                \
         (_ext)->linked_ext_id           = (_me)->linked_ext_id;             \
-        (_ext)->dirtytree->compr_ext_id = (_me)->linked_ext_id;
+        (_ext)->dirtytree->compr_ext_id = test_bit(CASTLE_EXT_COMPR_VIRTUAL_BIT, &(_me)->flags) \
+                                                ? (_me)->linked_ext_id      \
+                                                : INVAL_EXT_ID;
 #endif
 
 #define CONVERT_EXTENT_TO_MENTRY(_ext, _me)                                 \
