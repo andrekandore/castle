@@ -512,6 +512,7 @@ DEFINE_PER_CPU(unsigned char *, castle_cache_compress_buf);
 static atomic_t                castle_cache_read_stats  = ATOMIC_INIT(0);/**< Pgs read from disk  */
 static atomic_t                castle_cache_write_stats = ATOMIC_INIT(0);/**< Pgs written to disk */
 static atomic_t                castle_cache_compress_stats = ATOMIC_INIT(0);/**< Pgs compressed   */
+static atomic_t                castle_cache_decompress_stats = ATOMIC_INIT(0);/**< Pgs decompresd */
 
 struct timer_list              castle_cache_stats_timer;
 
@@ -540,16 +541,18 @@ static void c2_pref_c2b_destroy(c2_block_t *c2b);
  */
 void castle_cache_stats_print(int verbose)
 {
-    int reads      = atomic_read(&castle_cache_read_stats);
-    int writes     = atomic_read(&castle_cache_write_stats);
-    int compressed = atomic_read(&castle_cache_compress_stats);
-    atomic_sub(reads,      &castle_cache_read_stats);
-    atomic_sub(writes,     &castle_cache_write_stats);
-    atomic_sub(compressed, &castle_cache_compress_stats);
+    int reads        = atomic_read(&castle_cache_read_stats);
+    int writes       = atomic_read(&castle_cache_write_stats);
+    int compressed   = atomic_read(&castle_cache_compress_stats);
+    int decompressed = atomic_read(&castle_cache_decompress_stats);
+    atomic_sub(reads,        &castle_cache_read_stats);
+    atomic_sub(writes,       &castle_cache_write_stats);
+    atomic_sub(compressed,   &castle_cache_compress_stats);
+    atomic_sub(decompressed, &castle_cache_decompress_stats);
 
     if (verbose)
     {
-        castle_printk(LOG_PERF, "\n\tD=%d%% C=%d%% F=%d%% | D=%d C=%d F=%d | R=%d C=%d W=%d\n"
+        castle_printk(LOG_PERF, "\n\tD=%d%% C=%d%% F=%d%% | D=%d C=%d F=%d | D=%d R=%d C=%d W=%d\n"
                                 "\tUSER      %3d%% USERd      %3d%% | MERGE      %3d%%      MERGEd %3d%%\n"
                                 "\tUSER_VIRT %3d%% USER_VIRTd %3d%% | MERGE_VIRT %3d%% MERGE_VIRTd %3d%%\n",
             (100 * atomic_read(&castle_cache_dirty_pgs)) / castle_cache_size,
@@ -558,6 +561,7 @@ void castle_cache_stats_print(int verbose)
             atomic_read(&castle_cache_dirty_pgs),
             atomic_read(&castle_cache_clean_pgs),
             castle_cache_page_freelist_size * PAGES_PER_C2P,
+            decompressed,
             reads,
             compressed,
             writes,
@@ -2909,6 +2913,8 @@ static void castle_cache_decompression_do(c2_block_t *compr_c2b, c2_block_t *vir
     BUG_ON((virt_size & (PAGE_SIZE - 1)) != 0);
     for ( ; virt_size > 0; virt_size -= PAGE_SIZE)
         BUG_ON(!c2p_uptodate(virt_c2b->c2ps[virt_c2b->nr_pages - (virt_size >> PAGE_SHIFT)]));
+
+    atomic_add(virt_c2b->nr_pages, &castle_cache_decompress_stats);
 
     put_c2b(compr_c2b);
     update_c2b(virt_c2b);
