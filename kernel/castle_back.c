@@ -2549,7 +2549,10 @@ static int castle_back_iter_next_callback(struct castle_object_iterator *iterato
         return 0;
     }
 
-    /* We were successful, inform caller to continue iterating. */
+    /* Key added successfully, update stats and continue iterating. */
+    stateful_op->iterator.nr_keys++;
+    stateful_op->iterator.nr_bytes += val->length;
+
     return 1;
 
 err0:
@@ -2615,6 +2618,8 @@ static void __castle_back_iter_next(void *data)
 
             return;
         }
+        stateful_op->iterator.nr_keys++;
+        stateful_op->iterator.nr_bytes += stateful_op->iterator.saved_val.length;
 
         castle_free(stateful_op->iterator.saved_key);
         /* we copied it so free it */
