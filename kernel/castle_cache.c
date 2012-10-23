@@ -2681,7 +2681,7 @@ static int _submit_c2b_decompress(c2_block_t *c2b, c_ext_id_t compr_ext_id, int 
  * @also _submit_c2b_rda()
  * @also submit_c2b_remap_rda()
  */
-int _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
+int inline _submit_c2b(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     c_ext_id_t compr_ext_id;
 
@@ -2735,7 +2735,7 @@ int submit_c2b(int rw, c2_block_t *c2b)
  *
  * @also submit_c2b()
  */
-int _submit_c2b_sync(int rw, c2_block_t *c2b, int *submitted_c2ps)
+int inline _submit_c2b_sync(int rw, c2_block_t *c2b, int *submitted_c2ps)
 {
     struct completion completion;
     int ret;

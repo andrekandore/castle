@@ -528,7 +528,8 @@ int castle_fs_init(void)
 
     struct   list_head *lh;
     struct   castle_slave *cs;
-    struct   castle_fs_superblock fs_sb, *cs_fs_sb;
+    static struct castle_fs_superblock fs_sb;
+    struct castle_fs_superblock *cs_fs_sb;
     int      first, prev_new_dev = -1;
     int      i, last, sync_checkpoint=0;
     uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild=0;

@@ -4112,7 +4112,7 @@ void castle_compr_ext_offset_set(c_ext_id_t virt_ext_id, c_byte_off_t used_bytes
     mutex_unlock(&virt_ext->dirtytree->compr_mutex);
 }
 
-static void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)
+static inline void __castle_extent_map_get(c_ext_t *ext, c_chk_t chk_idx, c_disk_chk_t *chk_map)
 {
     c_ext_pos_t map_page_cep, map_cep;
     c2_block_t *map_c2b;
