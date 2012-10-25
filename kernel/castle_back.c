@@ -2928,7 +2928,8 @@ static void castle_back_stream_in_expire(struct castle_back_stateful_op *statefu
 {
     struct castle_attachment *attachment;
 
-    debug("%s::token=%u.\n", __FUNCTION__, stateful_op->token);
+    castle_printk(LOG_WARN, "%s:: conn: %p op: 0x%x.\n",
+            __FUNCTION__, stateful_op->conn, stateful_op->token);
 
     BUG_ON(!stateful_op->expiring);
     BUG_ON(!list_empty(&stateful_op->op_queue));
@@ -3477,10 +3478,9 @@ static void castle_back_stream_in_next(struct castle_back_op *op)
 
     if (!stateful_op)
     {
-        stateful_debug("op=%p stateful_op=%p token=0x%x not found\n",
-                op, stateful_op, op->req.stream_in_next.token);
         err = -EBADFD;
-        castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
+        castle_printk(LOG_ERROR, "%s:: failed to get stateful op 0x%x on conn %p, err:%d\n",
+                __FUNCTION__, op->req.stream_in_next.token, op->conn, err);
         goto err0;
     }
 
@@ -3537,10 +3537,9 @@ static void castle_back_stream_in_finish(struct castle_back_op *op)
 
     if (!stateful_op)
     {
-        stateful_debug("op=%p stateful_op=%p token=0x%x not found\n",
-                op, stateful_op, op->req.stream_in_finish.token);
         err = -EBADFD;
-        castle_printk(LOG_ERROR, "%s:: failed to get stateful op, err:%d\n", __FUNCTION__, err);
+        castle_printk(LOG_ERROR, "%s:: failed to get stateful op 0x%x on conn %p, err:%d\n",
+                __FUNCTION__, op->req.stream_in_finish.token, op->conn, err);
         goto err0;
     }
     castle_printk(LOG_USERINFO, "%s::stateful op %p:0x%x\n", __FUNCTION__, stateful_op->conn, stateful_op->token);
