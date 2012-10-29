@@ -1195,7 +1195,8 @@ struct castle_dlist_entry {
     /*          9 */ uint64_t    creation_opts;
     /*         17 */ uint64_t    tombstone_discard_threshold_time_s;
     /*         25 */ tree_seq_t  active_barrier_ct;
-    /*         33 */ uint8_t     _unused[223];
+    /*         33 */ uint64_t    flags;
+    /*         41 */ uint8_t     _unused[215];
     /*        256 */
 } PACKED;
 STATIC_BUG_ON(sizeof(struct castle_dlist_entry) != 256);
@@ -2354,6 +2355,8 @@ typedef enum {
 #define CASTLE_DA_INSERTS_BLOCKED_ON_MERGE  (4)
 #define CASTLE_DA_BACK_UP_ONGOING           (5)
 #define CASTLE_DA_COMPR_ENABLED             (6)     /**< Should future extents be compressed?   */
+
+#define CASTLE_DA_ON_DISK_FLAGS_MASK        ((1ULL << CASTLE_DA_COMPR_ENABLED))
 
 #define CASTLE_TOMBSTONE_DISCARD_TD_DEFAULT (0)
 

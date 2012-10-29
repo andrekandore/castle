@@ -8170,6 +8170,7 @@ void castle_da_marshall(struct castle_dlist_entry *dam,
 
     dam->tombstone_discard_threshold_time_s =
             atomic64_read(&da->tombstone_discard_threshold_time_s);
+    dam->flags             = (da->flags & CASTLE_DA_ON_DISK_FLAGS_MASK);
 }
 
 static void castle_da_unmarshall(struct castle_double_array *da,
@@ -8184,7 +8185,11 @@ static void castle_da_unmarshall(struct castle_double_array *da,
 
     atomic64_set(&da->tombstone_discard_threshold_time_s,
             dam->tombstone_discard_threshold_time_s);
-
+    if (castle_fs_version_get() > 2)
+    {
+        da->flags        |= dam->flags;
+    }
+ 
     castle_sysfs_da_add(da);
 }
 
