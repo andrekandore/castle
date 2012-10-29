@@ -508,20 +508,23 @@ static ssize_t slave_free_blocked_show(struct kobject *kobj,
         return sprintf(buf, "0\n");
 }
 
-/* Display the fs version (checkpoint number). */
 extern uint32_t castle_filesystem_fs_version;
+
+/**
+ * Display the filesystem checkpoint version.
+ */
 static ssize_t filesystem_version_show(struct kobject *kobj,
                                    struct attribute *attr,
                                    char *buf)
 {
     struct castle_fs_superblock *fs_sb;
-    uint32_t                    fs_version;
+    uint32_t                    chkpt_version;
 
     fs_sb = castle_fs_superblocks_get();
-    fs_version = fs_sb->fs_version;
+    chkpt_version = fs_sb->chkpt_version;
     castle_fs_superblocks_put(fs_sb, 0);
 
-    return sprintf(buf, "%u\n", fs_version);
+    return sprintf(buf, "%u\n", chkpt_version);
 }
 
 static ssize_t filesystem_ctrl_prog_state_show(struct kobject *kobj,

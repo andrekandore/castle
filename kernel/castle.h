@@ -525,7 +525,7 @@ STATIC_BUG_ON(sizeof(struct castle_extents_superblock) != 2048);
 struct castle_slave_superblock {
     /* align:   8 */
     /* offset:  0 */ struct castle_slave_superblock_public pub;
-    /*        128 */ uint32_t                              fs_version;
+    /*        128 */ uint32_t                              chkpt_version;   /**< Checkpoint version.    */
     /*        132 */ castle_freespace_t                    freespace;
     /*        196 */ uint8_t                               _unused[60];
     /*        256 */
@@ -535,7 +535,7 @@ STATIC_BUG_ON(sizeof(struct castle_slave_superblock) != 256);
 struct castle_fs_superblock {
     /* align:   8 */
     /* offset:  0 */ struct castle_fs_superblock_public      pub;
-    /*        128 */ uint32_t                                fs_version;
+    /*        128 */ uint32_t                                chkpt_version; /**< Checkpoint version.    */
     /*        132 */ uint32_t                                nr_slaves;
     /*        136 */ uint32_t                                slaves[MAX_NR_SLAVES];
     /*        392 */ uint8_t                                 slaves_flags[MAX_NR_SLAVES];
@@ -1930,7 +1930,7 @@ struct castle_slave {
     unsigned long                   last_access;
     struct castle_slave_superblock  cs_superblock;
     struct castle_fs_superblock     fs_superblock;
-    uint32_t                        fs_versions[2]; /* The fs versions for this slave. */
+    uint32_t                        chkpt_versions[2];  /**< Checkpoint versions for slave.     */
     struct mutex                    sblk_lock;
     c_chk_cnt_t                     disk_size; /* in chunks; max_chk_num + 1 */
     c_chk_cnt_t                     reserved_schks;     /**< # of super chunks reserved in this
@@ -2023,6 +2023,7 @@ void                  castle_slave_superblock_put  (struct castle_slave *cs, int
 struct castle_fs_superblock*
                       castle_fs_superblocks_get    (void);
 void                  castle_fs_superblocks_put    (struct castle_fs_superblock *sb, int dirty);
+uint32_t              castle_fs_version_get        (void);
 void                  castle_fs_superblock_slaves_update
                                                    (struct castle_fs_superblock *fs_sb);
 
@@ -2208,7 +2209,7 @@ struct castle_object_iterator
     castle_object_iter_init_cb_t        init_cb;                /**< Iterator init callback.    */
 };
 
-int castle_superblocks_writeback(uint32_t version);
+int castle_superblocks_writeback(uint32_t chkpt_version);
 
 void castle_ctrl_lock               (void);
 void castle_ctrl_unlock             (void);

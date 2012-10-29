@@ -7877,7 +7877,7 @@ int castle_checkpoint_version_inc(void)
     struct   castle_slave_superblock *cs_sb;
     struct   list_head *lh;
     struct   castle_slave *cs = NULL;
-    uint32_t fs_version;
+    uint32_t chkpt_version;
 
     /* Done with previous checkpoint. Update freespace counters now. Safe to
      * reuse them now. */
@@ -7885,8 +7885,8 @@ int castle_checkpoint_version_inc(void)
 
     /* Goto next version. */
     fs_sb = castle_fs_superblocks_get();
-    fs_sb->fs_version++;
-    fs_version = fs_sb->fs_version;
+    fs_sb->chkpt_version++;
+    chkpt_version = fs_sb->chkpt_version;
     castle_fs_superblocks_put(fs_sb, 1);
 
     /* Increment version on each slave. */
@@ -7900,8 +7900,8 @@ int castle_checkpoint_version_inc(void)
             continue;
 
         cs_sb = castle_slave_superblock_get(cs);
-        cs_sb->fs_version++;
-        BUG_ON(fs_version != cs_sb->fs_version);
+        cs_sb->chkpt_version++;
+        BUG_ON(chkpt_version != cs_sb->chkpt_version);
         castle_slave_superblock_put(cs, 1);
     }
     rcu_read_unlock();
@@ -7915,13 +7915,13 @@ int castle_checkpoint_version_inc(void)
 void castle_checkpoint_wait(void)
 {
     struct   castle_fs_superblock *fs_sb;
-    uint32_t fs_version;
+    uint32_t chkpt_version;
     int max_retries = 1000, exit;
     int castle_checkpoint_period_save;
 
     /* Read version in. */
     fs_sb = castle_fs_superblocks_get();
-    fs_version = fs_sb->fs_version;
+    chkpt_version = fs_sb->chkpt_version;
     castle_fs_superblocks_put(fs_sb, 0);
 
     exit = 0;
@@ -7931,7 +7931,7 @@ void castle_checkpoint_wait(void)
     {
         msleep(1000);
         fs_sb = castle_fs_superblocks_get();
-        if(fs_sb->fs_version > fs_version)
+        if(fs_sb->chkpt_version > chkpt_version)
             exit = 1;
         else
             exit = 0;
@@ -8076,7 +8076,7 @@ int castle_slaves_superblock_invalidate(void)
 
     fs_sb = castle_fs_superblocks_get();
     /* If current fs version is N, the slot to invalidate is for fs version N-1. */
-    slot = (fs_sb->fs_version - 1) % 2;
+    slot = (fs_sb->chkpt_version - 1) % 2;
     castle_fs_superblocks_put(fs_sb, 0);
 
     rcu_read_lock();
@@ -8238,7 +8238,7 @@ void castle_extents_used_bytes_check(void);
 
 static int castle_periodic_checkpoint(void *unused)
 {
-    uint32_t version = 0;
+    uint32_t chkpt_version = 0;
     struct castle_fs_superblock         *fs_sb;
     struct castle_extents_superblock    *castle_extents_sb;
 
@@ -8266,7 +8266,7 @@ static int castle_periodic_checkpoint(void *unused)
                       castle_checkpoint_period);
 
         /* Perform any necessary work before we take the transaction lock. */
-        if (castle_mstores_pre_writeback(version) != EXIT_SUCCESS)
+        if (castle_mstores_pre_writeback(chkpt_version) != EXIT_SUCCESS)
         {
             castle_printk(LOG_WARN, "Mstore pre-writeback failed.\n");
             ret = -1;
@@ -8276,10 +8276,11 @@ static int castle_periodic_checkpoint(void *unused)
         CASTLE_TRANSACTION_BEGIN;
 
         fs_sb = castle_fs_superblocks_get();
-        version = fs_sb->fs_version;
+        chkpt_version = fs_sb->chkpt_version;
+        fs_sb->pub.fs_version = CASTLE_FS_VERSION;
         /* Update rebuild superblock information. */
         castle_fs_superblock_slaves_update(fs_sb);
-        castle_fs_superblocks_put(fs_sb, 1);
+        castle_fs_superblocks_put(fs_sb, 1 /*dirty*/);
 
         castle_extent_transaction_start();
         castle_extents_sb = castle_extents_super_block_get();
@@ -8298,7 +8299,7 @@ static int castle_periodic_checkpoint(void *unused)
             wait_event_interruptible(process_syncpoint_waitq, atomic_read(&castle_extents_presyncvar) == 0);
         }
 
-        if (castle_mstores_writeback(version, castle_last_checkpoint_ongoing))
+        if (castle_mstores_writeback(chkpt_version, castle_last_checkpoint_ongoing))
         {
             ret = -2;
             CASTLE_TRANSACTION_END;
@@ -8334,7 +8335,7 @@ static int castle_periodic_checkpoint(void *unused)
         FAULT(CHECKPOINT_FAULT);
 
         /* Writeback superblocks. */
-        if (castle_superblocks_writeback(version))
+        if (castle_superblocks_writeback(chkpt_version))
         {
             castle_printk(LOG_WARN, "Superblock writeback failed\n");
             ret = -3;
@@ -8368,8 +8369,8 @@ static int castle_periodic_checkpoint(void *unused)
         castle_checkpoint_version_inc();
 
         castle_printk(LOG_USERINFO,
-            "***** Completed checkpoint of version: %u (%lu/%llu chunks) *****\n",
-            version,
+            "***** Completed checkpoint version: %u (%lu/%llu chunks) *****\n",
+            chkpt_version,
             USED_CHUNK(atomic64_read(&mstore_ext_free.used)),
             CHUNK(mstore_ext_free.ext_size));
 

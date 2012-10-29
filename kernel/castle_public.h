@@ -955,7 +955,7 @@ typedef struct castle_buffer_consumer {
 #define CASTLE_SLAVE_MAGIC1     (0x02061985)
 #define CASTLE_SLAVE_MAGIC2     (0x16071983)
 #define CASTLE_SLAVE_MAGIC3     (0x16061981)
-#define CASTLE_SLAVE_VERSION    (26)            /* Last changed by: BM */
+#define CASTLE_SLAVE_VERSION    (26)            /**< Don't change.  See CASTLE_FS_VERSION.      */
 
 #define CASTLE_SLAVE_NEWDEV     (0x00000004)
 #define CASTLE_SLAVE_SSD        (0x00000008)
@@ -966,10 +966,10 @@ struct castle_slave_superblock_public {
     /* offset:  0 */ uint32_t magic1;
     /*          4 */ uint32_t magic2;
     /*          8 */ uint32_t magic3;
-    /*         12 */ uint32_t version;   /* Super chunk format version */
+    /*         12 */ uint32_t slave_version;/**< CASTLE_SLAVE_VERSION.              */
     /*         16 */ uint32_t uuid;
     /*         20 */ uint32_t used;
-    /*         24 */ uint64_t size;      /* In 4K blocks. */
+    /*         24 */ uint64_t size;         /**< In 4K blocks.                      */
     /*         32 */ uint32_t flags;
     /*         36 */ uint32_t checksum;
     /*         40 */ uint8_t  _unused[88];
@@ -979,7 +979,7 @@ struct castle_slave_superblock_public {
 #define CASTLE_FS_MAGIC1        (0x19731121)
 #define CASTLE_FS_MAGIC2        (0x19880624)
 #define CASTLE_FS_MAGIC3        (0x19821120)
-#define CASTLE_FS_VERSION       (2)
+#define CASTLE_FS_VERSION       (2)             /**< On-disk data structure version.            */
 
 struct castle_fs_superblock_public {
     /* align:   4 */
@@ -987,7 +987,7 @@ struct castle_fs_superblock_public {
     /*          4 */ uint32_t magic2;
     /*          8 */ uint32_t magic3;
     /*         12 */ uint32_t uuid;
-    /*         16 */ uint32_t version;   /* Super chunk format version */
+    /*         16 */ uint32_t fs_version;   /**< CASTLE_FS_VERSION.                 */
     /*         20 */ uint32_t salt;
     /*         24 */ uint32_t pepper;
     /*         28 */ uint32_t checksum;

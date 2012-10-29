@@ -76,20 +76,21 @@ static DECLARE_WAIT_QUEUE_HEAD(castle_detach_waitq);
 #define debug(_f, _a...)  (castle_printk(LOG_DEBUG, "%s:%.4d: " _f, __FILE__, __LINE__ , ##_a))
 #endif
 
-static void USED castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
+static void castle_fs_superblock_print(struct castle_fs_superblock *fs_sb)
 {
-    castle_printk(LOG_INIT, "Magic1: %.8x\n"
-           "Magic2: %.8x\n"
-           "Magic3: %.8x\n"
-           "UUID: %x\n"
-           "Version: %d\n"
-           "Salt:   %x\n"
-           "Pepper: %x\n",
+    castle_printk(LOG_INIT,
+           "Magic1:    %.8x\n"
+           "Magic2:    %.8x\n"
+           "Magic3:    %.8x\n"
+           "UUID:      %x\n"
+           "FSVersion: %d (%d)\n"
+           "Salt:      %x\n"
+           "Pepper:    %x\n",
            fs_sb->pub.magic1,
            fs_sb->pub.magic2,
            fs_sb->pub.magic3,
            fs_sb->pub.uuid,
-           fs_sb->pub.version,
+           fs_sb->pub.fs_version, CASTLE_FS_VERSION,
            fs_sb->pub.salt,
            fs_sb->pub.pepper);
 }
@@ -98,11 +99,17 @@ static int castle_fs_superblock_validate(struct castle_fs_superblock *fs_sb)
 {
     uint32_t checksum = fs_sb->pub.checksum;
 
-    if(fs_sb->pub.magic1 != CASTLE_FS_MAGIC1) return -1;
-    if(fs_sb->pub.magic2 != CASTLE_FS_MAGIC2) return -2;
-    if(fs_sb->pub.magic3 != CASTLE_FS_MAGIC3) return -3;
-    if(fs_sb->pub.version != CASTLE_FS_VERSION) return -4;
-    if(fs_sb->fs_version == 0)                  return -5;
+    if (fs_sb->pub.magic1 != CASTLE_FS_MAGIC1)
+        return -1;
+    if (fs_sb->pub.magic2 != CASTLE_FS_MAGIC2)
+        return -2;
+    if (fs_sb->pub.magic3 != CASTLE_FS_MAGIC3)
+        return -3;
+    /* CASTLE_FS_VERSION 2 was the first to support upgrades. */
+    if (fs_sb->pub.fs_version < 2 || fs_sb->pub.fs_version > CASTLE_FS_VERSION)
+        return -4;
+    if (fs_sb->chkpt_version == 0)
+        return -5;
 
     fs_sb->pub.checksum = 0;
     if (fletcher32((uint16_t *)fs_sb, sizeof(struct castle_fs_superblock))
@@ -176,7 +183,7 @@ static void castle_fs_superblock_init(struct castle_fs_superblock *fs_sb)
     do {
         get_random_bytes(&fs_sb->pub.uuid,  sizeof(fs_sb->pub.uuid));
     } while (fs_sb->pub.uuid == 0);
-    fs_sb->pub.version = CASTLE_FS_VERSION;
+    fs_sb->pub.fs_version = CASTLE_FS_VERSION;
     get_random_bytes(&fs_sb->pub.salt,  sizeof(fs_sb->pub.salt));
     get_random_bytes(&fs_sb->pub.pepper, sizeof(fs_sb->pub.pepper));
     for(i=0; i<sizeof(fs_sb->mstore) / sizeof(c_ext_pos_t ); i++)
@@ -229,6 +236,25 @@ struct castle_fs_superblock* castle_fs_superblocks_get(void)
 void castle_fs_superblocks_put(struct castle_fs_superblock *sb, int dirty)
 {
     mutex_unlock(&castle_sblk_lock);
+}
+
+/**
+ * Return the current filesystem version from the global filesystem superblock.
+ *
+ * Following first checkpoint after module load this should be the same as
+ * CASTLE_FS_VERSION.  Only prior to the first checkpoint after module load
+ * should there ever be a mismatch.
+ */
+uint32_t castle_fs_version_get(void)
+{
+    struct castle_fs_superblock *fs_sb;
+    uint32_t fs_version;
+
+    fs_sb = castle_fs_superblocks_get();
+    fs_version = fs_sb->pub.fs_version;
+    castle_fs_superblocks_put(fs_sb, 0 /*dirty*/);
+
+    return fs_version;
 }
 
 void castle_ext_freespace_size_update(c_ext_free_t *ext_free, int do_checks)
@@ -449,7 +475,7 @@ c_byte_off_t castle_ext_freespace_available(c_ext_free_t *ext_free)
     return (ext_free->ext_size - atomic64_read(&ext_free->used));
 }
 
-static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_version);
+static int castle_slave_checkpoint_version_load(struct castle_slave *cs, uint32_t chkpt_version);
 static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb);
 
 static int slave_id = 0;
@@ -533,7 +559,7 @@ int castle_fs_init(void)
     int      first, prev_new_dev = -1;
     int      i, last, sync_checkpoint=0;
     uint32_t slave_count=0, nr_fs_slaves=0, nr_live_slaves=0, need_rebuild=0;
-    uint32_t bcv=0, max=0, last_version_checked=MAX_VERSION;
+    uint32_t bcv=0, max=0, last_chkpt_version_checked=MAX_VERSION;
 
     castle_printk(LOG_INIT, "Castle FS start.\n");
     if(castle_fs_inited)
@@ -549,47 +575,47 @@ int castle_fs_init(void)
     }
 
     /*
-     * Search for best common fs version. This is the greatest fs version that is supported
-     * by preferably (1) all the slaves, or less preferably (2) all bar one of the slaves.
+     * Search for best common checkpoint version. This is the greatest checkpoint version that
+     * is supported by preferably (1) all the slaves, or less preferably (2) all bar one of the slaves.
      */
     last = 0;
     while (!bcv)
     {
-        uint32_t version_to_check=0;
+        uint32_t chkpt_version_to_check=0;
         int nr_slaves = 0;
         int hits;
 
         /*
-         * Each time we pass through this loop, we'll calculate the next-highest fs version on
-         * any slave. Also not how many slaves we have found.
+         * Each time we pass through this loop, we'll calculate the next-highest checkkpoint
+         * version on any slave. Also not how many slaves we have found.
          */
         rcu_read_lock();
         list_for_each_rcu(lh, &castle_slaves.slaves)
         {
             cs = list_entry(lh, struct castle_slave, list);
             for (i=0; i<2; i++)
-                if ((version_to_check <= cs->fs_versions[i]) &&
-                    (cs->fs_versions[i] < last_version_checked))
-                    version_to_check = cs->fs_versions[i];
+                if ((chkpt_version_to_check <= cs->chkpt_versions[i]) &&
+                    (cs->chkpt_versions[i] < last_chkpt_version_checked))
+                    chkpt_version_to_check = cs->chkpt_versions[i];
             nr_slaves++;
         }
         rcu_read_unlock();
 
-        if (!max) max = version_to_check;
-        if (max && version_to_check < (max - 1))
+        if (!max) max = chkpt_version_to_check;
+        if (max && chkpt_version_to_check < (max - 1))
         {
             castle_printk(LOG_INIT, "Error: could not find set of slaves to start filesystem using"
-                                    " fs versions %d or %d.\n", max, max - 1);
+                                    " fs checkpoint versions %d or %d.\n", max, max - 1);
             return -EINVAL;
         }
 
-        /* No lower version found, so this is the lowest. */
-        if (version_to_check == last_version_checked)
+        /* No lower checkpoint version found, so this is the lowest. */
+        if (chkpt_version_to_check == last_chkpt_version_checked)
             last = 1;
 
-        last_version_checked = version_to_check;
+        last_chkpt_version_checked = chkpt_version_to_check;
 
-        /* Find how many slaves support this fs version. */
+        /* Find how many slaves support this checkpoint version. */
         hits = 0;
         rcu_read_lock();
         list_for_each_rcu(lh, &castle_slaves.slaves)
@@ -597,7 +623,7 @@ int castle_fs_init(void)
             cs = list_entry(lh, struct castle_slave, list);
             for (i=0; i<2; i++)
             {
-                if (cs->fs_versions[i] == version_to_check)
+                if (cs->chkpt_versions[i] == chkpt_version_to_check)
                 {
                     hits++;
                     break;
@@ -608,14 +634,16 @@ int castle_fs_init(void)
 
         if (hits == nr_slaves || (hits == nr_slaves-1))
         {
-            /* Found a set of slaves to support this fs version - use it. */
-            bcv = version_to_check;
+            /* Found a set of slaves to support this checkpoint version - use it. */
+            bcv = chkpt_version_to_check;
             if (hits == nr_slaves)
-                castle_printk(LOG_INIT, "Found Best Common Version %d on all live slaves.\n",
-                              version_to_check);
+                castle_printk(LOG_INIT,
+                              "Found Best Common Checkpoint Version %d on all live slaves.\n",
+                              chkpt_version_to_check);
             else
-                castle_printk(LOG_INIT, "Found Best Common Version %d on quorum of live slaves.\n",
-                              version_to_check);
+                castle_printk(LOG_INIT,
+                              "Found Best Common Checkpoint Version %d on quorum of live slaves.\n",
+                              chkpt_version_to_check);
             break;
         } else if (last)
         {
@@ -626,7 +654,7 @@ int castle_fs_init(void)
 
     /*
      * 1. Either all disks should be new or none.
-     * 2. If there is a slave which did not support the version, mark it as out-of-service.
+     * 2. If there is a slave which did not support the checkpoint version, mark it as out-of-service.
      */
     prev_new_dev = -1;
     rcu_read_lock();
@@ -642,7 +670,7 @@ int castle_fs_init(void)
             return -EINVAL;
         }
 
-        if ((cs->fs_versions[0] != bcv) && (cs->fs_versions[1] != bcv))
+        if ((cs->chkpt_versions[0] != bcv) && (cs->chkpt_versions[1] != bcv))
         {
             castle_printk(LOG_INIT, "Slave 0x%x [%s] is not in quorum of live slaves. "
                           "Setting as out-of-service.\n",
@@ -653,7 +681,7 @@ int castle_fs_init(void)
     }
     rcu_read_unlock();
 
-    /* Load super blocks for the Best Common Version from all valid slaves. */
+    /* Load super blocks for the Best Common Checkpoint Version from all valid slaves. */
     rcu_read_lock();
     list_for_each_rcu(lh, &castle_slaves.slaves)
     {
@@ -663,10 +691,11 @@ int castle_fs_init(void)
             castle_freespace_slave_init(cs, 0);
             continue;
         }
-        if ((cs->cs_superblock.fs_version != bcv) &&
-                (castle_slave_version_load(cs, bcv)))
+        if ((cs->cs_superblock.chkpt_version != bcv) &&
+                (castle_slave_checkpoint_version_load(cs, bcv)))
         {
-            castle_printk(LOG_ERROR, "Couldn't find version %u on slave: 0x%x\n", bcv, cs->uuid);
+            castle_printk(LOG_ERROR, "Couldn't find checkpoint version %u on slave: 0x%x\n",
+                    bcv, cs->uuid);
             return -EINVAL;
         }
         if (castle_freespace_slave_init(cs, cs->new_dev))
@@ -775,7 +804,7 @@ int castle_fs_init(void)
                 /* Note. If slave was evacuating, we don't care. It is now oos. */
             } else
             {
-                if ((cs->fs_versions[0] != bcv) && (cs->fs_versions[1] != bcv))
+                if ((cs->chkpt_versions[0] != bcv) && (cs->chkpt_versions[1] != bcv))
                 {
                     /* This slave is not in the quorum. Check if it needs remapping. */
                     if (test_bit(CASTLE_SLAVE_REMAPPED_BIT, &fs_sb.slaves_flags[i]))
@@ -819,8 +848,13 @@ int castle_fs_init(void)
     }
 
     /* Init the fs superblock */
-    if(first) castle_fs_superblocks_init();
-    else      castle_fs_superblocks_load(&fs_sb);
+    if (first)
+        castle_fs_superblocks_init();
+    else
+    {
+        castle_fs_superblocks_load(&fs_sb);
+        castle_fs_superblock_print(&fs_sb);
+    }
 
     /* Load extent structures of logical extents into memory */
     FIRST_INIT_BUG_ON_ERROR(castle_extents_create());
@@ -926,17 +960,18 @@ int castle_fs_init(void)
 
 static void castle_slave_superblock_print(struct castle_slave_superblock *cs_sb)
 {
-    castle_printk(LOG_INIT, "Magic1: %.8x\n"
-           "Magic2: %.8x\n"
-           "Magic3: %.8x\n"
-           "Version:%x\n"
-           "Uuid:   %x\n"
-           "Used:   %x\n"
-           "Size:   %llx\n",
+    castle_printk(LOG_INIT,
+           "Magic1:       %.8x\n"
+           "Magic2:       %.8x\n"
+           "Magic3:       %.8x\n"
+           "SlaveVersion: %x\n"
+           "Uuid:         %x\n"
+           "Used:         %x\n"
+           "Size:         %llx\n",
            cs_sb->pub.magic1,
            cs_sb->pub.magic2,
            cs_sb->pub.magic3,
-           cs_sb->pub.version,
+           cs_sb->pub.slave_version,
            cs_sb->pub.uuid,
            cs_sb->pub.used,
            cs_sb->pub.size);
@@ -952,11 +987,15 @@ static int castle_slave_superblock_validate(struct castle_slave *cs,
 {
     uint32_t checksum = cs_sb->pub.checksum;
 
-    if(cs_sb->pub.magic1 != CASTLE_SLAVE_MAGIC1) return -1;
-    if(cs_sb->pub.magic2 != CASTLE_SLAVE_MAGIC2) return -2;
-    if(cs_sb->pub.magic3 != CASTLE_SLAVE_MAGIC3) return -3;
-    if(cs_sb->pub.version != CASTLE_SLAVE_VERSION) return -4;
-    if(!(cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->fs_version == 0))
+    if (cs_sb->pub.magic1 != CASTLE_SLAVE_MAGIC1)
+        return -1;
+    if (cs_sb->pub.magic2 != CASTLE_SLAVE_MAGIC2)
+        return -2;
+    if (cs_sb->pub.magic3 != CASTLE_SLAVE_MAGIC3)
+        return -3;
+    if (cs_sb->pub.slave_version != CASTLE_SLAVE_VERSION)
+        return -4;
+    if (!(cs_sb->pub.flags & CASTLE_SLAVE_NEWDEV) && (cs_sb->chkpt_version == 0))
         return -5;
 
     /* Don't check checksum for new device. */
@@ -1058,14 +1097,14 @@ static void castle_slave_superblock_init(struct   castle_slave *cs,
 {
     castle_printk(LOG_INIT, "Initing slave superblock.\n");
 
-    cs_sb->pub.magic1 = CASTLE_SLAVE_MAGIC1;
-    cs_sb->pub.magic2 = CASTLE_SLAVE_MAGIC2;
-    cs_sb->pub.magic3 = CASTLE_SLAVE_MAGIC3;
-    cs_sb->pub.version= CASTLE_SLAVE_VERSION;
-    cs_sb->pub.used   = 2; /* Two blocks used for the superblocks */
-    cs_sb->pub.uuid   = uuid;
-    cs_sb->pub.size   = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
-    cs_sb->pub.flags  = 0;
+    cs_sb->pub.magic1        = CASTLE_SLAVE_MAGIC1;
+    cs_sb->pub.magic2        = CASTLE_SLAVE_MAGIC2;
+    cs_sb->pub.magic3        = CASTLE_SLAVE_MAGIC3;
+    cs_sb->pub.slave_version = CASTLE_SLAVE_VERSION;
+    cs_sb->pub.used          = 2; /* Two blocks used for the superblocks */
+    cs_sb->pub.uuid          = uuid;
+    cs_sb->pub.size          = get_bd_capacity(cs->bdev) >> (C_BLK_SHIFT - 9);
+    cs_sb->pub.flags         = 0;
     castle_slave_superblock_print(cs_sb);
 
     castle_printk(LOG_INIT, "Done.\n");
@@ -1076,7 +1115,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     struct castle_slave_superblock *cs_sb = NULL;
     struct castle_fs_superblock *fs_sb = NULL;
     int err = 0, errs[2];
-    int fs_version;
+    int chkpt_version;
     int i;
 
     BUG_ON(sizeof(struct castle_slave_superblock) > C_BLK_SIZE);
@@ -1109,7 +1148,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         }
 
         /* Sanity check on version number. */
-        if ((cs_sb[i].fs_version % 2) != i)
+        if ((cs_sb[i].chkpt_version % 2) != i)
         {
             errs[i] = -11;
             continue;
@@ -1124,7 +1163,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         errs[i] = castle_fs_superblock_validate(&fs_sb[i]);
         if (errs[i])
             debug("FS superblock %u is not valid: %d\n", i, errs[i]);
-        else if (fs_sb[i].fs_version != cs_sb[i].fs_version)
+        else if (fs_sb[i].chkpt_version != cs_sb[i].chkpt_version)
             errs[i] = -22;
     }
 
@@ -1134,7 +1173,7 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         castle_slave_superblock_init(cs, &cs->cs_superblock, cs_sb[0].pub.uuid);
         /* keep the SSD flag */
         cs->cs_superblock.pub.flags |= cs_sb[0].pub.flags & CASTLE_SLAVE_SSD;
-        fs_version = 0;
+        chkpt_version = 0;
         goto out;
     }
 
@@ -1147,30 +1186,32 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
         goto error_out;
     }
 
-    fs_version = 0;
-    if (!errs[0])  fs_version = cs_sb[0].fs_version;
-    if (!errs[1])  fs_version = (fs_version < cs_sb[1].fs_version)? cs_sb[1].fs_version: fs_version;
+    chkpt_version = 0;
+    if (!errs[0])  chkpt_version = cs_sb[0].chkpt_version;
+    if (!errs[1])  chkpt_version = (chkpt_version < cs_sb[1].chkpt_version)
+                                        ? cs_sb[1].chkpt_version
+                                        : chkpt_version;
 
-    if (fs_version == 0)
+    if (chkpt_version == 0)
     {
         err = -EINVAL;
         goto error_out;
     }
 
-    fs_version = fs_version % 2;
+    chkpt_version = chkpt_version % 2;
 
-    castle_printk(LOG_INIT, "Disk 0x%x has FS versions - ", cs_sb[fs_version].pub.uuid);
-    if (!errs[0])    castle_printk(LOG_INIT, "[%u]", cs_sb[0].fs_version);
-    if (!errs[1])    castle_printk(LOG_INIT, "[%u]", cs_sb[1].fs_version);
+    castle_printk(LOG_INIT, "Disk 0x%x has checkpoint versions - ", cs_sb[chkpt_version].pub.uuid);
+    if (!errs[0])    castle_printk(LOG_INIT, "[%u]", cs_sb[0].chkpt_version);
+    if (!errs[1])    castle_printk(LOG_INIT, "[%u]", cs_sb[1].chkpt_version);
     castle_printk(LOG_INIT, "\n");
 
-    cs->fs_versions[0] = cs_sb[0].fs_version;
-    cs->fs_versions[1] = cs_sb[1].fs_version;
+    cs->chkpt_versions[0] = cs_sb[0].chkpt_version;
+    cs->chkpt_versions[1] = cs_sb[1].chkpt_version;
 
-    /* Check for the uuids of both versions to match. */
+    /* Check for the uuids of both checkpoint versions to match. */
     if ((!errs[0] && !errs[1]) && (cs_sb[0].pub.uuid != cs_sb[1].pub.uuid))
     {
-        castle_printk(LOG_ERROR, "Found versions with different uuids 0x%x:0x%x\n",
+        castle_printk(LOG_ERROR, "Found checkpoint versions with different uuids 0x%x:0x%x\n",
                 cs_sb[0].pub.uuid, cs_sb[1].pub.uuid);
 #ifdef DEBUG
         BUG();
@@ -1180,13 +1221,13 @@ static int castle_slave_superblock_read(struct castle_slave *cs)
     }
 
     castle_printk(LOG_INIT, "Disk superblock found.\n");
-    memcpy(&cs->cs_superblock, &cs_sb[fs_version], sizeof(struct castle_slave_superblock));
-    memcpy(&cs->fs_superblock, &fs_sb[fs_version], sizeof(struct castle_fs_superblock));
+    memcpy(&cs->cs_superblock, &cs_sb[chkpt_version], sizeof(struct castle_slave_superblock));
+    memcpy(&cs->fs_superblock, &fs_sb[chkpt_version], sizeof(struct castle_fs_superblock));
 
 out:
     /* Save the uuid and exit */
-    cs->uuid        = cs_sb[fs_version].pub.uuid;
-    cs->new_dev     = cs_sb[fs_version].pub.flags & CASTLE_SLAVE_NEWDEV;
+    cs->uuid    = cs_sb[chkpt_version].pub.uuid;
+    cs->new_dev = cs_sb[chkpt_version].pub.flags & CASTLE_SLAVE_NEWDEV;
     BUG_ON(err);
 
 error_out:
@@ -1196,22 +1237,22 @@ error_out:
     return err;
 }
 
-static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_version)
+static int castle_slave_checkpoint_version_load(struct castle_slave *cs, uint32_t chkpt_version)
 {
     int ret = -EINVAL;
-    sector_t sector = (fs_version % 2) * 16;
+    sector_t sector = (chkpt_version % 2) * 16;
 
     mutex_lock(&cs->sblk_lock);
 
-    /* Return, if version is already loaded. */
-    if (cs->cs_superblock.fs_version == fs_version)
+    /* Return, if checkpoint version is already loaded. */
+    if (cs->cs_superblock.chkpt_version == chkpt_version)
     {
         ret = 0;
         goto out;
     }
 
-    /* If the version is not previous version return error. */
-    if (fs_version != (cs->cs_superblock.fs_version - 1))
+    /* If the checkpoint version is not previous checkpoint version return error. */
+    if (chkpt_version != (cs->cs_superblock.chkpt_version - 1))
         goto out;
 
     if (castle_block_direct_read(cs->bdev, sector, sizeof(struct castle_slave_superblock),
@@ -1223,12 +1264,12 @@ static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_versio
     if (castle_slave_superblock_validate(cs, &cs->cs_superblock))
         goto out;
 
-    /* If the version doesn't match, return error. */
-    if (cs->cs_superblock.fs_version != fs_version)
+    /* If the checkpoint version doesn't match, return error. */
+    if (cs->cs_superblock.chkpt_version != chkpt_version)
         goto out;
 
-    /* Initialize the superblock, if the version is 0. */
-    if (!fs_version)
+    /* Initialize the superblock, if the checkpoint version is 0. */
+    if (!chkpt_version)
     {
         cs->new_dev = 1;
         castle_slave_superblock_init(cs, &cs->cs_superblock,
@@ -1238,7 +1279,7 @@ static int castle_slave_version_load(struct castle_slave *cs, uint32_t fs_versio
     {
         if (castle_fs_superblock_validate(&cs->fs_superblock))
             goto out;
-        if (cs->cs_superblock.fs_version != cs->fs_superblock.fs_version)
+        if (cs->cs_superblock.chkpt_version != cs->fs_superblock.chkpt_version)
             goto out;
         cs->new_dev = 0;
     }
@@ -1263,12 +1304,12 @@ void castle_slave_superblock_put(struct castle_slave *cs, int dirty)
     mutex_unlock(&cs->sblk_lock);
 }
 
-int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version)
+int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t chkpt_version)
 {
     c2_block_t *c2b;
     c_ext_pos_t cep;
     char       *buf;
-    int         slot = version % 2;
+    int         slot = chkpt_version % 2;
     int         length = (2 * C_BLK_SIZE);
     int         ret;
     struct castle_slave_superblock *cs_sb;
@@ -1284,7 +1325,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     cs_sb = castle_slave_superblock_get(cs);
     fs_sb = castle_fs_superblocks_get();
 
-    BUG_ON(cs_sb->fs_version != version);
+    BUG_ON(cs_sb->chkpt_version != chkpt_version);
 
     write_lock_c2b(c2b);
     update_c2b(c2b);
@@ -1325,7 +1366,7 @@ int castle_slave_superblocks_writeback(struct castle_slave *cs, uint32_t version
     return 0;
 }
 
-int castle_superblocks_writeback(uint32_t version)
+int castle_superblocks_writeback(uint32_t chkpt_version)
 {
     struct list_head *lh;
     struct castle_slave *slave;
@@ -1339,7 +1380,7 @@ int castle_superblocks_writeback(uint32_t version)
         if ((test_bit(CASTLE_SLAVE_OOS_BIT, &slave->flags)))
             continue;
 
-        if (castle_slave_superblocks_writeback(slave, version))
+        if (castle_slave_superblocks_writeback(slave, chkpt_version))
             return -EIO;
     }
     rcu_read_unlock();
@@ -1539,8 +1580,8 @@ struct castle_slave* castle_claim(uint32_t new_dev)
         fs_sb->slaves[fs_sb->nr_slaves++] = cs->uuid;
         cs_sb = castle_slave_superblock_get(cs);
 
-        /* Slave is initialised with current fs version. */
-        cs_sb->fs_version = fs_sb->fs_version;
+        /* Slave is initialised with current checkpoint version. */
+        cs_sb->chkpt_version = fs_sb->chkpt_version;
 
         castle_slave_superblock_put(cs, 1);
         castle_fs_superblocks_put(fs_sb, 1);
