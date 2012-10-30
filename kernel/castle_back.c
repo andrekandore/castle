@@ -3412,8 +3412,6 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
     /* Work structure to run every queued op. Every stream_in_next gets queued. */
     INIT_WORK(&stateful_op->work[0], castle_back_stream_in_continue, stateful_op);
 
-    /* Stream_in_start op completed, respond to it. */
-    castle_back_reply(op, 0, stateful_op->token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
     stateful_op->curr_op = NULL;
 
     /* Now that the stream_in structures is valid, it is safe to enable expiry
@@ -3432,14 +3430,17 @@ static void castle_back_stream_in_start(struct castle_back_op *op)
         stateful_op->expiring = 1;
         spin_unlock(&stateful_op->lock);
         stateful_op->expire(stateful_op);
-
-        return;
+        err = EKEYEXPIRED;
+        goto err0;
     }
     else
         /* Stream in initialised, connection live. Set in_use flag, for the benefit of
            castle_back_release. */
         stateful_op->in_use = 1;
     spin_unlock(&stateful_op->lock);
+
+    /* Stream_in_start op completed, respond to it. */
+    castle_back_reply(op, 0, stateful_op->token, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
 
     /* To prevent #3144. */
     might_resched();
