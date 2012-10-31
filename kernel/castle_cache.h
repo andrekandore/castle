@@ -328,6 +328,7 @@ void        castle_cache_block_unhardpin(c2_block_t *c2b);
 void        castle_cache_page_block_unreserve(c2_block_t *c2b);
 void        castle_cache_dirtytree_async_compress(struct work_struct *work);
 int         castle_cache_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
+void        castle_cache_maps_extent_flush_schedule (c_ext_id_t ext_id, uint64_t start, uint64_t size);
 
 int                        castle_checkpoint_init          (void);
 void                       castle_checkpoint_fini          (void);

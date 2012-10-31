@@ -519,6 +519,7 @@ struct timer_list              castle_cache_stats_timer;
 // @TODO LT/BM: make this static LIST_HEAD once castle_extents_writeback() is updated to arrange
 // compression of all extents in another way
 LIST_HEAD(castle_cache_flush_list); /**< No locks, only checkpoint manipulates this list.         */
+LIST_HEAD(castle_cache_maps_flush_list); /**< No locks, only checkpoint manipulates this list.         */
 
 static atomic_t                castle_cache_logical_ext_pages = ATOMIC_INIT(0);
 
@@ -4567,7 +4568,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
                 castle_cache_block_freelist_grow(part_id, for_virt);
 
                 if (unlikely(current == castle_cache_flush_thread
-                            && cep.ext_id == META_EXT_ID
+                            && castle_extent_contains_ext_maps(cep.ext_id)
                             && grown_block_freelist++))
                     c2b = castle_cache_block_reservelist_get();
             }
@@ -4579,7 +4580,7 @@ c2_block_t* castle_cache_block_get(c_ext_pos_t cep,
                 castle_cache_page_freelist_grow(nr_pages, part_id, for_virt);
 
                 if (unlikely(current == castle_cache_flush_thread
-                            && cep.ext_id == META_EXT_ID
+                            && castle_extent_contains_ext_maps(cep.ext_id)
                             && grown_page_freelist++))
                     c2ps = castle_cache_page_reservelist_get(nr_pages);
             }
@@ -7958,6 +7959,40 @@ int castle_mstores_pre_writeback(uint32_t version)
 }
 
 /**
+ * *** This is for the extents that contains extent maps and comrpession maps.
+ *
+ * Schedule flush for maps ext_id at the next checkpoint.
+ *
+ * - Take an extent reference so the extent persists until the flush
+ *   has completed.
+ *
+ * @also castle_cache_extents_flush()
+ */
+void castle_cache_maps_extent_flush_schedule(c_ext_id_t ext_id,
+                                             uint64_t start,
+                                             uint64_t count)
+{
+    struct castle_cache_flush_entry *entry;
+
+    BUG_ON(current != checkpoint_thread);
+
+    entry = castle_alloc(sizeof(struct castle_cache_flush_entry));
+    BUG_ON(!entry);
+
+    /* Take a hard reference on extent, to make sure extent wouldn't disappear during flush. */
+    BUG_ON(castle_extent_link(ext_id));
+
+    /* Get a reference on the complete extent space. Releases the reference after
+     * completing the flush of the extent in castle_cache_extents_flush(). */
+    BUG_ON(MASK_ID_INVAL(entry->mask_id = castle_extent_all_masks_get(ext_id)));
+
+    entry->ext_id = ext_id;
+    entry->start  = start;
+    entry->count  = count;
+    list_add_tail(&entry->list, &castle_cache_maps_flush_list);
+}
+
+/**
  * Schedule flush for ext_id at the next checkpoint.
  *
  * - Take an extent reference so the extent persists until the flush
@@ -8271,10 +8306,23 @@ static int castle_periodic_checkpoint(void *unused)
             goto out;
         }
 
+        CASTLE_TRANSACTION_END;
+
         list_replace(&castle_cache_flush_list, &flush_list);
         INIT_LIST_HEAD(&castle_cache_flush_list);
 
-        CASTLE_TRANSACTION_END;
+        /* Flush all marked extents from cache. */
+        castle_cache_extents_flush(&flush_list,
+                                   castle_last_checkpoint_ongoing ? 0 :
+                                   max_t(unsigned int,
+                                         castle_checkpoint_ratelimit,
+                                         CASTLE_MIN_CHECKPOINT_RATELIMIT));
+
+        /* We want meta extent to be flushed at the end of all map extents. */
+        castle_cache_maps_extent_flush_schedule(META_EXT_ID, 0, 0);
+
+        list_replace(&castle_cache_maps_flush_list, &flush_list);
+        INIT_LIST_HEAD(&castle_cache_maps_flush_list);
 
         /* Flush all marked extents from cache. */
         castle_cache_extents_flush(&flush_list,

@@ -30,11 +30,23 @@ struct castle_cache_extent_dirtytree; /* defined in castle_cache.h */
 #define CASTLE_EXT_COMPR_VIRTUAL_BIT    (5)
 #define CASTLE_EXT_FLAG_COMPR_VIRTUAL   (1UL << 5)
 
+#define CASTLE_EXT_COMPR_MAPS_BIT       (6)
+#define CASTLE_EXT_FLAG_COMPR_MAPS      (1UL << 6)
+
+#define CASTLE_EXT_MAPS_BIT             (7)
+#define CASTLE_EXT_FLAG_MAPS            (1UL << 7)
+
+#define CASTLE_EXT_MAPS_POOL_UNIT       (8)
+#define CASTLE_EXT_FLAG_MAPS_POOL_UNIT  (1UL << 8)
+
 #define CASTLE_EXT_FLAGS_NONE           (0UL)
 
 #define CASTLE_EXT_ON_DISK_FLAGS_MASK           \
         (CASTLE_EXT_FLAG_COMPR_COMPRESSED |     \
-         CASTLE_EXT_FLAG_COMPR_VIRTUAL)
+         CASTLE_EXT_FLAG_COMPR_VIRTUAL |        \
+         CASTLE_EXT_FLAG_COMPR_MAPS |           \
+         CASTLE_EXT_FLAG_MAPS   |               \
+         CASTLE_EXT_FLAG_MAPS_POOL_UNIT)
 
 
 typedef struct castle_extent {
@@ -255,6 +267,9 @@ void                castle_extent_last_consistant_byte_set   (c_ext_id_t     ext
 void                castle_extents_last_chkpt_prepare        (void);
 
 c_byte_off_t        castle_compr_nr_bytes_compressed_get     (c_ext_id_t     ext_id);
+c_ext_id_t          castle_extent_maps_ext_id                (c_ext_id_t     ext_id);
+int                 castle_extent_contains_ext_maps          (c_ext_id_t     ext_id);
+
 #define castle_res_pool_counter_check(_pool, _id)                                           \
 do {                                                                                        \
     BUG_ON(((_pool)->reserved_schks[_id] < 0) && (_pool)->freed_schks[_id]);                \
