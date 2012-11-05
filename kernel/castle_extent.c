@@ -6221,7 +6221,8 @@ static int submit_sync_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_c
 
     castle_printk(LOG_UNLIMITED, "Remapping [%llu:%u]\n", ext->ext_id, chunkno);
 
-    for (i=0, offset=0; i<BLKS_PER_CHK; i++, offset += C_BLK_SIZE)
+    offset = chunkno * C_CHK_SIZE;
+    for (i=0; i<BLKS_PER_CHK; i++, offset += C_BLK_SIZE)
     {
         c2_block_t *c2b = castle_cache_block_get(CEP(ext->ext_id, offset), 1, USER);
 
