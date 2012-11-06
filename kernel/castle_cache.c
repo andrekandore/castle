@@ -488,6 +488,8 @@ static c_ext_id_t              c2_flush_hint_ext_id = INVAL_EXT_ID;/**< To pass 
 struct task_struct            *castle_cache_compress_thread;/**< On-demand compress thread        */
 static DECLARE_WAIT_QUEUE_HEAD(castle_cache_compress_wq);   /**< Wait on compression thread work  */
 static atomic_t                castle_cache_compress_seq;   /**< Detect compression thread work   */
+static DECLARE_WAIT_QUEUE_HEAD(castle_cache_compress_thread_wq);/**< Compression thread waiter    */
+static atomic_t                castle_cache_compress_thread_seq;/**< Detect compression waiters   */
 static c_ext_id_t              c2_compress_hint_ext_id = INVAL_EXT_ID;/**< To pass ext_id hint to
                                                                  castle_cache_compress() thread.  */
 
@@ -4099,7 +4101,8 @@ void castle_cache_flush_wakeup(void)
  */
 void castle_cache_compress_wakeup(void)
 {
-    wake_up_process(castle_cache_compress_thread);
+    atomic_inc(&castle_cache_compress_thread_seq);
+    wake_up(&castle_cache_compress_thread_wq);
 }
 
 /**
@@ -6577,25 +6580,21 @@ static c2_ext_dirtytree_t * _castle_cache_next_dirtytree_get(c_ext_flush_prio_t 
 static int castle_cache_compress(void *unused)
 {
 #define MIN_COMPRESS_SIZE   128
-    int to_compress, total_compressed, compressed, prio;
+    int to_compress, total_compressed, compressed, prio, exiting, seq;
     c2_ext_dirtytree_t *dirtytree;
     c_ext_mask_id_t ext_mask;
 
+    seq     = 0;
+    exiting = 0;
     while (1)
     {
-        /* Sleep until somebody needs us. */
-        preempt_disable();
-        set_current_state(TASK_INTERRUPTIBLE);
-        if (kthread_should_stop())
-        {
-            set_current_state(TASK_RUNNING);
-            break;
-        }
-        preempt_enable();
-        schedule();
-        if (kthread_should_stop())
+        wait_event_interruptible(castle_cache_compress_thread_wq,
+                atomic_read(&castle_cache_compress_thread_seq) != seq
+                    || (exiting = kthread_should_stop()));
+        if (unlikely(exiting))
             break;
 
+        seq              = atomic_read(&castle_cache_compress_thread_seq);
         to_compress      = MIN_COMPRESS_SIZE;
         total_compressed = 0;
 
@@ -8430,6 +8429,7 @@ int castle_cache_init(void)
 
     atomic_set(&castle_cache_flush_seq, 0);
     atomic_set(&castle_cache_compress_seq, 0);
+    atomic_set(&castle_cache_compress_thread_seq, 0);
     atomic_set(&c2_pref_active_window_size, 0);
 
     c2_pref_total_window_size = 0;
