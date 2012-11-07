@@ -7061,8 +7061,7 @@ void castle_cache_extent_batch_evict(c2_block_t *c2b_batch[], int nr_c2bs)
         c2_block_t *c2b;
 
         c2b = c2b_batch[i];
-        clean_c2b(c2b, 1 /*clean_c2ps*/, 1 /*checklocked*/);
-        read_unlock_c2b(c2b);
+        clean_c2b(c2b, 1 /*clean_c2ps*/, 0 /*checklocked*/);
         castle_cache_block_destroy(c2b);
     }
 }
@@ -7129,8 +7128,7 @@ void castle_cache_extent_evict(c2_ext_dirtytree_t *dirtytree, c_chk_cnt_t start,
         }
 
         /* Evict this c2b. */
-        read_lock_c2b(c2b);
-        get_c2b(c2b);
+        get_c2b(c2b); /* put by castle_cache_block_destroy() */
         c2b_batch[batch_idx++] = c2b;
 
         if (unlikely(batch_idx >= CASTLE_CACHE_FLUSH_BATCH_SIZE))
