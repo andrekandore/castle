@@ -1,15 +1,16 @@
 %define   kmodtool sh /usr/lib/rpm/redhat/kmodtool
 
-# hardcode for now:
 %{!?kversion: %{expand: %%define kversion %(uname -r)}}
 
 %define kmod_name castle
 %define kverrel %(%{kmodtool} verrel %{?kversion} 2>/dev/null)
-%define kvariants "" xen
+%{!?kvariants: %define kvariants ""}
 %define krel	%(echo %{kverrel} | sed -e 's/-/_/g')
 %define krel_nohg %(echo %{krel} | sed -e 's/\.hg.*$//')
 
-Name:           castle-fs
+%define base_pkgname  castle-fs
+
+Name:           %{?pkgname: %{pkgname}} %{!?pkgname: %{base_pkgname}}
 Version:        @@SOURCEVER@@
 Release:        %{?release}%{?!release:1}
 Summary:        Acunu kernel filesystem
@@ -20,7 +21,7 @@ URL:            http://www.acunu.com/
 Source:         %{name}-%{version}.tar.gz
 BuildRoot:      %{_tmppath}/%{name}-%{version}-%{release}-root-%(%{__id_u} -n)
 
-Provides: castle-fs-kmod-common = %{version}
+Provides: %{base_pkgname}-kmod-common = %{version}
 
 Requires: castle-tools
 
@@ -87,4 +88,4 @@ Group: Documentation
 
 %changelog
 * Thu Sep  9 2010 Andrew Suffield <asuffield@acunu.com> - @@SOURCEVER@@
-- Initial package
+- Initial package. This changelog is not maintained.
