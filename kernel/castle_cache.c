@@ -346,6 +346,9 @@ static int                     castle_cache_stats_timer_interval = 0; /* in seco
                                                                          ALSO: don't export as module
                                                                          parameter, until the fini()
                                                                          logic is fixed. */
+static int            castle_cache_stats_verbose    = 0;    /**< Print cache stats to console?  */
+module_param(castle_cache_stats_verbose, int, S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP);
+MODULE_PARM_DESC(castle_cache_stats_verbose, "Print verbose cache stats to the console");
 
 #define                        CASTLE_MIN_CHECKPOINT_RATELIMIT  (25 * 1024)  /* In KB/s */
 static unsigned int            castle_checkpoint_ratelimit;
@@ -1041,7 +1044,7 @@ static inline void c2_partitions_init(void)
  */
 static void castle_cache_stats_print_queue(void *unused)
 {
-    castle_cache_stats_print(0);
+    castle_cache_stats_print(castle_cache_stats_verbose);
 }
 
 static DECLARE_WORK(castle_cache_stats_print_work, castle_cache_stats_print_queue, NULL);
@@ -5830,7 +5833,6 @@ void castle_cache_debug(void)
                "       #dirty_pgs=%d, #clean_pgs=%d, #freelist_pgs=%d\n",
                 dirty, clean, free);
     }
-    castle_cache_stats_print(1);
 }
 
 void castle_cache_debug_fini(void)
@@ -8549,6 +8551,9 @@ int castle_cache_init(void)
 
     /* Always trace cache stats. */
     castle_cache_stats_timer_interval = 1;
+#ifdef CASTLE_DEBUG
+    castle_cache_stats_verbose = 1;
+#endif
     if (castle_cache_stats_timer_interval) castle_cache_stats_timer_tick(0);
 
     return 0;
