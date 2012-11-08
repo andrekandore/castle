@@ -413,7 +413,7 @@ int castle_vmap_fast_map_init(void)
 
 void castle_vmap_fast_map_fini(void)
 {
-    castle_vmap_freelist_t *freelist;
+    castle_vmap_freelist_t *freelist, *tmp;
     int bucket;
     int max_slots;
 
@@ -421,7 +421,7 @@ void castle_vmap_fast_map_fini(void)
     for (bucket = 1; bucket <= CASTLE_VMAP_MAX_ORDER; ++bucket)
     {
         max_slots = 0;
-        list_for_each_entry(freelist, &castle_vmap_fast_maps[bucket], list)
+        list_for_each_entry_safe(freelist, tmp, &castle_vmap_fast_maps[bucket], list)
         {
             /* Ensure all remaining freelists are of the same size. */
             if (max_slots == 0)
@@ -430,6 +430,7 @@ void castle_vmap_fast_map_fini(void)
             BUG_ON(freelist->nr_slots != freelist->slots_free);
 
             /* Delete the freelist. */
+            list_del(&freelist->list);
             castle_vmap_freelist_delete(freelist);
             castle_free(freelist);
         }
