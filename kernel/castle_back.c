@@ -221,6 +221,8 @@ struct castle_back_stateful_op
     struct work_struct                  work[2];
 
     unsigned long                       last_used_jiffies;
+    uint8_t                             allow_luj_update;   /**< Whether last_used_jiffies may be
+                                                                 updated. */
     struct work_struct                  expire_work;
     struct castle_attachment           *attachment;
     castle_back_stateful_op_expire_t    expire;
@@ -570,6 +572,7 @@ castle_back_stateful_op_get(struct castle_back_conn *conn,
     stateful_op->cpu = cpu;
     stateful_op->cpu_index = cpu_index;
     stateful_op->seq_id = atomic_inc_return(&castle_req_seq_id);
+    stateful_op->allow_luj_update = 1;
     stateful_op->last_used_jiffies = jiffies;
     stateful_op->expire = expire;
     stateful_op->expire_enabled = 0;
@@ -707,7 +710,11 @@ static inline void castle_back_stateful_op_enable_expire(struct castle_back_stat
     /* only reset last_used_jiffies if was disabled before */
     if (!stateful_op->expire_enabled)
     {
-        stateful_op->last_used_jiffies = jiffies;
+        if (stateful_op->allow_luj_update)
+            stateful_op->last_used_jiffies = jiffies;
+        else
+            castle_printk(LOG_WARN, "%s::cannot update luj for stateful op %p:0x%x\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token);
         stateful_op->expire_enabled = 1;
     }
 }
@@ -768,8 +775,11 @@ void castle_attachment_stateful_ops_expire(struct castle_attachment *ca)
         if (sop->in_use)
         {
             /* Simply nudge the normal process of expiry to work it's "magic". */
-            castle_printk(LOG_USERINFO, "%s::[col %u] forcing expiry of stateful op 0x%x\n",
-                    __FUNCTION__, ca->col.id, sop->token);
+            castle_printk(LOG_USERINFO, "%s::[col %u] forcing expiry of stateful op 0x%x -> "
+                "ptr %p, tag %u, in_use %u, expire_enabled %u, expiring %u, last_used_jiffies %lu, jiffies %lu\n",
+                    __FUNCTION__, ca->col.id, sop->token,
+                    sop, sop->tag, sop->in_use, sop->expire_enabled, sop->expiring, sop->last_used_jiffies, jiffies);
+            sop->allow_luj_update = 0;
             sop->last_used_jiffies = 0;
         }
         spin_unlock(&sop->lock);
