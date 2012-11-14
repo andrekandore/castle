@@ -500,6 +500,9 @@ struct task_struct            *castle_cache_evict_thread;   /**< Background evic
 
 #define CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS    5           /**< Minimum available VIRTUAL data
                                                                  before scheduling async compress */
+#define CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS     CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS*BLKS_PER_CHK
+                                                            /**< Minimum available VIRTUAL data
+                                                                 before scheduling async compress */
 struct workqueue_struct       *castle_cache_compr_wq = NULL;/**< For async (de)compression        */
 
 static struct task_struct     *castle_cache_decompress_thread;
@@ -1552,8 +1555,8 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
 
     /* Schedule asynchronous compression if we have enough data. */
     if (!EXT_ID_INVAL(dirtytree->compr_ext_id)
-            && c2b_end_off(c2b) >= dirtytree->next_virt_off
-                        + CASTLE_CACHE_COMPRESS_MIN_ASYNC_BLKS * C_CHK_SIZE)
+            && dirtytree->nr_pages >= CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS
+            && !mutex_is_locked(&dirtytree->compr_mutex))
     {
         castle_extent_dirtytree_get(dirtytree);
         if (!queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
@@ -6552,6 +6555,7 @@ void castle_cache_dirtytree_async_compress(struct work_struct *work)
 #define MAX_ASYNC_COMPRESS_SIZE 5*256       /**< 5MB            */
     c2_ext_dirtytree_t *dirtytree;
     c_ext_mask_id_t ext_mask;
+    int compressed = 0;
 
     dirtytree = container_of(work, c2_ext_dirtytree_t, compr_work);
 
@@ -6565,10 +6569,17 @@ void castle_cache_dirtytree_async_compress(struct work_struct *work)
                                     0,                          /* end_off      */
                                     MAX_ASYNC_COMPRESS_SIZE,    /* max_pgs      */
                                     0,                          /* force        */
-                                    NULL);                      /* compressed_p */
+                                   &compressed);                /* compressed_p */
 
     /* Put extent reference. */
     castle_extent_put(ext_mask);
+
+    /* Requeue if more compression work needs to be done. */
+    if (compressed
+            && dirtytree->nr_pages >= CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS
+            && !mutex_is_locked(&dirtytree->compr_mutex)
+            && queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
+        castle_extent_dirtytree_get(dirtytree);
 
 out:
     /* Put reference taken by c2_dirtytree_insert() potentially freeing the
