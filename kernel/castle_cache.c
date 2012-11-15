@@ -6643,7 +6643,7 @@ static int castle_cache_compress(void *unused)
                 dirtytree = _castle_cache_next_dirtytree_get(prio,
                                                             &nr_dirtytrees,
                                                              1,     /* virtual      */
-                                                             0);    /* aggressive   */
+                                                             1);    /* aggressive   */
                 /* Try the next priority level if we didn't find a dirtytree. */
                 if (!dirtytree)
                     break;
