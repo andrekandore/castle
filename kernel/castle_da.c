@@ -2968,7 +2968,11 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
             ct = castle_da_l1_oldest_tree_get(da);
 
             if (ct && test_bit(CASTLE_CT_BACKUP_BARRIER_BIT, &ct->flags))
+            {
+                castle_printk(LOG_INFO, "Promoting Barrier CT: %llu of DA: %u to level-2\n",
+                                         ct->seq, da->id);
                 castle_component_tree_promote(da, ct);
+            }
 
             DA_TRANSACTION_END(da);
 
@@ -2980,6 +2984,8 @@ static struct castle_component_tree * castle_da_l1_merge_ct_get(struct castle_do
         {
             DA_TRANSACTION_BEGIN(da);
             castle_component_tree_promote(da, ct);
+            castle_printk(LOG_INFO, "Promoting immutable CT: %llu of DA: %u to level-2\n",
+                                     ct->seq, da->id);
             DA_TRANSACTION_END(da);
 
             castle_sysfs_ct_add(ct);
