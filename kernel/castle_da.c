@@ -4885,9 +4885,24 @@ static void castle_da_merge_cts_release(struct castle_da_merge *merge, int err)
 }
 
 static void castle_da_inserts_enable(unsigned long data);
+static void castle_da_l1_merge_inserts_enable(struct castle_double_array *da)
+{
+    spin_lock(&da->rate_ctrl_lock);
+
+    if ((castle_fs_exiting || da->levels[1].nr_rwcts < 4 * castle_double_array_request_cpus())
+            && test_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &da->flags))
+    {
+        clear_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &da->flags);
+        castle_da_inserts_enable((unsigned long)da);
+    }
+
+    spin_unlock(&da->rate_ctrl_lock);
+}
+
 static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err)
 {
     struct castle_component_tree *out_tree = merge->out_tree_constr->tree;
+    struct castle_double_array *da = merge->da;
     int i;
 
     /* Any operations on DA tree lists should be a transaction. */
@@ -4917,13 +4932,13 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
 
     /* Get the lock and make modifications to DA.  We release last reference on trees, outside
      * lock*/
-    write_lock(&merge->da->lock);
+    write_lock(&da->lock);
 
     /* Delete input trees, if merge succeeded. */
     if (!err)
     {
         for (i=0; i<merge->nr_trees; i++)
-            castle_component_tree_del(merge->da, merge->in_trees[i]);
+            castle_component_tree_del(da, merge->in_trees[i]);
 
         /* Commit output tree stats. */
         castle_ct_stats_commit(out_tree);
@@ -4944,14 +4959,14 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
 
         /* If merge failed or out_tree is empty, delete it from DA. */
         if (err || (atomic64_read(&out_tree->item_count) == 0))
-            castle_component_tree_del(merge->da, out_tree);
+            castle_component_tree_del(da, out_tree);
 
         /* Reset all merge related bits on output tree. */
         out_tree->merge     = NULL;
         out_tree->merge_id  = INVAL_MERGE_ID;
         clear_bit(CASTLE_CT_MERGE_OUTPUT_BIT, &out_tree->flags);
         clear_bit(CASTLE_CT_PARTIAL_TREE_BIT, &out_tree->flags);
-        merge->da->levels[out_tree->level].nr_output_trees--;
+        da->levels[out_tree->level].nr_output_trees--;
     }
 
     /* Reset all merge related bits on input trees. */
@@ -4964,20 +4979,15 @@ static void castle_da_merge_trees_cleanup(struct castle_da_merge *merge, int err
     }
 
     /* Release the lock. */
-    write_unlock(&merge->da->lock);
+    write_unlock(&da->lock);
 
     if (out_tree && (atomic64_read(&out_tree->item_count)>0) && merge->level == 1)
-        castle_events_new_tree_added(out_tree->seq, out_tree->da->id);
+        castle_events_new_tree_added(out_tree->seq, da->id);
 
     /* FIXME: This again looks hacky. Need to fix rate control in clean way - BM. */
     /* If this is a level 1 merge, check if this is time to restart inserts. */
-    if ((merge->level == 1) &&
-        (castle_da_exiting || (merge->da->levels[1].nr_rwcts < 4 * castle_double_array_request_cpus())) &&
-        test_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags))
-    {
-        clear_bit(CASTLE_DA_INSERTS_BLOCKED_ON_MERGE, &merge->da->flags);
-        castle_da_inserts_enable((unsigned long)merge->da);
-    }
+    if (merge->level == 1)
+        castle_da_l1_merge_inserts_enable(da);
 
     castle_da_merge_restart(merge->da, NULL);
 
@@ -7919,6 +7929,8 @@ static void castle_da_inserts_enable(unsigned long data)
 static int _castle_da_inserts_enable(struct castle_double_array *da, void *unused)
 {
     castle_da_insert_rate_set(da->id, 500);
+
+    castle_da_l1_merge_inserts_enable(da);
 
     return 0;
 }
