@@ -2255,6 +2255,12 @@ void castle_extents_start(void)
 #define META_POOL_SIZE 40000    /* Number of pool entries. */
 #define META_POOL_UNIT_SIZE 10
 
+/* META_POOL_UNIT_SIZE decides the smallest space an extent can occupy in meta extent. In
+ * many places (compaction, extent free etc) we assume that any extent that needs fewer than
+ * 10 pages would occupy 10 pages. So, changing this value would ruin the backward
+ * compatibility. */
+STATIC_BUG_ON(META_POOL_UNIT_SIZE != 10);
+
 static int castle_extent_meta_ext_space_needed(c_ext_t *ext, unsigned long flags)
 {
     int nr_pages;
