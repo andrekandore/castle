@@ -6574,6 +6574,8 @@ out:
     /* Put reference taken by c2_dirtytree_insert() potentially freeing the
      * dirtytree if the extent has already been destroyed. */
     castle_extent_dirtytree_put(dirtytree);
+
+    might_resched(); /* #3144 */
 }
 
 static c2_ext_dirtytree_t * _castle_cache_next_dirtytree_get(c_ext_flush_prio_t prio,
