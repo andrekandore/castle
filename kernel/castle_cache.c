@@ -6545,6 +6545,13 @@ out:
     if (compressed_p)
         *compressed_p = compressed;
     atomic_add(compressed, &castle_cache_compress_stats);
+
+    /* Queue a work item if more compression work needs to be done. */
+    if (compressed
+            && dirtytree->nr_pages >= CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS
+            && !mutex_is_locked(&dirtytree->compr_mutex)
+            && queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
+        castle_extent_dirtytree_get(dirtytree);
 }
 
 /**
@@ -6573,13 +6580,6 @@ void castle_cache_dirtytree_async_compress(struct work_struct *work)
 
     /* Put extent reference. */
     castle_extent_put(ext_mask);
-
-    /* Requeue if more compression work needs to be done. */
-    if (compressed
-            && dirtytree->nr_pages >= CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS
-            && !mutex_is_locked(&dirtytree->compr_mutex)
-            && queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
-        castle_extent_dirtytree_get(dirtytree);
 
 out:
     /* Put reference taken by c2_dirtytree_insert() potentially freeing the
