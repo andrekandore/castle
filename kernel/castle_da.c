@@ -4094,8 +4094,9 @@ static c_val_tup_t _castle_immut_tree_entry_add(struct castle_immut_tree_constru
         castle_btree_node_init(out_tree, node, 0, new_node_size, depth);
         if (depth > 0)
             node->flags &= ~BTREE_NODE_IS_LEAF_FLAG;
-        debug("%s::Allocating a new node at depth: %d for tree %p (da %d)\n",
-            __FUNCTION__, depth, out_tree, da->id);
+        debug("%s::Allocating a new node at depth: %d for tree %p (da %d) cep "cep_fmt_str" after %lu items in output ct.\n",
+            __FUNCTION__, depth, out_tree, tree_constr->da->id, cep2str(new_cep),
+            atomic64_read(&out_tree->item_count));
 
         /* if a parent node exists, return preadoption cvt for caller to perform preadoption */
         if ( atomic_read(&out_tree->tree_depth) > (depth+1) )
@@ -13173,8 +13174,11 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     CASTLE_TRANSACTION_BEGIN;
 
     BUG_ON(atomic_read(&ct->ref_count)!=1);
-    castle_printk(LOG_INFO, "%s::finalizing stream-in tree %llu (with %lu entries)\n",
-        __FUNCTION__, ct->seq, atomic64_read(&ct->item_count));
+    castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %llu (with %lu entries over %lu tree chunks and %lu data chunks)\n",
+        __FUNCTION__, ct->seq,
+        atomic64_read(&ct->item_count),
+        CHUNK(atomic64_read(&ct->tree_ext_free.used)),
+        CHUNK(atomic64_read(&ct->data_ext_free.used)));
 
     /* Complete Output tree and get it ready to promote to DA. */
     castle_immut_tree_complete(constr);

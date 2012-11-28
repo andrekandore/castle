@@ -3807,8 +3807,8 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         {
             /* Growth will exceed allocation */
             castle_printk(LOG_ERROR,
-                    "%s::[op %p:0x%x] exhausted extent allocation (size: %llu chunks); suggest complete current stream then retry.\n",
-                    __FUNCTION__, stateful_op->conn, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE);
+                    "%s::[op %p:0x%x] exhausted extent allocation (size: %llu chunks, limit: %u); suggest complete current stream then retry.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE, extent_size_limit);
             return -ENOSPC;
         }
 
@@ -3833,10 +3833,12 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
 {
     struct castle_back_op *op = stateful_op->curr_op;
     struct castle_immut_tree_construct *da_stream;
+    int blocks_needed_tree, blocks_needed_data;
     struct castle_attachment *attachment;
     struct castle_btree_type *btree;
     c_buf_user_kv_hdr_t kv_hdr;
     c_buf_consumer_t buf_con;
+    int buffer_size_blocks;
     int err, nr_keys, kvp;
     struct timeval now;
     c_val_tup_t cvt;
@@ -3873,6 +3875,39 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         return -ENOSPC;
     }
 
+    buffer_size_blocks = NR_BLOCKS(op->buf->size);
+    /* the max size of an MO in the buffer will be the size of the buffer */
+    blocks_needed_data = buffer_size_blocks;
+    /* a buffers worth of data will be slightly large in a ct because of btree node overheads,
+     * so as a rough safety margin we use double the buffer size. */
+    blocks_needed_tree = buffer_size_blocks*2;
+
+    debug("%s::buffer_size_blocks=%u, blocks_needed_tree=%u, blocks_needed_data=%u\n",
+            __FUNCTION__, buffer_size_blocks, blocks_needed_tree, blocks_needed_data);
+
+    /* Make room for new entries... */
+    err = castle_back_stream_in_extent_growth_control(stateful_op, 0, blocks_needed_tree);
+    if(err)
+    {
+        castle_printk(LOG_ERROR,
+                    "%s::[op %p:0x%x] leaf node extent growth control failed with err %d.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token, err);
+        return -ENOSPC;
+    }
+
+    if(stateful_op->stream_in.expected_dataext_chunks)
+    {
+        /* Make room for MOs... */
+        err = castle_back_stream_in_extent_growth_control(stateful_op, 1, blocks_needed_data);
+        if(err)
+        {
+            castle_printk(LOG_ERROR,
+                    "%s::[op %p:0x%x] data extent growth control failed with err %d.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token, err);
+            return -ENOSPC;
+        }
+    }
+
     /* Iterate over all key value pairs in the buffer. */
     for (kvp = 0; kvp < nr_keys; kvp++)
     {
@@ -3892,18 +3927,6 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         castle_printk(LOG_DEVEL, "%s::key: \n", __FUNCTION__);
         btree->key_print(LOG_DEVEL, key);
 #endif
-
-        /* Make room for new entry... */
-        err = castle_back_stream_in_extent_growth_control(stateful_op, 0,
-                castle_immut_tree_node_size_get(da_stream, 0));
-        if(err)
-        {
-            castle_printk(LOG_ERROR,
-                        "%s::[op %p:0x%x] leaf node extent growth control failed with err %d.\n",
-                        __FUNCTION__, stateful_op->conn, stateful_op->token, err);
-            err = -ENOSPC;
-            goto err2;
-        }
 
         /* Construct the CVT. */
         switch (kv_hdr.val_type)
@@ -3936,18 +3959,8 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
                     total_blocks = (kv_hdr.val_len - 1) / C_BLK_SIZE + 1;
                     ext_space_needed = total_blocks * C_BLK_SIZE;
-                    debug("%s::total_blocks = %u, ext_space_needed = %lu\n",
+                    debug("%s::total_blocks = %u, ext_space_needed = %llu\n",
                         __FUNCTION__, total_blocks, ext_space_needed);
-
-                    /* Make room for the new medium-sized value... */
-                    err = castle_back_stream_in_extent_growth_control(stateful_op, 1, total_blocks);
-                    if(err)
-                    {
-                        castle_printk(LOG_ERROR,
-                                    "%s::[op %p:0x%x] data extent growth control failed with err %d.\n",
-                                    __FUNCTION__, stateful_op->conn, stateful_op->token, err);
-                        goto err2;
-                    }
 
                     if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
                                                         ext_space_needed,
@@ -3956,7 +3969,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     {
                         castle_printk(LOG_ERROR, "%s::[op %x] Failed to get medium object freespace, "
                                 "err=%d.\n", __FUNCTION__, stateful_op->token, err);
-                        err = -ENOSPC;
+                        err = -EINVAL;
                         goto err2;
                     }
 
@@ -3996,12 +4009,16 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                         update_c2b(c_c2b);
                         memcpy(c2b_buffer(c_c2b), val_ptr, bytes_to_copy);
 
+                        debug("%s::blocks_to_copy %u, bytes_to_copy %llu\n",
+                            __FUNCTION__, blocks_to_copy, bytes_to_copy);
+
                         if (last_copy)
                         {
                             int mod_cp = bytes_to_copy % C_BLK_SIZE;
+                            debug("%s::last_copy\n", __FUNCTION__);
                             if(mod_cp)
                             {
-                                debug("%s::zero padding %u bytes.\n",
+                                debug("%s::zero padding %llu bytes.\n",
                                         __FUNCTION__, (C_BLK_SIZE - mod_cp));
                                 memset((c2b_buffer(c_c2b) + bytes_to_copy),
                                         0,
@@ -4058,12 +4075,14 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
 
     return 0;
 
+    /* These exception handling labels only used after buffer iteration has started */
 err2:
     if (key)
         castle_free(key);
     castle_buffer_kvp_free(&kv_hdr);
 err1:
     stateful_op->stream_in.received_entries += kvp + 1;
+    BUG_ON(err==-ENOSPC);
     return err;
 }
 
