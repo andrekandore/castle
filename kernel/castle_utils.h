@@ -485,6 +485,8 @@ inline void list_swap(struct list_head *t1, struct list_head *t2);
 void        list_sort(struct list_head *list,
                       int (*compare)(struct list_head *l1, struct list_head *l2));
 
+int         castle_random_cpu_get(void);
+
 void        skb_print(struct sk_buff *skb);
 void        vl_bkey_print(c_printk_level_t level, const c_vl_bkey_t *key);
 

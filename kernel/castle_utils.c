@@ -852,6 +852,46 @@ void list_sort(struct list_head *list,
     }
 }
 
+static unsigned int RANDOM_SEED = 93186752;
+/**
+ * Generate a random unsigned int with upper bound.
+ *
+ * From GPL net/ipv4/multipath_random.c.
+ *
+ * Might be better to implement this using get_random_bytes().
+ */
+static inline unsigned int castle_random(unsigned int ubound)
+{
+    static unsigned int a = 1588635695,
+                        q = 2,
+                        r = 1117695901;
+
+    RANDOM_SEED = a * (RANDOM_SEED % q) - r * (RANDOM_SEED / q);
+
+    return RANDOM_SEED % ubound;
+}
+
+/**
+ * Return ID of a random online CPU.
+ */
+int castle_random_cpu_get(void)
+{
+#if NR_CPUS > 1
+    int i, cpu;
+
+    i = castle_random(num_online_cpus());
+
+    for_each_online_cpu(cpu)
+    {
+        if (i-- == 0)
+            return cpu;
+    }
+    BUG();
+#endif
+
+    return 0;
+}
+
 void skb_print(struct sk_buff *skb)
 {
     int i;

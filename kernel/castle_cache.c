@@ -26,6 +26,7 @@
 #include "castle_rebuild.h"
 #include "castle_mstore.h"
 #include "castle_systemtap.h"
+#include "castle_compat.h"
 #include "lzo.h"
 
 #ifndef DEBUG
@@ -1559,7 +1560,9 @@ static int c2_dirtytree_insert(c2_block_t *c2b)
             && !mutex_is_locked(&dirtytree->compr_mutex))
     {
         castle_extent_dirtytree_get(dirtytree);
-        if (!queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
+        if (!queue_work_on(castle_random_cpu_get(),
+                           castle_cache_compr_wq,
+                           &dirtytree->compr_work))
             /* dirtytree reference already taken */
             castle_extent_dirtytree_put(dirtytree);
     }
@@ -6551,7 +6554,9 @@ out:
     if (compressed
             && dirtytree->nr_pages >= CASTLE_CACHE_COMPRESS_MIN_ASYNC_PGS
             && !mutex_is_locked(&dirtytree->compr_mutex)
-            && queue_work(castle_cache_compr_wq, &dirtytree->compr_work))
+            && queue_work_on(castle_random_cpu_get(),
+                             castle_cache_compr_wq,
+                             &dirtytree->compr_work))
         castle_extent_dirtytree_get(dirtytree);
 }
 
