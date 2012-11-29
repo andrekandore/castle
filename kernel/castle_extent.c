@@ -5209,11 +5209,12 @@ static struct kmem_cache   *castle_rebuild_chk_wi_cache = NULL;
 #define REMAP   2
 #define CLEANUP 3
 
-#define                     MAX_WORK_ITEMS 512
-#define                     MIN_WORK_ITEMS 16
+#define                     MAX_WORK_ITEMS (512 * BLKS_PER_CHK)
+#define                     MIN_WORK_ITEMS (16 * BLKS_PER_CHK)
 #define                     MAX_CACHE_USAGE 15 /* Max percentage of cache work items can use. */
 static int castle_nr_work_items = MAX_WORK_ITEMS;
 
+/* Each work_item takes up 176 bytes. So, this array is taking up 23MB (176 * 512 * 256). */
 static process_work_item_t  process_work_items[MAX_WORK_ITEMS];
 
 spinlock_t io_list_lock; /* Serialise access to io free and error lists. */
@@ -6106,8 +6107,8 @@ static void castle_extent_process_async_end(c2_block_t *c2b, int did_io)
 }
 
 /* Keeps track of how many chunks I/Os we are handling. */
-static int rebuild_read_chunks = 0;
-static int rebuild_write_chunks = 0;
+static int rebuild_read_blocks = 0;
+static int rebuild_write_blocks = 0;
 
 /*
  * Handle queued up extent process work out of interrupt context.
@@ -6124,15 +6125,13 @@ void process_io_do_work(struct work_struct *work)
         case WRITE:
             /* Need to do a (non-remap) write of the c2b data. */
             BUG_ON(submit_c2b(wi->rw, wi->c2b));
-            /* Note: Rebuild does i/o one chunk at a time, when we change it fix it properly.  */
-            BUG_ON(wi->c2b->nr_pages != BLKS_PER_CHK);
-            rebuild_write_chunks += chk_wi->ext->k_factor;
+            rebuild_write_blocks += chk_wi->ext->k_factor;
             break;
         case REMAP:
             /* Need to do a (remap) write of the c2b data. */
             set_c2b_in_flight(wi->c2b);
             submit_c2b_remap_rda(wi->c2b, chk_wi->remap_chunks, chk_wi->remap_idx);
-            rebuild_write_chunks += chk_wi->remap_idx;
+            rebuild_write_blocks += chk_wi->remap_idx;
             break;
         case CLEANUP:
             /* Clean up the I/O structures. */
@@ -6184,8 +6183,7 @@ static void init_io_work(void)
      * The number of work items is bounded by MIN_WORK_ITEMS/MAX_WORK_ITEMS to ensure there is
      * a reasonable minimum, and that the size of the work_item array is not exceeded.
      */
-    castle_nr_work_items = ((castle_cache_size_get() / 100) * MAX_CACHE_USAGE)
-                            / BLKS_PER_CHK;
+    castle_nr_work_items = ((castle_cache_size_get() / 100) * MAX_CACHE_USAGE);
 
     if (castle_nr_work_items < MIN_WORK_ITEMS) castle_nr_work_items = MIN_WORK_ITEMS;
     if (castle_nr_work_items > MAX_WORK_ITEMS) castle_nr_work_items = MAX_WORK_ITEMS;
@@ -6248,63 +6246,65 @@ static int submit_async_remap_io(c_reb_chk_wi_t *chk_wi)
     c2_block_t *c2b;
     c_ext_pos_t cep;
     process_work_item_t *wi;
-    int ret = 0;
+    int i, ret = 0;
 
     cep.ext_id = chk_wi->ext->ext_id;
     cep.offset = chk_wi->chunkno * C_CHK_SIZE;
 
-    wi = get_free_work_item();
-
-    /* Wait until more wi are available. Most likely we are waiting for an i/o to complete.
-     * Assuming an i/o with seek could tkae 10ms, on average we might need to wait for 5ms. */
-    while (wi == NULL)
-        msleep(5);
-
-    c2b = castle_cache_block_get(cep, BLKS_PER_CHK, USER);
-    write_lock_c2b(c2b);
-
-    /*
-     * Remap c2bs are handled slightly differently in the cache, as we can
-     * have clean c2bs with dirty pages.
-     */
-    set_c2b_remap(c2b);
-
-    atomic_inc(&wi_in_flight);
-    atomic_inc(&chk_wi->ref_cnt);
-
-    c2b->end_io = castle_extent_process_async_end;
-    init_io_work_item(wi, c2b, chk_wi);
-    c2b->private = wi;
-
-    /* Find out (before we do any writes) if the c2b has any dirty pages. */
-    if (c2b_has_clean_pages(c2b))
-        wi->has_cleanpages = 1;
-
-    if (!c2b_uptodate(c2b))
+    for (i=0; i < BLKS_PER_CHK; i++, cep.offset += C_BLK_SIZE)
     {
-        /* Read will read from one chunk only. */
-        rebuild_read_chunks++;
-        /* Submit read only. Read c2b endio will schedule the write.
-         * Since this is rebuild, we call submit_c2b(READ, ...) directly
-         * as we do not want to record cache hit/miss statistics. */
-        BUG_ON(submit_c2b(READ, c2b));
-    } else
-    {
-        /* The c2b was already uptodate - we don't need to read the chunk. */
-        ret = submit_c2b(WRITE, c2b);
-        if (ret)
+        /* Wait until more wi are available. Most likely we are waiting for an i/o to complete.
+         * Assuming an i/o with seek could tkae 10ms, on average we might need to wait for 5ms.*/
+        while ((wi = get_free_work_item()) == NULL)
+            msleep(5);
+
+        c2b = castle_cache_block_get(cep, 1, USER);
+        write_lock_c2b(c2b);
+
+        /*
+         * Remap c2bs are handled slightly differently in the cache, as we can
+         * have clean c2bs with dirty pages.
+         */
+        set_c2b_remap(c2b);
+
+        atomic_inc(&wi_in_flight);
+        atomic_inc(&chk_wi->ref_cnt);
+
+        c2b->end_io = castle_extent_process_async_end;
+        init_io_work_item(wi, c2b, chk_wi);
+        c2b->private = wi;
+
+        /* Find out (before we do any writes) if the c2b has any dirty pages. */
+        if (c2b_has_clean_pages(c2b))
+            wi->has_cleanpages = 1;
+
+        if (!c2b_uptodate(c2b))
         {
-            spin_lock_irq(&io_list_lock);
-            list_add(&wi->free_list, &io_free_list);
-            spin_unlock_irq(&io_list_lock);
-            atomic_dec(&wi_in_flight);
+            /* Read will read from one chunk only. */
+            rebuild_read_blocks++;
+            /* Submit read only. Read c2b endio will schedule the write.
+             * Since this is rebuild, we call submit_c2b(READ, ...) directly
+             * as we do not want to record cache hit/miss statistics. */
+            BUG_ON(submit_c2b(READ, c2b));
+        } else
+        {
+            /* The c2b was already uptodate - we don't need to read the chunk. */
+            ret = submit_c2b(WRITE, c2b);
+            if (ret)
+            {
+                spin_lock_irq(&io_list_lock);
+                list_add(&wi->free_list, &io_free_list);
+                spin_unlock_irq(&io_list_lock);
+                atomic_dec(&wi_in_flight);
 
-            if (atomic_dec_and_test(&chk_wi->ref_cnt))
-                chunk_wi_free(chk_wi);
+                if (atomic_dec_and_test(&chk_wi->ref_cnt))
+                    chunk_wi_free(chk_wi);
 
-            return ret;
+                return ret;
+            }
         }
     }
+
     return EXIT_SUCCESS;
 }
 
@@ -6669,10 +6669,10 @@ int work_io_check(void)
 /* Extent processing ratelimiting. */
 unsigned long expected_time;
 unsigned long delta_time;
-#define BATCHSIZE 10        /* 100 x 1m I/Os per process I/O batch. */
+#define BATCHSIZE (10 * 256)        /* 100 x 1m I/Os per process I/O batch. */
 #define RATELIMIT_DEFAULT 0
 #define RATELIMIT_MIN 0     /* No ratelimiting */
-#define RATELIMIT_MAX 10000 /* 10Gb/s max */
+#define RATELIMIT_MAX (10000 * 256)/* 10Gb/s max */
 int castle_extents_process_ratelimit = RATELIMIT_DEFAULT;
 
 /*
@@ -6700,7 +6700,6 @@ static int castle_extents_process(void *unused)
     int                             i;
     writeback_info_t                *writeback_info=NULL;
     int                             saved_checkpoint_period=0;
-    int                             batch;
     int                             io_error = 0;
 
     INIT_LIST_HEAD(&extent_list);
@@ -6745,7 +6744,6 @@ static int castle_extents_process(void *unused)
         procstate->init();
 
         /* Initialisation for I/O ratelimiting. */
-        batch = BATCHSIZE; /* 10 x 1m I/Os per batch. */
         delta_time = jiffies;
 
         /*
@@ -6852,7 +6850,7 @@ finishing:
 
                     /* Reset I/O ratelimiting so we don't get a burst when chunk I/O restarts */
                     if (list_empty(&extent_list))
-                        rebuild_read_chunks = rebuild_write_chunks = 0;
+                        rebuild_read_blocks = rebuild_write_blocks = 0;
 
                     BUG_ON(atomic_read(&castle_extents_postsyncvar));
                     atomic_set(&castle_extents_presyncvar, 0);
@@ -6918,7 +6916,7 @@ retry:
                             }
                         }
 
-                        if ((rebuild_read_chunks + rebuild_write_chunks) >= batch)
+                        if ((rebuild_read_blocks + rebuild_write_blocks) >= BATCHSIZE)
                         {
                             if (castle_extents_process_ratelimit < RATELIMIT_MIN)
                                 castle_extents_process_ratelimit = RATELIMIT_MIN;
@@ -6926,13 +6924,13 @@ retry:
                                 castle_extents_process_ratelimit = RATELIMIT_MAX;
                             if (castle_extents_process_ratelimit)
                             {
-                                expected_time = (rebuild_read_chunks + rebuild_write_chunks) * 1000
+                                expected_time = (rebuild_read_blocks + rebuild_write_blocks) * 1000
                                                 / castle_extents_process_ratelimit;
                                 delta_time = jiffies - delta_time;
                                 if (expected_time > jiffies_to_msecs(delta_time))
                                     msleep(expected_time - jiffies_to_msecs(delta_time));
                                 delta_time = jiffies;
-                                rebuild_read_chunks = rebuild_write_chunks = 0;
+                                rebuild_read_blocks = rebuild_write_blocks = 0;
                             }
                         }
                     }
