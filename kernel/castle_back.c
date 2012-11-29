@@ -3803,12 +3803,15 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
         /* Growth necessary */
 
         /* Can this extent grow beyond it's current size? */
-        if( CHUNK(ext_freespace->ext_size + (growth_rate * C_BLK_SIZE)) > extent_size_limit )
+        if (DIV_ROUND_UP(ext_freespace->ext_size, C_CHK_SIZE) + growth_rate > extent_size_limit )
         {
             /* Growth will exceed allocation */
-            castle_printk(LOG_ERROR,
-                    "%s::[op %p:0x%x] exhausted extent allocation (size: %llu chunks, limit: %u); suggest complete current stream then retry.\n",
-                    __FUNCTION__, stateful_op->conn, stateful_op->token, ext_freespace->ext_size/C_CHK_SIZE, extent_size_limit);
+            castle_printk(LOG_WARN,
+                    "%s::[op %p:0x%x] cannot grow %u chunks to accomodate %u blocks; "
+                    "exhausted extent allocation (size: %llu chunks, requested limit: %u); suggest complete current stream then retry.\n",
+                    __FUNCTION__, stateful_op->conn, stateful_op->token,
+                    growth_rate, blocks_needed,
+                    DIV_ROUND_UP(ext_freespace->ext_size, C_CHK_SIZE), extent_size_limit);
             return -ENOSPC;
         }
 
@@ -3892,7 +3895,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
         castle_printk(LOG_ERROR,
                     "%s::[op %p:0x%x] leaf node extent growth control failed with err %d.\n",
                     __FUNCTION__, stateful_op->conn, stateful_op->token, err);
-        return -ENOSPC;
+        return err;
     }
 
     if(stateful_op->stream_in.expected_dataext_chunks)
@@ -3904,7 +3907,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
             castle_printk(LOG_ERROR,
                     "%s::[op %p:0x%x] data extent growth control failed with err %d.\n",
                     __FUNCTION__, stateful_op->conn, stateful_op->token, err);
-            return -ENOSPC;
+            return err;
         }
     }
 

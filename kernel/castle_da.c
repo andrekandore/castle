@@ -13174,11 +13174,12 @@ void castle_da_in_stream_complete(struct castle_immut_tree_construct *constr, in
     CASTLE_TRANSACTION_BEGIN;
 
     BUG_ON(atomic_read(&ct->ref_count)!=1);
-    castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %llu (with %lu entries over %lu tree chunks and %lu data chunks)\n",
+    castle_printk(LOG_USERINFO, "%s::finalizing stream-in tree %llu "
+        "(with %lu entries over %lu tree chunks and %lu data chunks)\n",
         __FUNCTION__, ct->seq,
         atomic64_read(&ct->item_count),
-        CHUNK(atomic64_read(&ct->tree_ext_free.used)),
-        CHUNK(atomic64_read(&ct->data_ext_free.used)));
+        DIV_ROUND_UP(atomic64_read(&ct->tree_ext_free.used), C_CHK_SIZE),
+        DIV_ROUND_UP(atomic64_read(&ct->data_ext_free.used), C_CHK_SIZE));
 
     /* Complete Output tree and get it ready to promote to DA. */
     castle_immut_tree_complete(constr);
