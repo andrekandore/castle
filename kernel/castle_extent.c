@@ -316,9 +316,6 @@ MODULE_PARM_DESC(castle_immediate_rebuild, "If non-zero rebuild will be started 
 /* Persistent (via mstore) count of chunks remapped during rebuild run. */
 long                        castle_extents_chunks_remapped = 0;
 
-static int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
-                                 int remap_idx);
-
 /* Number of virtual masks, that are not yet ready to be promoted. */
 static atomic_t             castle_extent_stale_virtual_masks = ATOMIC(0);
 
@@ -5177,19 +5174,27 @@ static struct process_state {
     live_slave_t    *live_slaves[MAX_NR_SLAVES];
 } process_state;
 
-/* This structure is used to maintain information about each individual remap chunk I/O. */
+/* This structure is used to maintain information about each individual remap chunk. */
+typedef struct castle_rebuild_chunk_work {
+    c_ext_t             *ext;
+    c_disk_chk_t         remap_chunks[5];  /* The chunk(s) that need to be remapped */
+    int                  remap_idx;        /* The number of chunk(s) to be remapped */
+    int                  chunkno;          /* The chunk offset in the extent */
+    atomic_t             ref_cnt;
+} c_reb_chk_wi_t;
+
+/* This structure is used to maintain information about each individual remap block I/O. */
 typedef struct process_work_item {
     int                 rw;             /* Read, Write, Remap, Cleanup. */
-    c2_block_t          *c2b;
-    c_ext_t             *ext;
-    c_disk_chk_t        *remap_chunks;  /* The chunk(s) that need to be remapped */
-    int                 remap_idx;      /* The number of chunk(s) to be remapped */
+    c2_block_t         *c2b;
     struct list_head    free_list;      /* Free list of unused work items. */
     struct list_head    error_list;     /* List of chunks that have had I/O errors */
     struct work_struct  work;           /* Used for queueing work */
-    int                 chunkno;        /* The chunk offset in the extent */
     uint32_t            has_cleanpages; /* Set if this chunk has any freepages */
+    c_reb_chk_wi_t     *chk_wi;
 } process_work_item_t;
+
+static struct kmem_cache   *castle_rebuild_chk_wi_cache = NULL;
 
 /*
  * The rw field uses the standard READ and WRITE (0 and 1) states, overloaded with REMAP and
@@ -5892,6 +5897,30 @@ int find_next_rebuild_chunk(c_ext_t *ext, int *curr_chunk, c_chk_cnt_t end_chunk
     return 0; /* No chunks to process. */
 }
 
+static c_reb_chk_wi_t* chunk_wi_alloc(c_ext_t *ext, int chunkno)
+{
+    c_reb_chk_wi_t *chk_wi = kmem_cache_alloc(castle_rebuild_chk_wi_cache, GFP_KERNEL);
+
+    if (chk_wi)
+    {
+        chk_wi->ext         = ext;
+        chk_wi->chunkno     = chunkno;
+        chk_wi->remap_idx   = 0;
+        atomic_set(&chk_wi->ref_cnt, 1);
+    }
+
+    return chk_wi;
+}
+
+static void chunk_wi_free(c_reb_chk_wi_t *chk_wi)
+{
+    BUG_ON(atomic_read(&chk_wi->ref_cnt));
+
+    kmem_cache_free(castle_rebuild_chk_wi_cache, chk_wi);
+}
+
+static int submit_async_remap_io(c_reb_chk_wi_t *chk_wi);
+
 /*
  * Process a rebuild chunk.
  * @param ext           The extent.
@@ -5901,15 +5930,19 @@ int find_next_rebuild_chunk(c_ext_t *ext, int *curr_chunk, c_chk_cnt_t end_chunk
  */
 int process_rebuild_chunk(c_ext_t *ext, int chunkno, int unused1, int unused2)
 {
-    uint32_t            k_factor = castle_extent_kfactor_get(ext->ext_id);
-    int                 idx, remap_idx;
+    uint32_t             k_factor = castle_extent_kfactor_get(ext->ext_id);
+    int                  idx, remap_idx;
     struct castle_slave *cs;
-    int ret=0;
-    c_disk_chk_t *remap_chunks;
+    c_reb_chk_wi_t      *chk_wi;
+    int                  ret=0;
 
+    chk_wi = chunk_wi_alloc(ext, chunkno);
+    BUG_ON(!chk_wi);
 
-    remap_chunks = castle_alloc(k_factor*sizeof(c_disk_chk_t));
-    BUG_ON(!remap_chunks);
+    /* Note: For the sake of simplicity, we have made an assumption on maximum k-factor
+     * and created only those many slots in c_reb_chk_wi_t. Make sure, we are not corssing
+     * this limit. */
+    BUG_ON(ext->k_factor > (sizeof(chk_wi->remap_chunks) / sizeof(c_disk_chk_t)));
 
     set_bit(CASTLE_EXT_REBUILD_BIT, &ext->flags);
 
@@ -5934,7 +5967,7 @@ retry:
             {
                 /* Failed to allocate a disk chunk (all slaves out of space). */
                 castle_printk(LOG_WARN, "Rebuild could not allocate a disk chunk.\n");
-                castle_free(remap_chunks);
+                kmem_cache_free(castle_rebuild_chk_wi_cache, chk_wi);
                 return -ENOSPC;
             }
             /*
@@ -5947,10 +5980,12 @@ retry:
             spin_unlock(&ext->shadow_map_lock);
 
             /* Store the chunks that need remapping. */
-            remap_chunks[remap_idx].slave_id = disk_chk.slave_id;
-            remap_chunks[remap_idx++].offset = disk_chk.offset;
+            chk_wi->remap_chunks[remap_idx].slave_id = disk_chk.slave_id;
+            chk_wi->remap_chunks[remap_idx++].offset = disk_chk.offset;
         }
     }
+
+    chk_wi->remap_idx = remap_idx;
 
     FAULT(REBUILD_FAULT2);
 
@@ -5963,7 +5998,7 @@ retry:
          * If a chunk has been remapped, read it in (via the old map) and write it out (using
          * the remap_chunks array as the map).
          */
-        ret = submit_async_remap_io(ext, chunkno, remap_chunks, remap_idx);
+        ret = submit_async_remap_io(chk_wi);
 
         switch (ret)
         {
@@ -5971,14 +6006,14 @@ retry:
                 break;
             case -EAGAIN:
                 goto retry;
-            case -ENOENT:
-                /* No free work items - wait for one to become free. */
-                castle_free(remap_chunks);
-                return ret;
             default:
                 BUG();
         }
     }
+
+    /* Take the live reference off chk_wi. */
+    if (atomic_dec_and_test(&chk_wi->ref_cnt))
+        chunk_wi_free(chk_wi);
 
     /* Keep count of the chunks that have actually been remapped. */
     castle_extents_chunks_remapped += remap_idx;
@@ -6080,6 +6115,7 @@ static int rebuild_write_chunks = 0;
 void process_io_do_work(struct work_struct *work)
 {
     process_work_item_t *wi = container_of(work, process_work_item_t, work);
+    c_reb_chk_wi_t *chk_wi = wi->chk_wi;
     unsigned long flags;
 
     BUG_ON(!wi || wi->rw == READ);
@@ -6090,13 +6126,13 @@ void process_io_do_work(struct work_struct *work)
             BUG_ON(submit_c2b(wi->rw, wi->c2b));
             /* Note: Rebuild does i/o one chunk at a time, when we change it fix it properly.  */
             BUG_ON(wi->c2b->nr_pages != BLKS_PER_CHK);
-            rebuild_write_chunks += wi->ext->k_factor;
+            rebuild_write_chunks += chk_wi->ext->k_factor;
             break;
         case REMAP:
             /* Need to do a (remap) write of the c2b data. */
             set_c2b_in_flight(wi->c2b);
-            submit_c2b_remap_rda(wi->c2b, wi->remap_chunks, wi->remap_idx);
-            rebuild_write_chunks += wi->remap_idx;
+            submit_c2b_remap_rda(wi->c2b, chk_wi->remap_chunks, chk_wi->remap_idx);
+            rebuild_write_chunks += chk_wi->remap_idx;
             break;
         case CLEANUP:
             /* Clean up the I/O structures. */
@@ -6110,12 +6146,13 @@ void process_io_do_work(struct work_struct *work)
              */
             castle_cache_block_destroy(wi->c2b);
 
-            castle_free(wi->remap_chunks);
-
             spin_lock_irqsave(&io_list_lock, flags);
             list_add_tail(&wi->free_list, &io_free_list);
             spin_unlock_irqrestore(&io_list_lock, flags);
+
             atomic_dec(&wi_in_flight);
+            if (atomic_dec_and_test(&chk_wi->ref_cnt))
+                chunk_wi_free(chk_wi);
 
             /* In case we are ratelimit waiting. */
             wake_up(&process_io_waitq);
@@ -6186,20 +6223,14 @@ process_work_item_t *get_free_work_item(void)
 /*
  * Initialise a work item.
  */
-void init_io_work_item(process_work_item_t *wi,
-                       c2_block_t *c2b,
-                       c_ext_t *ext,
-                       c_disk_chk_t *remap_chunks,
-                       int remap_idx,
-                       int chunkno)
+static void init_io_work_item(process_work_item_t  *wi,
+                              c2_block_t           *c2b,
+                              c_reb_chk_wi_t       *chk_wi)
 {
-    wi->rw = c2b_uptodate(c2b) ? WRITE : READ;
-    wi->c2b = c2b;
-    wi->ext = ext;
-    wi->remap_chunks = remap_chunks;
-    wi->remap_idx = remap_idx;
-    wi->chunkno = chunkno;
-    wi->has_cleanpages = 0;
+    wi->rw              = c2b_uptodate(c2b) ? WRITE : READ;
+    wi->c2b             = c2b;
+    wi->has_cleanpages  = 0;
+    wi->chk_wi          = chk_wi;
 }
 
 /*
@@ -6212,20 +6243,22 @@ void init_io_work_item(process_work_item_t *wi,
  * @return:             -ENOENT If there are no free work items (caller can throttle).
  *                      EXIT_SUCCESS if I/O submitted successfully.
  */
-int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks, int remap_idx)
+static int submit_async_remap_io(c_reb_chk_wi_t *chk_wi)
 {
     c2_block_t *c2b;
     c_ext_pos_t cep;
     process_work_item_t *wi;
     int ret = 0;
 
-    cep.ext_id = ext->ext_id;
-    cep.offset = chunkno*C_CHK_SIZE;
+    cep.ext_id = chk_wi->ext->ext_id;
+    cep.offset = chk_wi->chunkno * C_CHK_SIZE;
 
     wi = get_free_work_item();
-    if (!wi)
-        // No free entries. Return error so caller can throttle
-        return -ENOENT;
+
+    /* Wait until more wi are available. Most likely we are waiting for an i/o to complete.
+     * Assuming an i/o with seek could tkae 10ms, on average we might need to wait for 5ms. */
+    while (wi == NULL)
+        msleep(5);
 
     c2b = castle_cache_block_get(cep, BLKS_PER_CHK, USER);
     write_lock_c2b(c2b);
@@ -6233,13 +6266,14 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
     /*
      * Remap c2bs are handled slightly differently in the cache, as we can
      * have clean c2bs with dirty pages.
-    */
+     */
     set_c2b_remap(c2b);
 
     atomic_inc(&wi_in_flight);
+    atomic_inc(&chk_wi->ref_cnt);
 
     c2b->end_io = castle_extent_process_async_end;
-    init_io_work_item(wi, c2b, ext, remap_chunks, remap_idx, chunkno);
+    init_io_work_item(wi, c2b, chk_wi);
     c2b->private = wi;
 
     /* Find out (before we do any writes) if the c2b has any dirty pages. */
@@ -6264,6 +6298,10 @@ int submit_async_remap_io(c_ext_t *ext, int chunkno, c_disk_chk_t *remap_chunks,
             list_add(&wi->free_list, &io_free_list);
             spin_unlock_irq(&io_list_lock);
             atomic_dec(&wi_in_flight);
+
+            if (atomic_dec_and_test(&chk_wi->ref_cnt))
+                chunk_wi_free(chk_wi);
+
             return ret;
         }
     }
@@ -6560,6 +6598,7 @@ int work_io_check(void)
 {
     struct list_head    *io_error_entry, *tmp, *writeback_entry;
     process_work_item_t *wi;
+    c_reb_chk_wi_t      *chk_wi;
     int err = 0;
 
     spin_lock_irq(&io_list_lock);
@@ -6571,6 +6610,8 @@ int work_io_check(void)
         list_for_each_safe(io_error_entry, tmp, &io_error_list)
         {
             wi = list_entry(io_error_entry, process_work_item_t, error_list);
+            chk_wi = wi->chk_wi;
+
             list_del(io_error_entry);
             if (c2b_eio(wi->c2b))
             {
@@ -6596,10 +6637,11 @@ int work_io_check(void)
             {
                 writeback_info_t *winfop;
                 winfop = list_entry(writeback_entry, writeback_info_t, list);
-                if ((wi->ext->ext_id == winfop->ext_id) &&
-                    (winfop->start_chunk <= wi->chunkno) && (wi->chunkno <= winfop->end_chunk))
+                if ((chk_wi->ext->ext_id == winfop->ext_id) &&
+                    (winfop->start_chunk <= chk_wi->chunkno) &&
+                        (chk_wi->chunkno <= winfop->end_chunk))
                 {
-                    winfop->end_chunk = wi->chunkno - 1;
+                    winfop->end_chunk = chk_wi->chunkno - 1;
                     break;
                 }
             }
@@ -6607,10 +6649,11 @@ int work_io_check(void)
             write_unlock_c2b(wi->c2b);
             //BUG_ON(castle_cache_block_destroy(wi->c2b) && LOGICAL_EXTENT(wi->ext->ext_id));
             put_c2b(wi->c2b);
-            castle_free(wi->remap_chunks);
 
             list_add_tail(&wi->free_list, &io_free_list);
             atomic_dec(&wi_in_flight);
+            if (atomic_dec_and_test(&chk_wi->ref_cnt))
+                chunk_wi_free(chk_wi);
         }
         spin_unlock_irq(&io_list_lock);
         return err;
@@ -7069,6 +7112,23 @@ void castle_extents_rebuild_unconditional_start(void)
  */
 int castle_extents_process_init(void)
 {
+    /* Init kmem_cache for rebuild chunk work items. */
+    castle_rebuild_chk_wi_cache = kmem_cache_create("castle_rebuild_chk_wi_cache",
+                                                    sizeof(c_reb_chk_wi_t),
+                                                    0,   /* align */
+                                                    0,   /* flags */
+#if LINUX_VERSION_CODE <= KERNEL_VERSION(2,6,18)
+                                                    NULL, NULL); /* ctor, dtor */
+#else
+                                                    NULL); /* ctor */
+#endif
+    if (!castle_rebuild_chk_wi_cache)
+    {
+        castle_printk(LOG_INIT,
+                      "Could not allocate kmem cache for castle_rebuild_chk_wi_cache.\n");
+        return -ENOMEM;
+    }
+
     castle_extproc_workq = create_workqueue("castle_extproc");
     if (!castle_extproc_workq)
     {
@@ -7092,6 +7152,9 @@ void castle_extents_process_fini(void)
     kthread_stop(extproc_thread);
 
     destroy_workqueue(castle_extproc_workq);
+
+    if (castle_rebuild_chk_wi_cache)
+        kmem_cache_destroy(castle_rebuild_chk_wi_cache);
 }
 
 void castle_extents_last_chkpt_prepare(void)

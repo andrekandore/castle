@@ -2464,8 +2464,7 @@ int submit_c2b_remap_rda(c2_block_t *c2b, c_disk_chk_t *chunks, int nr_remaps)
     debug("Submitting remap write c2b "cep_fmt_str", for %s\n", __cep2str(c2b->cep));
 
     io_array = kmem_cache_alloc(castle_io_array_cache, GFP_KERNEL);
-    if (!io_array)
-        return -1;
+    BUG_ON(!io_array);
 
     /* TODO: Add a check to make sure cep is within live extent range. */
 
