@@ -3879,8 +3879,9 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     }
 
     buffer_size_blocks = NR_BLOCKS(op->buf->size);
-    /* the max size of an MO in the buffer will be the size of the buffer */
-    blocks_needed_data = buffer_size_blocks;
+    /* the max size of an MO in the buffer will be the size of the buffer plus worst-case page
+     * alignment overhead of 1 block per key. */
+    blocks_needed_data = buffer_size_blocks + nr_keys;
     /* a buffers worth of data will be slightly large in a ct because of btree node overheads,
      * so as a rough safety margin we use double the buffer size. */
     blocks_needed_tree = buffer_size_blocks*2;
@@ -3962,7 +3963,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
                     BUG_ON(EXT_ID_INVAL(da_stream->tree->data_ext_free.ext_id));
                     total_blocks = (kv_hdr.val_len - 1) / C_BLK_SIZE + 1;
                     ext_space_needed = total_blocks * C_BLK_SIZE;
-                    debug("%s::total_blocks = %u, ext_space_needed = %llu\n",
+                    debug(LOG_UNLIMITED, "%s::total_blocks = %u, ext_space_needed = %llu\n",
                         __FUNCTION__, total_blocks, ext_space_needed);
 
                     if ((err = castle_ext_freespace_get(&da_stream->tree->data_ext_free,
