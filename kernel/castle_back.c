@@ -3802,8 +3802,18 @@ static int castle_back_stream_in_extent_growth_control(struct castle_back_statef
     {
         /* Growth necessary */
 
+        castle_printk(LOG_DEBUG,
+                "%s::[op %p:0x%x] request for %u chunks to accomodate %u blocks (%llu chunks); "
+                "(size: %llu chunks, requested limit: %u) - data_extent? %u.\n",
+                __FUNCTION__, stateful_op->conn, stateful_op->token,
+                growth_rate, blocks_needed, DIV_ROUND_UP(blocks_needed*C_BLK_SIZE, C_CHK_SIZE),
+                DIV_ROUND_UP(ext_freespace->ext_size, C_CHK_SIZE), extent_size_limit,
+                data_extent);
+
         /* Can this extent grow beyond it's current size? */
-        if (DIV_ROUND_UP(ext_freespace->ext_size, C_CHK_SIZE) + growth_rate > extent_size_limit )
+        if (DIV_ROUND_UP(ext_freespace->ext_size, C_CHK_SIZE)
+                + roundup(DIV_ROUND_UP(blocks_needed*C_BLK_SIZE, C_CHK_SIZE), growth_rate)
+                        > extent_size_limit)
         {
             /* Growth will exceed allocation */
             castle_printk(LOG_WARN,
@@ -3881,7 +3891,7 @@ static int castle_back_stream_in_buf_process(struct castle_back_stateful_op *sta
     buffer_size_blocks = NR_BLOCKS(op->buf->size);
     /* the max size of an MO in the buffer will be the size of the buffer plus worst-case page
      * alignment overhead of 1 block per key. */
-    blocks_needed_data = buffer_size_blocks + nr_keys;
+    blocks_needed_data = buffer_size_blocks + min(nr_keys, (int)(op->buf->size/MAX_INLINE_VAL_SIZE));
     /* a buffers worth of data will be slightly large in a ct because of btree node overheads,
      * so as a rough safety margin we use double the buffer size. */
     blocks_needed_tree = buffer_size_blocks*2;
