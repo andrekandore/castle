@@ -77,7 +77,6 @@ rm -rf %{buildroot}
 %defattr(-,root,root,-)
 
 %package doc
-
 Summary: castle-fs documentation
 Group: Documentation
 
