@@ -7036,9 +7036,9 @@ static void castle_da_merge_marshall(struct castle_da_merge *merge,
 
             castle_printk(LOG_DEBUG, "%s::[merge %u] checking level %u.\n", __FUNCTION__, merge->id, i);
 
-            BUG_ON(level->next_idx <= level->valid_end_idx);
-            /* if the above ever BUGs, then an assumption about how to deserialise - specifically what
-               entries should be dropped - is broken! */
+            if(level->next_idx <= level->valid_end_idx)
+                castle_printk(LOG_WARN, "%s::merge %u] level %u in need-split state\n",
+                        __FUNCTION__, merge->id, i);
 
             merge_mstore->levels[i].next_idx            = level->next_idx;
             merge_mstore->levels[i].valid_end_idx       = level->valid_end_idx;
