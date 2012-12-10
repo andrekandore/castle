@@ -7261,8 +7261,8 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
                 BUG_ON(!node_entry);
             }
 
-            castle_printk(LOG_DEBUG, "%s::sanity check for merge %p node_c2b[%d] ("cep_fmt_str")\n",
-                    __FUNCTION__, merge, i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
+            castle_printk(LOG_INIT, "%s::sanity check for merge %d node_c2b[%d] ("cep_fmt_str")\n",
+                    __FUNCTION__, merge->id, i, cep2str(merge_mstore->levels[i].node_c2b_cep) );
 
             level->node_c2b =
                 castle_da_merge_des_out_tree_c2b_write_fetch(merge, merge_mstore->levels[i].node_c2b_cep, i);
@@ -7276,28 +7276,16 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
             BUG_ON(node->magic != BTREE_NODE_MAGIC);
 
             BUG_ON(merge_mstore->levels[i].node_used > (node->used) );
-            if(merge_mstore->levels[i].next_idx < (node->used))
+            if(node->used != merge_mstore->levels[i].node_used)
             {
-                int drop_start=0;
-                int drop_end=0;
-                debug("%s::for merge %p (da %d level %d) entries_drop on node_c2b[%d] "
-                        "ser used = %d, current used = %d, valid_end_idx = %d, next_idx = %d, node size = %d\n",
-                        __FUNCTION__, merge, da->id, level, i,
-                        merge_mstore->levels[i].node_used,
-                        node->used,
-                        merge_mstore->levels[i].valid_end_idx,
-                        merge_mstore->levels[i].next_idx,
-                        node->size);
+                int drop_start = merge_mstore->levels[i].node_used;
+                int drop_end   = node->used - 1;
 
                 /* if the following BUGs, then it seems possible that some node entries were dropped
                    after the serialisation point */
                 BUG_ON(node->used < merge_mstore->levels[i].node_used);
-                if(node->used != merge_mstore->levels[i].node_used)
-                {
-                    drop_start = merge_mstore->levels[i].node_used;
-                    drop_end   = node->used - 1;
-                    merge->out_tree_constr->btree->entries_drop(node, drop_start, drop_end);
-                }
+
+                merge->out_tree_constr->btree->entries_drop(node, drop_start, drop_end);
             }
 
             if(memcmp(node, node_entry->payload, node_entry->size_blocks * C_BLK_SIZE))
