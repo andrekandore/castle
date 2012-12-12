@@ -3517,7 +3517,7 @@ static void castle_back_stream_in_next(struct castle_back_op *op)
     {
         castle_printk(LOG_ERROR, "%s:: failed to queue, err:%u\n", __FUNCTION__, err);
         spin_unlock(&stateful_op->lock);
-        goto err0;
+        goto err1;
     }
 
     /* Go through Q and handle ops. */
@@ -3530,6 +3530,7 @@ static void castle_back_stream_in_next(struct castle_back_op *op)
 
     return;
 
+err1: castle_back_buffer_put(conn, op->buf);
 err0:
     castle_back_reply(op, err, 0, 0, 0, CASTLE_RESPONSE_FLAG_NONE);
     /* To prevent #3144. */
