@@ -7241,6 +7241,10 @@ static void castle_da_merge_struct_deser(struct castle_da_merge *merge,
         level->valid_end_idx = merge_mstore->levels[i].valid_end_idx;
         level->valid_version = merge_mstore->levels[i].valid_version;
 
+        if (level->next_idx == -1)
+            castle_printk(LOG_WARN, "%s::[merge %u, outct %llu] found a full incomplete node [trac #7118].\n",
+                    __FUNCTION__, merge->id, des_tree->seq);
+
         /* Recover each btree level's node_c2b and last_key */
         if(!EXT_POS_INVAL(merge_mstore->levels[i].node_c2b_cep))
         {
