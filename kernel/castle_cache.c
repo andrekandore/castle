@@ -3117,11 +3117,13 @@ static void castle_cache_compr_fini(void)
     unsigned char **compress_buf_ptr;
     int i;
 
-    /* Destroy any outstanding flush and straddle c2bs. */
-    castle_extent_for_each_virt_ext(_c2_compress_c2bs_put);
-
     if (castle_cache_compr_wq)
         destroy_workqueue(castle_cache_compr_wq);
+
+    /* Destroy any outstanding flush and straddle c2bs. */
+    /* Note: By this time all the compr threads mustbe dead, so after this step compression
+     * pointers are not reset. */
+    castle_extent_for_each_virt_ext(_c2_compress_c2bs_put);
 
     kthread_stop(castle_cache_decompress_thread);
 
