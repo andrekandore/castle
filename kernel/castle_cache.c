@@ -4391,7 +4391,7 @@ static int castle_cache_evict(void *unused)
 {
     while (!kthread_should_stop())
     {
-        _castle_cache_freelists_grow(0, c2_partition_most_overbudget_find());
+        //_castle_cache_freelists_grow(0, c2_partition_most_overbudget_find());
         msleep_interruptible(100); /* can be woken up if necessary */
     }
 
