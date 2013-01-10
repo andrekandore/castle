@@ -6406,6 +6406,7 @@ static void castle_cache_dirtytree_compress(c2_ext_dirtytree_t *dirtytree,
                                             c_byte_off_t        end_off,
                                             int                 max_pgs,
                                             int                 force,
+                                            int                 blocking,
                                             int                *compressed_p)
 {
     c2_block_t     *v_c2b,          /* VIRTUAL c2b (compression-unit aligned and sized).        */
@@ -6420,7 +6421,7 @@ static void castle_cache_dirtytree_compress(c2_ext_dirtytree_t *dirtytree,
     BUG_ON(end_off && (!force || max_pgs));
 
     /* Only wait for compr_mutex if we are force flushing. */
-    if (force)
+    if (blocking)
         mutex_lock(&dirtytree->compr_mutex);
     else if (!mutex_trylock(&dirtytree->compr_mutex))
         goto out;
@@ -6582,6 +6583,13 @@ void castle_cache_dirtytree_async_compress(struct work_struct *work)
                                     0,                          /* end_off      */
                                     MAX_ASYNC_COMPRESS_SIZE,    /* max_pgs      */
                                     0,                          /* force        */
+                                    0,                          /* non-blocking
+                                                                   Async compression
+                                                                   is scheduled only
+                                                                   if mutex is
+                                                                   available,
+                                                                   which should prevent
+                                                                   long requeue loops. */
                                    &compressed);                /* compressed_p */
 
     /* Put extent reference. */
@@ -6610,12 +6618,13 @@ static c2_ext_dirtytree_t * _castle_cache_next_dirtytree_get(c_ext_flush_prio_t 
 static int castle_cache_compress(void *unused)
 {
 #define MIN_COMPRESS_SIZE   128
-    int to_compress, total_compressed, compressed, prio, exiting, seq;
+    int to_compress, total_compressed, compressed, prio, exiting, seq, blocking;
     c2_ext_dirtytree_t *dirtytree;
     c_ext_mask_id_t ext_mask;
 
     seq     = 0;
     exiting = 0;
+    total_compressed = 1;
     while (1)
     {
         wait_event_interruptible(castle_cache_compress_thread_wq,
@@ -6626,6 +6635,15 @@ static int castle_cache_compress(void *unused)
 
         seq              = atomic_read(&castle_cache_compress_thread_seq);
         to_compress      = MIN_COMPRESS_SIZE;
+        blocking         = !total_compressed; /* If we failed to compress
+                                                 anything the last time,
+                                                 _and_ we are being woken up
+                                                 because there is compression
+                                                 work to do, it's most likely
+                                                 because we failed to acquire
+                                                 locks on dirtytrees.
+                                                 In order to avoid looping
+                                                 around and not making progress. */
         total_compressed = 0;
 
         if (!EXT_ID_INVAL(c2_compress_hint_ext_id))
@@ -6640,6 +6658,7 @@ static int castle_cache_compress(void *unused)
                                                     0,          /* end_off      */
                                                     to_compress,/* max_pgs      */
                                                     0,          /* force        */
+                                                    0,          /* non-blocking */
                                                    &compressed);/* compressed_p */
                     castle_extent_dirtytree_put(dirtytree);
                     total_compressed += compressed;
@@ -6676,6 +6695,7 @@ static int castle_cache_compress(void *unused)
                                                 0,          /* end_off      */
                                                 to_compress,/* max_pgs      */
                                                 0,          /* force        */
+                                                blocking,   /* blocking     */
                                                &compressed);/* compressed_p */
                 castle_extent_dirtytree_put(dirtytree);
                 total_compressed += compressed;
@@ -6998,6 +7018,7 @@ void castle_cache_extent_flush(c_ext_id_t ext_id,
                                         end_off,    /* end_off      */
                                         0,          /* max_pgs      */
                                         1,          /* force        */
+                                        1,          /* blocking     */
                                         NULL);      /* compressed_p */
 
         /* Continue to flush COMPRESSED extent.
